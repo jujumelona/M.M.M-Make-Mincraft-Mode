@@ -22,16 +22,64 @@ class HostJavaConstructionError(ValueError):
     """A host-assembled compilation unit did not satisfy the target contract."""
 
 
+def _build_host_java_prompt(router, spec: dict, context: dict, *,
+                            package: str, name: str, owner: str,
+                            behaviors, source_context):
+    """Assemble immutable checked API and behavior evidence once per file."""
+    from .construction_file_author import _evidence
+    from .host_prerequisite_api import read_prerequisite_apis
+    from .host_typed_state_access import state_access_contract
+
+    contract = context.get("authoring_contract") or {}
+    requirement = str(spec.get("requirement", ""))
+    if (contract.get("canonical_leaf") and contract.get("responsibility")
+            and not spec.get("bindings", {}).get("request_feature_entrypoint")):
+        requirement = str(contract["responsibility"])
+    behavior_rows = [dict(row) for row in behaviors]
+    # Event APIs are selected by the actual USER TRIGGER, not just the
+    # broad feature title. Without the trigger, the host supplied zero
+    # event APIs for "player opens trading" and the coder invented callback
+    # parameters unrelated to any registered listener (production-logs 15).
+    api_intent = " ".join((
+        requirement,
+        *(str(row.get(field) or "")
+          for row in behavior_rows
+          for field in ("intent", "trigger", "effects")),
+    ))
+    prompt = {
+        "requirement": requirement,
+        "original_feature_goal": str(spec.get("requirement") or ""),
+        "assigned_behaviors": behavior_rows,
+        "feature_work_order": context.get("feature_work_order"),
+        "target": context["target"],
+        "package": package, "public_class": name,
+        "output_path": spec["target_path"],
+        "side": spec.get("side", "COMMON"),
+        "construction_requirements": contract,
+        "construction_bindings": context.get("binding_pages", {}),
+        "implementation_requirements": spec.get("bindings", {}).get(
+            "java_implementation_requirements", ""),
+        "inspected_target_api": _evidence(
+            context, api_intent, target_path=spec["target_path"],
+            owner=owner, router=router,
+            feature_entrypoint=bool(spec.get("bindings", {}).get(
+                "request_feature_entrypoint"))),
+        "materialized_prerequisite_api": read_prerequisite_apis(
+            context, target_path=spec["target_path"],
+            source_context=source_context),
+    }
+    from .host_typed_state_access import state_access_contract
+    state_access = state_access_contract(prompt["materialized_prerequisite_api"])
+    prompt["host_state_access"] = state_access
+    return contract, requirement, behavior_rows, prompt, state_access
+
+
 def compose_host_java_source(router, spec: dict, context: dict, *,
                              package: str, name: str, owner: str,
                              behaviors=(), source_context=()) -> str:
-    from .construction_file_author import (
-        _evidence,
-        _verify_full_source,
-    )
+    from .construction_file_author import _verify_full_source
     from .construction_implementation import construction_implementation_fingerprint
     from .first_pass_java_source import compose_first_pass_java
-    from .host_prerequisite_api import read_prerequisite_apis
 
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
         raise HostJavaConstructionError("JAVA_HOST_FABRIC_REQUIRED")
@@ -64,47 +112,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             else:
                 return saved["source"]
 
-        contract = context.get("authoring_contract") or {}
-        requirement = str(spec.get("requirement", ""))
-        if (contract.get("canonical_leaf") and contract.get("responsibility")
-                and not spec.get("bindings", {}).get("request_feature_entrypoint")):
-            requirement = str(contract["responsibility"])
-        behavior_rows = [dict(row) for row in behaviors]
-        # Event APIs are selected by the actual USER TRIGGER, not just the
-        # broad feature title. Without the trigger, the host supplied zero
-        # event APIs for "player opens trading" and the coder invented callback
-        # parameters unrelated to any registered listener (production-logs 15).
-        api_intent = " ".join((
-            requirement,
-            *(str(row.get(field) or "")
-              for row in behavior_rows
-              for field in ("intent", "trigger", "effects")),
-        ))
-        prompt = {
-            "requirement": requirement,
-            "original_feature_goal": str(spec.get("requirement") or ""),
-            "assigned_behaviors": behavior_rows,
-            "feature_work_order": context.get("feature_work_order"),
-            "target": context["target"],
-            "package": package, "public_class": name,
-            "output_path": spec["target_path"],
-            "side": spec.get("side", "COMMON"),
-            "construction_requirements": contract,
-            "construction_bindings": context.get("binding_pages", {}),
-            "implementation_requirements": spec.get("bindings", {}).get(
-                "java_implementation_requirements", ""),
-            "inspected_target_api": _evidence(
-                context, api_intent, target_path=spec["target_path"],
-                owner=owner, router=router,
-                feature_entrypoint=bool(spec.get("bindings", {}).get(
-                    "request_feature_entrypoint"))),
-            "materialized_prerequisite_api": read_prerequisite_apis(
-                context, target_path=spec["target_path"],
-                source_context=source_context),
-        }
-        from .host_typed_state_access import state_access_contract
-        state_access = state_access_contract(prompt["materialized_prerequisite_api"])
-        prompt["host_state_access"] = state_access
+        contract, requirement, behavior_rows, prompt, state_access = (
+            _build_host_java_prompt(
+                router, spec, context, package=package, name=name,
+                owner=owner, behaviors=behaviors, source_context=source_context,
+            )
+        )
         instructions = (
             "Implement the specified Fabric/Minecraft task using only inspected "
             "target APIs and materialized project source. The host builds every "
