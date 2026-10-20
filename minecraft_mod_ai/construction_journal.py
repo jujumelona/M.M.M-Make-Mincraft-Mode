@@ -26,6 +26,28 @@ def _sha(value):
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
+def _canonical_messages(messages):
+    """JSON metadata key order is not a change to the model's task.
+
+    Durable responses are key-sorted. Re-embedding one in a later JSON prompt
+    must hash identically after reload; Java/text strings inside it stay exact.
+    """
+    result = []
+    for message in messages:
+        row = dict(message)
+        content = row.get("content")
+        if isinstance(content, str):
+            try:
+                value = json.loads(content)
+            except ValueError:
+                pass
+            else:
+                if isinstance(value, (dict, list)):
+                    row["content"] = _json(value)
+        result.append(row)
+    return result
+
+
 class JournaledConstructionRouter:
     def __init__(self, router, project_root, spec, context):
         from .construction_implementation import construction_implementation_fingerprint
@@ -62,7 +84,7 @@ class JournaledConstructionRouter:
         return getattr(self.router, name)
 
     def generate_structured_data(self, role, messages, *, data_name, parameters, **kwargs):
-        identity = _sha({"role": role, "messages": messages,
+        identity = _sha({"role": role, "messages": _canonical_messages(messages),
                          "data_name": data_name, "parameters": parameters,
                          "kwargs": kwargs})
         with _LOCK:
@@ -102,12 +124,11 @@ class JournaledConstructionRouter:
         A source frame, prompt, or project change changes the identity and cannot
         silently reuse a different member. Failed decoding/validation is never saved.
         """
-        identity = _sha({"role": role, "messages": messages,
+        identity = _sha({"role": role, "messages": _canonical_messages(messages),
                          "data_name": data_name, "source_frame": source_frame,
                          "kwargs": kwargs})
         with _LOCK:
             index = self.position
-            self.position += 1
             if index < len(self.rows):
                 row = self.rows[index]
                 if row.get("input_sha256") != identity:
@@ -116,8 +137,10 @@ class JournaledConstructionRouter:
                 if not isinstance(source, str):
                     raise ValueError("CONSTRUCTION_INFERENCE_SOURCE_CORRUPT")
                 from .construction_source_repair import validate_generated_java_source
-                return validate_generated_java_source(source, source_frame,
+                validated = validate_generated_java_source(source, source_frame,
                     source_frame["prefix"], source_frame["suffix"])
+                self.position += 1
+                return validated
             if index != len(self.rows):
                 raise ValueError("CONSTRUCTION_INFERENCE_GAP")
         source = self.router.generate_java_source(role, messages,
@@ -142,4 +165,5 @@ class JournaledConstructionRouter:
             finally:
                 if tmp.exists():
                     tmp.unlink()
+            self.position += 1
         return source

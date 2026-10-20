@@ -41,6 +41,11 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
         ):
             return output
         metadata = getattr(request, "metadata", {})
+        if isinstance(metadata, Mapping) and metadata.get("mmm_source_implementation"):
+            # The source router owns exact JSON decoding, member syntax and
+            # diagnostic-guided correction. Do not extract/reformat its raw
+            # response or raise here before it can preserve the failed bytes.
+            return output
         if isinstance(metadata, Mapping) and metadata.get("mmm_strict_structured_data"):
             # A constrained data request must already return exact JSON. The
             # ordinary legacy parser may extract embedded JSON from prose;

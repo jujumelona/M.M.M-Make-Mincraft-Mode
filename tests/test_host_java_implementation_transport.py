@@ -105,3 +105,68 @@ def test_empty_initializer_only_uses_host_approved_uninitialized_field():
     del frame["empty_value"]
     with pytest.raises(JavaRegionParseError):
         _run(BackendRouter('{"implementation": ""}'), frame)
+
+
+def test_production_literal_newline_failure_is_returned_as_member_correction():
+    # The exact output shape from production: a full declaration with literal
+    # backslash-n characters and an extra escaped newline after its closing brace.
+    rejected = FRAME["prefix"].replace("\n", "\\n") + (
+        "    super(type, level);\\n}\\n")
+
+    class CorrectingRouter(BackendRouter):
+        def generate(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return rejected
+            return '{"implementation": "    super(type, level);"}'
+
+    router = CorrectingRouter(None)
+    assert _run(router) == FRAME["prefix"] + "    super(type, level);" + FRAME["suffix"]
+    assert len(router.requests) == 2
+    correction = json.loads(router.requests[1].messages[-1]["content"])
+    assert correction["previous_response"] == rejected
+    assert "CONSTRUCTION_SOURCE_IMPLEMENTATION_INVALID" in correction["diagnostic"]
+
+
+def test_persistent_invalid_response_stops_after_one_member_correction():
+    router = BackendRouter('{"implementation": "super(type, level); } void escape() {"}')
+    with pytest.raises(JavaRegionParseError):
+        _run(router)
+    assert len(router.requests) == 2
+
+
+def test_native_payload_enforces_json_without_installing_a_java_grammar():
+    from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
+
+    router = BackendRouter('{"implementation": "super(type, level);"}')
+    _run(router)
+    adapter = SimpleNamespace(config=SimpleNamespace(
+        role="coder", model_id="local", max_new_tokens=2048, extra={}))
+    payload = _server_payload(adapter, router.requests[0])
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_source_router_receives_exact_native_response_before_generic_json_cleanup():
+    from minecraft_mod_ai.llama_structured_decode_policy import _bind_structured_generation_retry
+
+    class NativeAdapter:
+        def __init__(self):
+            self.outputs = ['not JSON', '{"implementation": "super(type, level);"}']
+
+        def generate(self, _request):
+            return self.outputs.pop(0)
+
+    _bind_structured_generation_retry(SimpleNamespace(LlamaCppAdapter=NativeAdapter))
+    adapter = NativeAdapter()
+
+    class NativeRouter(BackendRouter):
+        def generate(self, request):
+            self.requests.append(request)
+            return adapter.generate(request)
+
+    router = NativeRouter(None)
+    assert "super(type, level);" in _run(router)
+    assert json.loads(router.requests[-1].messages[-1]["content"])["previous_response"] == 'not JSON'

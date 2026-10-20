@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+import json
 
 from minecraft_mod_ai.construction_journal import JournaledConstructionRouter
 
@@ -68,3 +69,42 @@ def test_failed_member_is_not_checkpointed(tmp_path, monkeypatch):
     assert "return;" in journal(tmp_path, second).generate_java_source(
         "coder", MESSAGES, data_name="ping_body", source_frame=FRAME)
     assert second.calls == 1
+
+
+def test_failed_member_can_retry_on_the_same_journal_without_a_cursor_gap(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "test-fingerprint")
+    backend = Backend(error=RuntimeError("invalid model response"))
+    current = journal(tmp_path, backend)
+    with pytest.raises(RuntimeError, match="invalid model response"):
+        current.generate_java_source("coder", MESSAGES, data_name="ping_body", source_frame=FRAME)
+    backend.error = None
+    assert "return;" in current.generate_java_source(
+        "coder", MESSAGES, data_name="ping_body", source_frame=FRAME)
+    assert backend.calls == 2
+
+
+def test_metadata_key_order_after_reload_does_not_change_member_request_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "test-fingerprint")
+
+    class MetadataBackend(Backend):
+        def generate_structured_data(self, *args, **kwargs):
+            return {"visibility": "public", "static": False, "return_type": "void"}
+
+    parameters = {"type": "object"}
+    first = journal(tmp_path, MetadataBackend())
+    metadata = first.generate_structured_data(
+        "coder", MESSAGES, data_name="metadata", parameters=parameters)
+    expected = first.generate_java_source("coder", [{"role": "user", "content": json.dumps(metadata)}],
+        data_name="ping_body", source_frame=FRAME)
+    backend = MetadataBackend(error=AssertionError("completed member must replay"))
+    second = journal(tmp_path, backend)
+    reloaded = second.generate_structured_data(
+        "coder", MESSAGES, data_name="metadata", parameters=parameters)
+    assert list(metadata) != list(reloaded)  # Durable JSON is key-sorted.
+    assert second.generate_java_source("coder", [{"role": "user", "content": json.dumps(reloaded)}],
+        data_name="ping_body", source_frame=FRAME) == expected
+    assert backend.calls == 0

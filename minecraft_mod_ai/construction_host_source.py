@@ -44,6 +44,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         "implementation": construction_implementation_fingerprint(),
     })
     checkpoint = root / ".mmm" / "construction_host_files" / (identifier + ".json")
+    candidate = root / ".mmm" / "construction_host_candidates" / (identifier + ".json")
     with _claim_checkpoint(checkpoint):
         saved = _read_checkpoint(checkpoint, identifier)
         if saved:
@@ -101,28 +102,46 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         effective_spec = dict(spec)
         effective_spec["requirement"] = requirement
         try:
-            source = compose_first_pass_java(
-                router, effective_spec, [
-                    {"role": "system", "content": instructions},
-                    {"role": "user", "content": json.dumps(
-                        prompt, ensure_ascii=False, default=str)},
-                ], source_context=source_context,
-                construction_context=context, behaviors=behavior_rows,
-            )
+            pending = _read_checkpoint(candidate, identifier)
+            if pending:
+                if set(pending) != {"source", "diagnostic"}:
+                    raise HostJavaConstructionError("JAVA_HOST_CANDIDATE_INVALID")
+                # A candidate is work in progress, never a successful receipt.
+                # Recheck it with the real compiler before any repair or return.
+                source = pending["source"]
+            else:
+                source = compose_first_pass_java(
+                    router, effective_spec, [
+                        {"role": "system", "content": instructions},
+                        {"role": "user", "content": json.dumps(
+                            prompt, ensure_ascii=False, default=str)},
+                    ], source_context=source_context,
+                    construction_context=context, behaviors=behavior_rows,
+                )
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
             if type(budget) is not int or budget < 0:
                 raise HostJavaConstructionError("JAVA_HOST_REPAIR_BUDGET_INVALID")
             from .construction_host_member_repair import repair_compiler_member
+            from .construction_journal import JournaledConstructionRouter
+            # Parsed declarations are not compiler-verified repairs. Replaying
+            # a rejected correction would freeze a fresh session at the same
+            # failure. Resume the whole candidate, then author only its failing
+            # member against the latest compiler diagnostic.
+            repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
             for attempt in range(budget + 1):
                 try:
                     _verify_full_source(source, spec, context, package=package,
                                         name=name, source_context=source_context)
                 except (RuntimeError, ValueError, OSError) as compiler_error:
+                    _save_checkpoint(candidate, identifier, {
+                        "source": source,
+                        "diagnostic": str(compiler_error) or type(compiler_error).__name__,
+                    })
                     if attempt == budget:
                         raise
                     source = repair_compiler_member(
-                        router, source, str(compiler_error), filename=name + ".java",
+                        repair_router, source, str(compiler_error), filename=name + ".java",
                         target_path=spec["target_path"],
                         symbols=dict(context.get("symbols") or {}), owner=owner,
                         api_evidence=prompt["inspected_target_api"],
@@ -135,13 +154,15 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             trace.mkdir(parents=True, exist_ok=True)
             (trace / (identifier + ".json")).write_text(json.dumps({
                 "target": spec["target_path"], "error": str(exc),
-                "source": locals().get("source"),
+                "source": locals().get("source") or getattr(exc, "failed_source", None),
+                "failed_response": getattr(exc, "failed_response", None),
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             raise
         from .construction_coverage import record_authored_source_calls
         record_authored_source_calls(
             root, spec["target_path"], source, source_kind="direct")
         _save_checkpoint(checkpoint, identifier, {"source": source})
+        candidate.unlink(missing_ok=True)
         print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
             "target_path": spec["target_path"], "owner": owner,
             "target_compilation_verified": True,

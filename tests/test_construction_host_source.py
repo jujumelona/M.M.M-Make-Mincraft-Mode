@@ -1,6 +1,9 @@
 """Integration proof for host-assembled Java route and complete-file checkpoint."""
 from __future__ import annotations
 
+import json
+import pytest
+
 from minecraft_mod_ai.construction_host_source import compose_host_java_source
 
 
@@ -88,3 +91,58 @@ def test_compilation_unit_is_host_composed_and_reused(tmp_path, monkeypatch):
     assert compose_host_java_source(second, SPEC, _context(tmp_path),
         package="example", name="Bridge", owner="example.Bridge") == output
     assert len(compiler_calls) == 2
+
+
+def test_failed_compiler_candidate_resumes_at_member_without_replaying_rejected_repair(tmp_path, monkeypatch):
+    from minecraft_mod_ai.construction_journal import JournaledConstructionRouter
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "host-source-test-fingerprint")
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._evidence",
+                        lambda *args, **kwargs: {"class_members": []})
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._read_materialized_context",
+                        lambda *args, **kwargs: [])
+    monkeypatch.setattr("minecraft_mod_ai.construction_coverage.record_authored_source_calls",
+                        lambda *args, **kwargs: None)
+
+    def compiler(source, *args, **kwargs):
+        if "return true;" not in source:
+            line = next(i for i, text in enumerate(source.splitlines(), 1) if "return " in text)
+            raise RuntimeError(f"Bridge.java:{line}: error: cannot find symbol")
+
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._verify_full_source", compiler)
+    context = {**_context(tmp_path), "feature_work_order": {
+        "acceptance": {"max_compiler_repair_attempts": 1}}}
+
+    class BrokenRouter(Router):
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            self.calls.append(data_name)
+            body = "return missing;" if data_name.startswith("submit_") else "return stillMissing;"
+            return source_frame["prefix"] + body + source_frame["suffix"]
+
+    first = BrokenRouter()
+    with pytest.raises(RuntimeError, match="cannot find symbol"):
+        compose_host_java_source(JournaledConstructionRouter(first, tmp_path, SPEC, context),
+            SPEC, context, package="example", name="Bridge", owner="example.Bridge")
+    assert not list((tmp_path / ".mmm/construction_host_files").glob("*.json"))
+
+    class RepairOnlyRouter(Router):
+        def generate_structured_data(self, *args, **kwargs):
+            raise AssertionError("Do not regenerate the plan or unaffected members")
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            assert data_name.startswith("repair_compiler_member_")
+            self.calls.append(data_name)
+            task = json.loads(messages[-1]["content"])
+            assert "return stillMissing;" in task["current_member"]
+            assert "cannot find symbol" in task["javac_diagnostic"]
+            return source_frame["prefix"] + "return true;" + source_frame["suffix"]
+
+    second = RepairOnlyRouter()
+    output = compose_host_java_source(
+        JournaledConstructionRouter(second, tmp_path, SPEC, context),
+        SPEC, context, package="example", name="Bridge", owner="example.Bridge")
+    assert "return true;" in output
+    assert len(second.calls) == 1
+    assert not list((tmp_path / ".mmm/construction_host_candidates").glob("*.json"))

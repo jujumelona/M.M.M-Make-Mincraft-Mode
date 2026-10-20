@@ -12,6 +12,7 @@ on:
       - 'minecraft_mod_ai/first_pass_java_source.py'
       - 'minecraft_mod_ai/construction_journal.py'
       - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/llama_structured_decode_policy.py'
       - 'minecraft_mod_ai/construction_source_repair.py'
       - 'minecraft_mod_ai/first_pass_java_declarations.py'
       - 'minecraft_mod_ai/artifact_graph_executor.py'

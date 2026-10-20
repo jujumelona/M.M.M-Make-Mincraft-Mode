@@ -483,10 +483,30 @@ class ModelRouter:
                       "mmm_source_implementation": True,
                       "mmm_strict_source_data": True, "mmm_force_non_thinking": True},
         )
-        with self._generation_scope(config):
-            result = adapter.generate(request)
         from .construction_source_repair import assemble_java_implementation
-        return assemble_java_implementation(result, source_frame)
+        from dataclasses import replace
+
+        # Correct only this implementation after a concrete decode/parser error.
+        # Transport/backend failures retain their own handling and are not
+        # mistaken for invalid Java. No whole-file regeneration or strategy switch.
+        for attempt in range(2):
+            with self._generation_scope(config):
+                result = adapter.generate(request)
+            try:
+                return assemble_java_implementation(result, source_frame)
+            except ValueError as error:
+                if attempt:
+                    raise
+                correction = {"diagnostic": str(error), "previous_response": result,
+                    "instruction": (
+                        "Correct only this implementation. Return exactly one JSON "
+                        "implementation string containing the body or initializer; "
+                        "the host retains the signature and other members.")}
+                request = replace(request, messages=fit_messages_to_context(
+                    [*request.messages, {"role": "user", "content": json.dumps(
+                        correction, ensure_ascii=False, default=str)}],
+                    config=config, tools=(),
+                ))
 
     def generate_tool_decision(
         self,
