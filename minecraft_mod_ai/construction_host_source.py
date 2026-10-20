@@ -116,6 +116,13 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     package=package, name=name, behaviors=behavior_rows,
                 )
                 if source is None:
+                    from .host_verified_entity_registry import verified_entity_registry_source
+                    source = verified_entity_registry_source(
+                        effective_spec, contract, prompt["inspected_target_api"],
+                        dict(context.get("symbols") or {}),
+                        package=package, name=name, behaviors=behavior_rows,
+                    )
+                if source is None:
                     source = compose_first_pass_java(
                         router, effective_spec, [
                             {"role": "system", "content": instructions},
