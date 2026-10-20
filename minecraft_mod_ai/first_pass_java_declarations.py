@@ -138,6 +138,52 @@ def declaration_frame(kind: str, name: str, parts: Mapping[str, Any], *, allow_u
     return frame
 
 
+
+def canonicalize_field_type_metadata(
+    kind: str, name: str, parts: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recover a typed Java field from an accidentally repeated symbol.
+
+    The host already owns the field name. Some small decoders nevertheless
+    supply a valid *declaration* in the 'type' slot, e.g. 'int mmmMember1'.
+    Use the Java parser to extract its actual type, but only when the AST
+    proves exactly one field and its identifier is the selected host name.
+    Do not infer or substitute unknown Minecraft types.
+    """
+    result = dict(parts)
+    if kind != "field" or not isinstance(result.get("type"), str):
+        return result
+    value = result["type"].strip()
+    # Avoid parsing every well-formed simple type in the common case.
+    if not value.endswith(" " + name):
+        return result
+    from .java_region_parser import JavaRegionParseError, _class_body, _parse, _text
+    try:
+        raw, root = _parse("class MmmMetadataField {\n" + value + ";\n}")
+    except JavaRegionParseError:
+        return result
+    members = [
+        node for node in _class_body(root).named_children
+        if node.type not in {"line_comment", "block_comment"}
+    ]
+    if len(members) != 1 or members[0].type != "field_declaration":
+        return result
+    field = members[0]
+    variables = [
+        child for child in field.named_children
+        if child.type == "variable_declarator"
+    ]
+    type_node = field.child_by_field_name("type")
+    selected_name = (
+        variables[0].child_by_field_name("name")
+        if len(variables) == 1 else None
+    )
+    if type_node is None or selected_name is None or _text(raw, selected_name) != name:
+        return result
+    result["type"] = _text(raw, type_node).strip()
+    return result
+
+
 def validate_declaration_metadata(kind: str, name: str, parts: Mapping[str, Any], *, owner: str) -> None:
     """Parse fixed declaration syntax before asking for any implementation."""
     stub = deepcopy(dict(parts))
