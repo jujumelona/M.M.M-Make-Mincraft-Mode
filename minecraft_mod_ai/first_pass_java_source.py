@@ -194,6 +194,7 @@ def _scope_host_implementation_messages(
     *,
     behavior: Mapping[str, Any] | None,
     purpose: str,
+    for_body: bool = False,
 ) -> list[dict[str, str]]:
     """Keep full checked APIs, but only the behavior this member owns.
 
@@ -225,6 +226,39 @@ def _scope_host_implementation_messages(
         payload["requirement"] = purpose
         payload["original_feature_goal"] = purpose
         payload["assigned_behaviors"] = [dict(behavior)]
+        if for_body:
+            # Retrieval emits complete inventories for each candidate owner.
+            # The 17th Colab run repeated 99K characters on every tiny body
+            # request, mostly constructors of unrelated JDK Location APIs.
+            # Body inference needs callable evidence selected by retrieval,
+            # not every other member of those owners. Full symbol records stay
+            # in the authoritative host index and remain checked by javac.
+            evidence = payload.get("inspected_target_api")
+            if isinstance(evidence, dict):
+                evidence = dict(evidence)
+                selected = {
+                    (row.get("owner"), row.get("kind"), row.get("name"))
+                    for row in evidence.get("target_api", ())
+                    if isinstance(row, dict)
+                }
+                narrowed = []
+                for entry in evidence.get("class_members", ()):
+                    if not isinstance(entry, dict):
+                        continue
+                    owner = entry.get("verified_class")
+                    members = [
+                        member for member in entry.get("members", ())
+                        if isinstance(member, dict)
+                        and (member.get("owner"), member.get("kind"),
+                             member.get("name")) in selected
+                    ]
+                    if members:
+                        narrow = dict(entry)
+                        narrow["members"] = members
+                        narrow["body_context_selects_only_target_api"] = True
+                        narrowed.append(narrow)
+                evidence["class_members"] = narrowed
+                payload["inspected_target_api"] = evidence
         order = payload.get("feature_work_order")
         if isinstance(order, dict):
             order = dict(order)
@@ -611,7 +645,8 @@ def compose_first_pass_java(
             body_task["assigned_behaviors"] = [dict(item) for item in behaviors]
         member_messages = (
             _scope_host_implementation_messages(
-                messages, behavior=owned_behavior, purpose=purpose)
+                messages, behavior=owned_behavior, purpose=purpose,
+                for_body=True)
             if host_mode else list(messages)
         )
         body_messages = [
