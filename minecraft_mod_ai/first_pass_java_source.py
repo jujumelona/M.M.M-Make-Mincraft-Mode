@@ -416,6 +416,45 @@ def compose_first_pass_java(
         + (f" implements {interfaces}" if interfaces else "")
         + " {"
     )
+    # Real Fabric listener interfaces supply the callback ABI. The model
+    # selects only the matching verified trigger; Java parameters and the
+    # method-reference registration are host-authored, not guessed locals.
+    bound_events = {}
+    event_candidates = []
+    if host_mode and bindings.get("request_feature_entrypoint"):
+        from .host_fabric_callback_abi import callback_interfaces
+        symbol_index = (construction_context or {}).get("symbols") or {}
+        event_candidates = callback_interfaces(symbol_index)
+        if symbol_index and not event_candidates:
+            raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
+        if event_candidates:
+            by_owner = {row["event_interface"]: row for row in event_candidates}
+            for behavior in behaviors:
+                name = str(behavior.get("event_interface") or "")
+                if not name:
+                    selection = router.generate_structured_data(
+                        "coder", [
+                            {"role": "system", "content": (
+                                "Select the actual Fabric event that fires on the stated "
+                                "trigger. Use UNBOUND when no listed event matches. "
+                                "Return only event_interface, no source code.")},
+                            {"role": "user", "content": json.dumps({
+                                "intent": behavior.get("intent"),
+                                "trigger": behavior.get("trigger"),
+                                "verified_listeners": event_candidates,
+                            }, ensure_ascii=False, default=str)},
+                        ], data_name="select_verified_fabric_event",
+                        parameters={"type": "object", "properties": {
+                            "event_interface": {"type": "string",
+                                                "enum": ["UNBOUND", *by_owner]}},
+                            "required": ["event_interface"],
+                            "additionalProperties": False},
+                    )
+                    name = str(selection.get("event_interface") or "")
+                if name not in by_owner:
+                    raise ValueError("JAVA_HOST_BEHAVIOR_EVENT_UNBOUND: "
+                                     + str(behavior.get("behavior_id")))
+                bound_events[str(behavior["behavior_id"])] = by_owner[name]
     units = []
     for index, item in enumerate(plan["units"], 1):
         unit = dict(item)
@@ -453,6 +492,7 @@ def compose_first_pass_java(
                     + "; effects=" + str(row.get("effects") or "")
                 ),
                 "host_handler_behavior": behavior_id,
+                "verified_event_callback": bound_events.get(behavior_id),
             })
             units.append({
                 "kind": "method", "name": registrar,
@@ -464,6 +504,7 @@ def compose_first_pass_java(
                 ),
                 "host_required_behavior": behavior_id,
                 "host_behavior_handler": handler,
+                "verified_event_callback": bound_events.get(behavior_id),
             })
     declarations: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for index, unit in enumerate(units, 1):
@@ -521,11 +562,32 @@ def compose_first_pass_java(
         ]
         kind, member_name = unit["kind"], unit["name"]
         nested_type = kind in {"class", "record", "enum"}
+        event_callback = unit.get("verified_event_callback")
         if host_mode and unit.get("host_required_behavior"):
-            # Required Fabric lifecycle registrations have fixed host signatures.
+            # Lifecycle registration has no parameters, but the actual Event
+            # registration will be composed from a verified SAM below.
             parts = {"visibility": "private", "static": False,
                      "return_type": "void", "type_parameters": "",
                      "parameters": [], "throws": [], "annotations": []}
+        elif host_mode and unit.get("host_handler_behavior") and event_callback:
+            # A callback's inputs/return value belong to Fabric's actual SAM.
+            # Never ask a 9B model to invent 'player' or other locals in a
+            # no-argument lifecycle method.
+            names = []
+            used = set()
+            for index_arg, type_name in enumerate(event_callback["parameters"]):
+                simple = type_name.rsplit(".", 1)[-1].replace("[]", "Array")
+                name_arg = (simple[:1].lower() + simple[1:]
+                            if IDENTIFIER["pattern"] and re.fullmatch(
+                                r"[A-Za-z_$][A-Za-z0-9_$]*", simple)
+                            else f"eventArg{index_arg}")
+                if name_arg in used:
+                    name_arg += str(index_arg)
+                used.add(name_arg)
+                names.append({"type": type_name, "name": name_arg})
+            parts = {"visibility": "private", "static": False,
+                     "return_type": event_callback["return_type"], "type_parameters": "",
+                     "parameters": names, "throws": [], "annotations": []}
         else:
             member_schema = metadata_schema(kind, member_name)
             if host_mode and unit.get("host_handler_behavior"):
@@ -591,6 +653,15 @@ def compose_first_pass_java(
             )
         )
         frame = declaration_frame(kind, name, parts, allow_uninitialized=allow_uninitialized)
+        unit_event = next((entry.get("verified_event_callback")
+                           for entry in units if entry["name"] == name), None)
+        if host_mode and unit_event and name.startswith("registerBehavior"):
+            handler = next(entry["host_behavior_handler"] for entry in units
+                           if entry["name"] == name)
+            statement = (unit_event["event_interface"] + "."
+                         + unit_event["event_field"] + ".register(this::" + handler + ");")
+            parts["source"] = frame["prefix"] + statement + frame["suffix"]
+            return
         # The surrounding user message already contains the full inspected API
         # evidence and materialized project source. Re-sending **task duplicates
         # the whole design/context on every body action (observed at 69K chars
@@ -620,6 +691,7 @@ def compose_first_pass_java(
                 else "implement_callback_effects" if selected_host_unit.get("host_handler_behavior")
                 else "supporting_member"
             ),
+            "verified_event_callback": selected_host_unit.get("verified_event_callback"),
             "handler_signature": next((
                 item["signature"] for item in signature_index
                 if item["name"] == selected_host_unit.get("host_behavior_handler")
