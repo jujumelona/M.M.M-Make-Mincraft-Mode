@@ -548,3 +548,42 @@ def test_plain_registry_owner_header_cannot_be_model_invented():
     assert "submit_java_construction_plan_interfaces" not in _data_names(router)
     assert "submit_java_construction_plan_superclass" not in _data_names(router)
     assert "return true;" in source
+
+
+def test_body_member_evidence_is_selected_without_repeating_entire_owners():
+    import json
+    from minecraft_mod_ai.first_pass_java_source import _scope_host_implementation_messages
+    behavior = {"behavior_id": "combat.attack", "intent": "Fight aliens"}
+    unrelated = [{"kind": "METHOD", "owner": "javax.tools.StandardLocation",
+                  "name": "locationFor", "parameters": ["java.lang.String"]}]
+    required = {"kind": "METHOD", "owner": "net.fabricmc.fabric.api.event.Event",
+                "name": "register", "parameters": ["net.fabricmc.fabric.api.event.EventCallback"]}
+    owner = required["owner"]
+    api = {"target_api": [required],
+           "class_members": [
+               {"verified_class": owner, "evidence": "actual_target_symbol_index",
+                "members": [required, *unrelated] * 30},
+               {"verified_class": unrelated[0]["owner"],
+                "evidence": "actual_target_symbol_index",
+                "members": unrelated * 30},
+           ],
+           "typed_input_producers": [{"verified_producers": [required]}],
+           "source": [{"authority": "materialized_prerequisite_source", "signature": "Demo"}]}
+    message = {"role": "user", "content": json.dumps({
+        "assigned_behaviors": [behavior], "inspected_target_api": api,
+        "materialized_project_source": ["DECLARATIONS_OF_PREVIOUS_CLASS"],
+    })}
+    full = _scope_host_implementation_messages(
+        [message], behavior=behavior, purpose="Register callback")
+    body = _scope_host_implementation_messages(
+        [message], behavior=behavior, purpose="Register callback", for_body=True)
+    original = json.loads(message["content"])["inspected_target_api"]
+    evidence = json.loads(body[0]["content"])["inspected_target_api"]
+    assert evidence["target_api"] == original["target_api"]
+    assert evidence["typed_input_producers"] == original["typed_input_producers"]
+    assert evidence["source"] == original["source"]
+    assert len(evidence["class_members"]) == 1
+    assert all(row["name"] == "register"
+               for row in evidence["class_members"][0]["members"])
+    assert len(body[0]["content"]) < len(full[0]["content"]) / 2
+    assert json.loads(message["content"])["inspected_target_api"] == original
