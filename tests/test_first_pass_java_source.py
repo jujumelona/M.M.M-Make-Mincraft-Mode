@@ -303,6 +303,11 @@ def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
     assert source.count("void onInitialize()") == 1
     assert "implements net.fabricmc.api.ModInitializer" in source
     assert len(router.source_calls) == 2 * len(behaviors)
+    # The host knows every required callback and handler: no model-selected
+    # speculative fields, helper names or meta-purpose planning pages.
+    assert not any(name.startswith("submit_java_construction_plan")
+                   for name in _data_names(router))
+    assert "mmmMember1" not in source
     assert "submit_java_entrypoint_source" not in _source_names(router)
     assert all("imports" not in name for name in _data_names(router))
     for item in behaviors:
