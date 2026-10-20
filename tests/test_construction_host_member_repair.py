@@ -155,3 +155,5 @@ def test_coder_receives_only_error_for_selected_member():
     assert "missingSymbol" in payload["javac_diagnostic"]
     assert "incompatible types" not in payload["javac_diagnostic"]
     assert "return missingSymbol;" in payload["current_member"]
+    assert any("public int ready()" in sig for sig in payload["host_declared_neighbor_signatures"])
+    assert not any("public int broken()" in sig for sig in payload["host_declared_neighbor_signatures"])
