@@ -292,6 +292,17 @@ def compose_first_pass_java(
         # The decoder never receives an unbounded import-generation task.
         plan_schema["properties"].pop("imports")
         plan_schema["required"] = list(plan_schema["properties"])
+    plain_host_header = bool(
+        host_mode and (construction_context or {}).get("authoring_contract", {})
+        .get("host_requirements", {}).get("java_class_header") == "plain"
+    )
+    if plain_host_header:
+        # A registry holder is a plain Java owner, not an EntityType or
+        # Registry implementation. Never ask a small coder to invent
+        # inheritance when the canonical leaf has already fixed it.
+        for field in ("superclass", "interfaces"):
+            plan_schema["properties"].pop(field, None)
+        plan_schema["required"] = list(plan_schema["properties"])
     if entrypoint_interface:
         # Initializer inheritance, constructor and lifecycle are already selected
         # by the source contract. Do not ask the model to select them again.
@@ -356,8 +367,9 @@ def compose_first_pass_java(
         )
 
     imports = "" if host_mode else _assemble_java_imports(plan["imports"])
-    superclass = str(plan.get("superclass") or "").strip()
-    interfaces = entrypoint_interface or str(plan.get("interfaces") or "").strip()
+    superclass = "" if plain_host_header else str(plan.get("superclass") or "").strip()
+    interfaces = (entrypoint_interface or ("" if plain_host_header
+                                          else str(plan.get("interfaces") or "").strip()))
     # The model never authors identity, scope, or outer braces. It supplies only
     # optional Java type references used in a deterministic host-owned header.
     # Reject executable fragments, not legitimate inheritance relationships.
