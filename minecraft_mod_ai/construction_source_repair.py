@@ -86,6 +86,7 @@ def report_recoverable_direct_failure(symbol: str, error: ValueError) -> bool:
         "CONSTRUCTION_DIRECT_BODY_NOT_VALIDATED",
         "CONSTRUCTION_UNIT_",
         "CONSTRUCTION_SOURCE_SIGNATURE_INVALID",
+        "CONSTRUCTION_SOURCE_IMPLEMENTATION_INVALID",
     ))
     if recoverable:
         print("CONSTRUCTION_AUTHOR_ROUTE_SWITCH: " + json.dumps({
