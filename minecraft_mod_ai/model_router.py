@@ -489,7 +489,9 @@ class ModelRouter:
                       "mmm_source_implementation": True,
                       "mmm_strict_source_data": True, "mmm_force_non_thinking": True},
         )
-        from .construction_source_repair import assemble_java_implementation
+        from .construction_source_repair import (
+            assemble_java_implementation, focused_java_correction_messages,
+        )
         from dataclasses import replace
 
         # Correct only this implementation after a concrete decode/parser error.
@@ -503,15 +505,11 @@ class ModelRouter:
             except ValueError as error:
                 if attempt:
                     raise
-                correction = {"diagnostic": str(error), "previous_response": result,
-                    "instruction": (
-                        "Correct only this implementation. Return exactly one JSON "
-                        "implementation string containing the body or initializer; "
-                        "the host retains the signature and other members.")}
                 request = replace(request, messages=fit_messages_to_context(
-                    [*request.messages, {"role": "user", "content": json.dumps(
-                        correction, ensure_ascii=False, default=str)}],
-                    config=config, tools=(),
+                    focused_java_correction_messages(
+                        messages, frame=source_frame,
+                        response=result, diagnostic=str(error),
+                    ), config=config, tools=(),
                 ))
 
     def generate_tool_decision(
