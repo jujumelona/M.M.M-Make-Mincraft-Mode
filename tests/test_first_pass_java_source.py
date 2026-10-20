@@ -508,3 +508,26 @@ def test_field_type_echo_is_normalized_in_actual_host_source_path():
     )
     assert "private int count;" in source
     assert "int count count" not in source
+
+
+def test_plain_registry_owner_header_cannot_be_model_invented():
+    router = RecordingJavaRouter(
+        superclass="java.lang.Object",
+        interfaces="net.minecraft.world.entity.EntityType",
+    )
+    source = compose_first_pass_java(
+        router, SPEC, [],
+        construction_context={
+            "symbols": {},
+            "authoring_contract": {
+                "canonical_leaf": "minecraft/entity/registry",
+                "host_requirements": {"java_class_header": "plain"},
+            },
+        },
+    )
+    assert "public class Gate {" in source
+    assert "implements net.minecraft.world.entity.EntityType" not in source
+    assert "extends java.lang.Object" not in source
+    assert "submit_java_construction_plan_interfaces" not in _data_names(router)
+    assert "submit_java_construction_plan_superclass" not in _data_names(router)
+    assert "return true;" in source
