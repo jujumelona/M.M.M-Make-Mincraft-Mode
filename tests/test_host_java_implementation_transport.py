@@ -171,3 +171,32 @@ def test_source_router_receives_exact_native_response_before_generic_json_cleanu
     router = NativeRouter(None)
     assert "super(type, level);" in _run(router)
     assert json.loads(router.requests[-1].messages[-1]["content"])["previous_response"] == 'not JSON'
+
+
+def test_host_removes_only_proven_surplus_outer_brace():
+    # Replay from production-logs (14): the model repeated a host-owned
+    # trailing brace after two legitimate registration calls.
+    frame = {"kind": "method", "prefix": "public void onInitialize() {\n",
+             "suffix": "\n}"}
+    body = ("registerBehavior48b495a6ef6dd67d6375();\n"
+            "registerBehavior0a2ee99147396b090c42();\n}")
+    accepted = _run(BackendRouter(json.dumps({"implementation": body})), frame)
+    assert accepted.count("registerBehavior48b495a6ef6dd67d6375();") == 1
+    assert accepted.count("registerBehavior0a2ee99147396b090c42();") == 1
+    assert accepted == frame["prefix"] + body[:-1].rstrip() + frame["suffix"]
+
+
+def test_host_does_not_strip_valid_java_control_flow_braces():
+    frame = {"kind": "method", "prefix": "public void action() {\n",
+             "suffix": "\n}"}
+    body = "if (true) { System.out.println(1); }"
+    assert _run(BackendRouter(json.dumps({"implementation": body})), frame) == (
+        frame["prefix"] + body + frame["suffix"])
+
+
+def test_host_rejects_extra_declarations_even_with_surplus_brace():
+    frame = {"kind": "method", "prefix": "public void action() {\n",
+             "suffix": "\n}"}
+    body = "return; } void inject() {"
+    with pytest.raises(JavaRegionParseError):
+        _run(BackendRouter(json.dumps({"implementation": body})), frame)
