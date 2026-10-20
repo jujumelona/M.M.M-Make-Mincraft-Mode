@@ -31,6 +31,7 @@ on:
       - 'tests/test_host_fabric_callback_abi.py'
       - 'tests/test_host_fabric_event_catalog.py'
       - 'tests/test_host_behavior_event_dispatch.py'
+      - 'tools/verify_fabric_event_catalog.py'
       - 'tests/test_host_java_imports.py'
       - 'tests/test_construction_host_source.py'
       - 'tests/test_host_verified_entity_type.py'
@@ -106,3 +107,7 @@ jobs:
             tests/test_native_java_decode_strategy_recovery.py \
             tests/test_artifact_java_source_ports.py \
             tests/test_construction_operation_progress_gate.py
+      - name: Compile real Minecraft 26.2 Fabric callback registrations
+        run: |
+          python tools/verify_fabric_event_catalog.py \
+            --cache-dir "$RUNNER_TEMP/mmm-fabric-event-proof"
