@@ -173,7 +173,15 @@ def wire_completed_fabric_java(
         for relative, leaf in sorted(set(approved)):
             source_path = _admitted_java(root, relative)
             source = source_path.read_text(encoding="utf-8")
-            owner, declaration = _java_owner(source_path, source, relative)
+            try:
+                owner, declaration = _java_owner(source_path, source, relative)
+            except ValueError:
+                # Java enum/record/interface artifacts are valid graph outputs
+                # but cannot implement a public class loader initializer.
+                # Registry leaf owners, however, MUST publish a callable ABI.
+                if isinstance(leaf, str) and leaf.endswith("/registry"):
+                    raise
+                continue
             kind = _entrypoint_kind(source, declaration["declaration"])
             if kind:
                 mutations.append((kind, owner, None))
