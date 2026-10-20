@@ -65,8 +65,16 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 and not spec.get("bindings", {}).get("request_feature_entrypoint")):
             requirement = str(contract["responsibility"])
         behavior_rows = [dict(row) for row in behaviors]
-        api_intent = requirement + " " + " ".join(
-            str(row.get("intent") or "") for row in behavior_rows)
+        # Event APIs are selected by the actual USER TRIGGER, not just the
+        # broad feature title. Without the trigger, the host supplied zero
+        # event APIs for "player opens trading" and the coder invented callback
+        # parameters unrelated to any registered listener (production-logs 15).
+        api_intent = " ".join((
+            requirement,
+            *(str(row.get(field) or "")
+              for row in behavior_rows
+              for field in ("intent", "trigger", "effects")),
+        ))
         prompt = {
             "requirement": requirement,
             "original_feature_goal": str(spec.get("requirement") or ""),
