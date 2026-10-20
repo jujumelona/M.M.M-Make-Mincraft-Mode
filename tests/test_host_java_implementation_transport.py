@@ -52,8 +52,8 @@ def test_constructor_body_is_json_decoded_then_host_framed():
     assert _run(router) == FRAME["prefix"] + body + FRAME["suffix"]
     request = router.requests[0]
     assert request.response_format == "json"
-    assert request.response_schema["properties"]["implementation"] == {"type": "string"}
-    assert request.response_schema["additionalProperties"] is False
+    assert request.response_schema is None  # No hidden 256-char native schema limit.
+    assert not request.tools
     assert request.metadata["mmm_force_non_thinking"] is True
     assert "mmm_output_token_ceiling" not in request.metadata
     assert not request.tools
@@ -145,7 +145,7 @@ def test_native_payload_enforces_json_without_installing_a_java_grammar():
         role="coder", model_id="local", max_new_tokens=2048, extra={}))
     payload = _server_payload(adapter, router.requests[0])
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"]["properties"]["implementation"] == {"type": "string"}
+    assert "json_schema" not in payload  # JSON envelope parsed and validated by host
     assert "grammar" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
