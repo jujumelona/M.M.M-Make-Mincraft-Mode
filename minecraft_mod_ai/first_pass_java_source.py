@@ -330,9 +330,34 @@ def compose_first_pass_java(
             seen_behaviors.add(behavior_id)
             registrar = "registerBehavior" + hashlib.sha256(
                 behavior_id.encode("utf-8")).hexdigest()[:20]
-            units.append({"kind": "method", "name": registrar,
-                          "purpose": str(row["intent"]),
-                          "host_required_behavior": behavior_id})
+            # The registrar installs the verified trigger and is NOT the owner
+            # of all gameplay state, UI, economy and effects. Previously a
+            # single no-argument registrar was asked to implement the entire
+            # feature, causing the model to emit class-level fields as method
+            # statements until it exhausted its output context.
+            handler = "handleBehavior" + hashlib.sha256(
+                behavior_id.encode("utf-8")).hexdigest()[:20]
+            units.append({
+                "kind": "method", "name": handler,
+                "purpose": (
+                    "Implement the runtime effects for behavior "
+                    + behavior_id + ": " + str(row["intent"])
+                    + "; trigger=" + str(row.get("trigger") or "")
+                    + "; effects=" + str(row.get("effects") or "")
+                ),
+                "host_handler_behavior": behavior_id,
+            })
+            units.append({
+                "kind": "method", "name": registrar,
+                "purpose": (
+                    "Register the real Fabric event/callback for behavior "
+                    + behavior_id + " and dispatch to the host-declared helper "
+                    + handler + "; do not implement gameplay state or declare "
+                    "new members in this registration method."
+                ),
+                "host_required_behavior": behavior_id,
+                "host_behavior_handler": handler,
+            })
     declarations: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for index, unit in enumerate(units, 1):
         unit_task = {
@@ -429,10 +454,14 @@ def compose_first_pass_java(
         # evidence and materialized project source. Re-sending **task duplicates
         # the whole design/context on every body action (observed at 69K chars
         # for a single registrar), exhausting the 9B model before one edit.
-        owned_behavior_id = next((
-            unit.get("host_required_behavior") for unit in units
+        selected_host_unit = next((
+            unit for unit in units
             if unit["kind"] == kind and unit["name"] == name
-        ), None)
+        ), {})
+        owned_behavior_id = (
+            selected_host_unit.get("host_required_behavior")
+            or selected_host_unit.get("host_handler_behavior")
+        )
         owned_behavior = next((
             dict(item) for item in behaviors
             if item.get("behavior_id") == owned_behavior_id
@@ -440,9 +469,20 @@ def compose_first_pass_java(
         body_task = {
             "target_path": task["target_path"],
             "class": class_name,
-            "requirement": task["requirement"],
+            "requirement": purpose if (
+                host_mode and owned_behavior_id
+            ) else task["requirement"],
             "side": task["side"],
             "implementation_requirements": task["implementation_requirements"],
+            "member_role": (
+                "register_callback" if selected_host_unit.get("host_required_behavior")
+                else "implement_callback_effects" if selected_host_unit.get("host_handler_behavior")
+                else "supporting_member"
+            ),
+            "handler_signature": next((
+                item["signature"] for item in signature_index
+                if item["name"] == selected_host_unit.get("host_behavior_handler")
+            ), None),
             "current_unit_purpose": purpose,
             "assigned_behavior": owned_behavior,
             "class_declaration": declaration,
