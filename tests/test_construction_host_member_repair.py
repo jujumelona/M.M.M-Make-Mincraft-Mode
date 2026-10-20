@@ -134,3 +134,24 @@ Alien.java:7: error: type has private access in Entity"""
     # it rather than silently claiming this class was fully fixed.
     assert "public void expose() { this.type = type; }" in updated
     assert router.calls == []
+
+
+def test_coder_receives_only_error_for_selected_member():
+    import json
+    diagnostic = """/tmp/example/Demo.java:7: error: cannot find symbol
+        return missingSymbol;
+               ^
+  symbol: variable missingSymbol
+/tmp/example/Demo.java:4: error: incompatible types
+        return 7;
+               ^"""
+    router = Router()
+    result = repair_compiler_member(
+        router, SOURCE, diagnostic, filename="Demo.java",
+        target_path="src/main/java/example/Demo.java",
+        symbols={}, owner="example.Demo", api_evidence={}, attempt=1)
+    assert "return 9;" in result
+    payload = json.loads(router.calls[0][1][-1]["content"])
+    assert "missingSymbol" in payload["javac_diagnostic"]
+    assert "incompatible types" not in payload["javac_diagnostic"]
+    assert "return missingSymbol;" in payload["current_member"]
