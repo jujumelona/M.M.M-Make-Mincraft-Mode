@@ -344,6 +344,7 @@ def compose_first_pass_java(
             "previous_declaration_metadata": declarations,
         }
         metadata_messages = [
+            *messages,
             {
                 "role": "system",
                 "content": (
@@ -431,6 +432,7 @@ def compose_first_pass_java(
                      "response_source_frame": frame,
                      "declared_member_api": signature_index, "previous_complete_members": finished}
         body_messages = [
+            *messages,
             {"role": "system", "content": (
                 "Return JSON with one implementation string containing only the field "
                 "initializer or method/constructor body. The host fixes the signature "
@@ -461,6 +463,7 @@ def compose_first_pass_java(
                      "type_parameters": ""}
         frame = declaration_frame("method", entrypoint_method, lifecycle)
         lifecycle_messages = [
+            *messages,
             {"role": "system", "content": (
                 "Return JSON with one implementation string containing only the "
                 "initialization method body. The host supplies its signature and "

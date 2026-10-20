@@ -99,6 +99,30 @@ def _source_names(router):
     return [name for name, _ in router.source_calls]
 
 
+@pytest.mark.parametrize("stage", ["metadata", "body", "lifecycle"])
+def test_inspected_target_evidence_reaches_every_authoring_stage(stage):
+    evidence = "VERIFIED_TARGET_CONSTRUCTOR_AND_CALLBACK_SIGNATURES"
+
+    class EvidenceRouter(RecordingJavaRouter):
+        def generate_structured_data(self, role, messages, **kwargs):
+            if stage == "metadata" and kwargs["data_name"] == "submit_java_declaration_1":
+                assert evidence in "\n".join(row["content"] for row in messages)
+            return super().generate_structured_data(role, messages, **kwargs)
+
+        def generate_java_source(self, role, messages, **kwargs):
+            expected = ("submit_java_entrypoint_source" if stage == "lifecycle"
+                        else "submit_java_implementation_1")
+            if stage != "metadata" and kwargs["data_name"] == expected:
+                assert evidence in "\n".join(row["content"] for row in messages)
+            return super().generate_java_source(role, messages, **kwargs)
+
+    source = compose_first_pass_java(
+        EvidenceRouter(), {**SPEC, "side": "CLIENT"},
+        [{"role": "user", "content": evidence}],
+    )
+    assert "onInitializeClient" in source
+
+
 def test_first_pass_builds_complete_java_from_typed_metadata_and_fixed_source():
     router = RecordingJavaRouter()
     assert can_compose_first_pass_java(SPEC)
