@@ -17,6 +17,7 @@ on:
       - 'minecraft_mod_ai/host_java_imports.py'
       - 'minecraft_mod_ai/first_pass_java_source.py'
       - 'minecraft_mod_ai/host_fabric_callback_abi.py'
+      - 'minecraft_mod_ai/construction_type_contracts.py'
       - 'minecraft_mod_ai/construction_journal.py'
       - 'minecraft_mod_ai/model_router.py'
       - 'minecraft_mod_ai/llama_structured_decode_policy.py'
@@ -27,6 +28,7 @@ on:
       - 'minecraft_mod_ai/construction_declaration_choices.py'
       - 'tests/test_first_pass_java_source.py'
       - 'tests/test_host_fabric_callback_abi.py'
+      - 'tests/test_host_fabric_event_catalog.py'
       - 'tests/test_host_java_imports.py'
       - 'tests/test_construction_host_source.py'
       - 'tests/test_host_verified_entity_type.py'
@@ -84,6 +86,7 @@ jobs:
           python -m pytest -q --maxfail=1 \
             tests/test_first_pass_java_source.py \
             tests/test_host_fabric_callback_abi.py \
+            tests/test_host_fabric_event_catalog.py \
             tests/test_host_java_imports.py \
             tests/test_construction_host_source.py \
             tests/test_host_verified_entity_type.py \

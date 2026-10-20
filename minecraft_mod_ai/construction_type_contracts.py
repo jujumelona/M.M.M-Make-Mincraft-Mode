@@ -28,6 +28,7 @@ def _source_set_owner_accessible(owner: str, target_path: str, row=None) -> bool
     return not canonical.startswith((
         "net.minecraft.client.",
         "net.fabricmc.fabric.api.client.",
+        "net.fabricmc.fabric.api.event.client.",
         "net.fabricmc.fabric.mixin.client.",
         "com.mojang.blaze3d.",
     ))

@@ -245,7 +245,6 @@ def _scope_host_implementation_messages(
                 for entry in evidence.get("class_members", ()):
                     if not isinstance(entry, dict):
                         continue
-                    owner = entry.get("verified_class")
                     members = [
                         member for member in entry.get("members", ())
                         if isinstance(member, dict)
@@ -424,20 +423,25 @@ def compose_first_pass_java(
     if host_mode and bindings.get("request_feature_entrypoint"):
         from .host_fabric_callback_abi import callback_interfaces
         symbol_index = (construction_context or {}).get("symbols") or {}
-        event_candidates = callback_interfaces(symbol_index)
+        event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
         if symbol_index and not event_candidates:
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
         if event_candidates:
-            by_owner = {row["event_interface"]: row for row in event_candidates}
+            by_event = {row["event_id"]: row for row in event_candidates}
             for behavior in behaviors:
-                name = str(behavior.get("event_interface") or "")
+                name = str(behavior.get("event_binding") or "")
+                if not name and behavior.get("event_interface"):
+                    matches = [row["event_id"] for row in event_candidates
+                               if row["event_interface"] == behavior["event_interface"]]
+                    if len(matches) == 1:
+                        name = matches[0]
                 if not name:
                     selection = router.generate_structured_data(
                         "coder", [
                             {"role": "system", "content": (
                                 "Select the actual Fabric event that fires on the stated "
                                 "trigger. Use UNBOUND when no listed event matches. "
-                                "Return only event_interface, no source code.")},
+                                "Return only event_binding, no source code.")},
                             {"role": "user", "content": json.dumps({
                                 "intent": behavior.get("intent"),
                                 "trigger": behavior.get("trigger"),
@@ -445,16 +449,16 @@ def compose_first_pass_java(
                             }, ensure_ascii=False, default=str)},
                         ], data_name="select_verified_fabric_event",
                         parameters={"type": "object", "properties": {
-                            "event_interface": {"type": "string",
-                                                "enum": ["UNBOUND", *by_owner]}},
-                            "required": ["event_interface"],
+                            "event_binding": {"type": "string",
+                                              "enum": ["UNBOUND", *by_event]}},
+                            "required": ["event_binding"],
                             "additionalProperties": False},
                     )
-                    name = str(selection.get("event_interface") or "")
-                if name not in by_owner:
+                    name = str(selection.get("event_binding") or "")
+                if name not in by_event:
                     raise ValueError("JAVA_HOST_BEHAVIOR_EVENT_UNBOUND: "
                                      + str(behavior.get("behavior_id")))
-                bound_events[str(behavior["behavior_id"])] = by_owner[name]
+                bound_events[str(behavior["behavior_id"])] = by_event[name]
     units = []
     for index, item in enumerate(plan["units"], 1):
         unit = dict(item)
@@ -586,7 +590,8 @@ def compose_first_pass_java(
                 names.append({"type": type_name, "name": name_arg})
             parts = {"visibility": "private", "static": False,
                      "return_type": event_callback["return_type"], "type_parameters": "",
-                     "parameters": names, "throws": [], "annotations": []}
+                     "parameters": names, "throws": list(event_callback.get("throws") or []),
+                     "annotations": []}
         else:
             member_schema = metadata_schema(kind, member_name)
             if host_mode and unit.get("host_handler_behavior"):
@@ -657,7 +662,7 @@ def compose_first_pass_java(
         if host_mode and unit_event and name.startswith("registerBehavior"):
             handler = next(entry["host_behavior_handler"] for entry in units
                            if entry["name"] == name)
-            statement = (unit_event["event_interface"] + "."
+            statement = (unit_event["event_owner"] + "."
                          + unit_event["event_field"] + ".register(this::" + handler + ");")
             parts["source"] = frame["prefix"] + statement + frame["suffix"]
             return

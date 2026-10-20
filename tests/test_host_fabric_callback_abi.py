@@ -26,7 +26,7 @@ INDEX = {
     },
     "callback.event": {
         "kind": "FIELD", "owner": OWNER, "access": 25, "name": "EVENT",
-        "return_type": EVENT,
+        "return_type": EVENT, "generic_return_type": EVENT + "<" + OWNER + ">",
     },
     "callback.method": {
         "kind": "METHOD", "owner": OWNER, "access": 1025, "name": "interact",
@@ -55,10 +55,10 @@ class EventRouter:
         self.calls.append(data_name)
         assert role == "coder"
         assert data_name == "select_verified_fabric_event"
-        assert set(parameters["properties"]["event_interface"]["enum"]) == {
-            "UNBOUND", OWNER,
+        assert set(parameters["properties"]["event_binding"]["enum"]) == {
+            "UNBOUND", OWNER + "#EVENT",
         }
-        return {"event_interface": self.selected}
+        return {"event_binding": "UNBOUND" if self.selected == "UNBOUND" else self.selected + "#EVENT"}
     def generate_java_source(self, role, messages, *, data_name, source_frame):
         self.source_tasks.append(json.loads(messages[-1]["content"]))
         assert role == "coder"
