@@ -251,7 +251,42 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
         source_frame=frame,
     )
     if revised == original:
-        raise ValueError("JAVA_HOST_REPAIR_NO_MEMBER_PROGRESS")
+        # The decoder just repeated the invalid member byte-for-byte. A
+        # second identical request cannot make compiler progress. Issue one
+        # DIFFERENT focused request with the exact javac error and immutable
+        # signature; fail closed if it still emits the same member.
+        focused = {
+            "javac_diagnostic": focused_diagnostic,
+            "rejected_member": original,
+            "immutable_source_frame": frame,
+            "host_declared_neighbor_signatures": _host_declared_neighbor_signatures(
+                source, selected_name=original.split("{", 1)[0].strip()),
+            "selected_inspected_api": api_evidence.get("target_api", ()),
+            "materialized_prerequisite_api": list(prerequisite_api),
+            "host_state_access": list(state_access),
+            "correction_obligation": (
+                "The first correction returned the ORIGINAL member without "
+                "addressing the javac diagnostic. Replace the actual invalid "
+                "expression or call; preserve the complete requested effects. "
+                "Return only one implementation body using exact verified "
+                "APIs, not a different declaration or a TODO."
+            ),
+        }
+        revised = router.generate_java_source(
+            "coder", [
+                {"role": "system", "content": (
+                    "Repair exactly the failing Java member using the concrete "
+                    "compiler diagnostic. The previous attempt made NO change. "
+                    "Do not repeat that unchanged implementation. The host "
+                    "owns the class and signature; all outputs must still pass "
+                    "the actual javac compiler.")},
+                {"role": "user", "content": json.dumps(
+                    focused, ensure_ascii=False, default=str)},
+            ], data_name=f"repair_compiler_member_no_progress_{attempt}_{fingerprint}",
+            source_frame=frame,
+        )
+        if revised == original:
+            raise ValueError("JAVA_HOST_REPAIR_NO_MEMBER_PROGRESS")
     updated = (raw[:node.start_byte] + revised.encode("utf-8") +
                raw[node.end_byte:]).decode("utf-8")
     # The host reconstructs imports after a member edit; never delegate that
