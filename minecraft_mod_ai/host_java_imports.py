@@ -61,6 +61,16 @@ def _type_mentions(source: str) -> set[str]:
                     spelling = ""
             if spelling:
                 references.add(spelling)
+        if node.type == "method_reference":
+            # Method references such as Registry::register also contain an
+            # unqualified type owner, even when no Java type declaration does.
+            qualifier = next((child for child in node.named_children
+                              if child.type in {"identifier", "type_identifier",
+                                                "scoped_identifier", "scoped_type_identifier"}), None)
+            if qualifier is not None:
+                simple = _text(raw, qualifier).split(".", 1)[0]
+                if simple[:1].isupper():
+                    references.add(simple)
         if node.type in {"method_invocation", "field_access"}:
             # A static API invocation (Registry.register, EntityType.Builder)
             # may never occur in a declared Java type position.
@@ -105,7 +115,9 @@ def host_add_verified_imports(source: str, *, symbols: dict,
             raise ValueError("JAVA_HOST_IMPORT_AMBIGUOUS: " + simple + ": " +
                              ", ".join(candidates))
         if len(candidates) == 1:
-            if not candidates[0].startswith(package + "."):
+            # Java packages are NOT hierarchical visibility scopes:
+            # example.generated.Widget is NOT in package example.
+            if candidates[0].rpartition(".")[0] != package:
                 imports.add(candidates[0])
         elif simple in _JDK_IMPORTS:
             imports.add(_JDK_IMPORTS[simple])
