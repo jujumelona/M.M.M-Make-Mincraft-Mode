@@ -179,3 +179,40 @@ def test_living_entity_attributes_cannot_be_silently_omitted():
         package="example", name="AlienRegistry",
     )
     assert ATTR + ".register" not in java
+
+
+
+def test_indirect_living_entity_inheritance_registers_attributes_without_prompt_names():
+    import copy
+
+    evidence = copy.deepcopy(EVIDENCE)
+    evidence["source"][0]["signature"] = (
+        "public class Alien extends net.minecraft.world.entity.PathfinderMob"
+    )
+    symbols = dict(SYMBOLS)
+    symbols["pathfinder.parent"] = {
+        "owner": "net.minecraft.world.entity.PathfinderMob",
+        "kind": "CLASS",
+        "name": "PathfinderMob",
+        "superclass": MOB,
+        "access": 1,
+    }
+    java = verified_entity_registry_source(
+        SPEC, CONTRACT, evidence, symbols,
+        package="example", name="AlienRegistry",
+    )
+    assert ATTR + ".register(ENTITY_TYPE, " + MOB + ".createMobAttributes())" in java
+
+
+def test_unknown_entity_superclass_is_not_assumed_nonliving():
+    import copy
+
+    evidence = copy.deepcopy(EVIDENCE)
+    evidence["source"][0]["signature"] = (
+        "public class Alien extends example.custom.UnknownBase"
+    )
+    with pytest.raises(ValueError, match="ENTITY_SUPERCLASS_LINEAGE_UNVERIFIED"):
+        verified_entity_registry_source(
+            SPEC, CONTRACT, evidence, SYMBOLS,
+            package="example", name="AlienRegistry",
+        )
