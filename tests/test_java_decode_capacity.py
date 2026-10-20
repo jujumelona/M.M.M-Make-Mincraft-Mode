@@ -91,3 +91,15 @@ def test_final_wire_budget_cannot_silently_shrink_complete_action():
         assert_request_output_capacity(request, {"max_tokens": 2304})
     assert_request_output_capacity(request, {"max_tokens": 15899})
     assert_request_output_capacity(SimpleNamespace(metadata={}), {"max_tokens": 128})
+
+
+
+def test_source_body_schema_does_not_impose_arbitrary_character_limits():
+    from minecraft_mod_ai.first_pass_java_declarations import BODY, declaration_schema
+    assert BODY == {"type": "string"}
+    for kind, name, field in (
+        ("field", "counter", "initializer"),
+        ("method", "step", "body"),
+        ("constructor", "Worker", "body"),
+    ):
+        assert declaration_schema(kind, name)["properties"][field] == {"type": "string"}
