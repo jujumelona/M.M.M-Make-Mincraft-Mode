@@ -425,12 +425,43 @@ def compose_first_pass_java(
             )
         )
         frame = declaration_frame(kind, name, parts, allow_uninitialized=allow_uninitialized)
-        body_task = {**task, "imports": imports, "current_unit_purpose": purpose,
-                     "class_declaration": declaration, "owner_type": owner_types[owner],
-                     "owner": owner, "declaration_metadata": parts,
-                     "host_signature": declaration_header(kind, name, parts),
-                     "response_source_frame": frame,
-                     "declared_member_api": signature_index, "previous_complete_members": finished}
+        # The surrounding user message already contains the full inspected API
+        # evidence and materialized project source. Re-sending **task duplicates
+        # the whole design/context on every body action (observed at 69K chars
+        # for a single registrar), exhausting the 9B model before one edit.
+        owned_behavior_id = next((
+            unit.get("host_required_behavior") for unit in units
+            if unit["kind"] == kind and unit["name"] == name
+        ), None)
+        owned_behavior = next((
+            dict(item) for item in behaviors
+            if item.get("behavior_id") == owned_behavior_id
+        ), None)
+        body_task = {
+            "target_path": task["target_path"],
+            "class": class_name,
+            "requirement": task["requirement"],
+            "side": task["side"],
+            "implementation_requirements": task["implementation_requirements"],
+            "current_unit_purpose": purpose,
+            "assigned_behavior": owned_behavior,
+            "class_declaration": declaration,
+            "owner_type": owner_types[owner],
+            "owner": owner,
+            "declaration_metadata": parts,
+            "host_signature": declaration_header(kind, name, parts),
+            "response_source_frame": frame,
+            "declared_member_api": signature_index,
+            # Source already generated for a different member is context, not
+            # an invitation to generate another complete compilation unit.
+            "previous_complete_members": finished[-3:],
+        }
+        if not host_mode:
+            # Without the host's initial evidence payload this is the only
+            # transport of prerequisite sources.
+            body_task["prerequisite_source"] = source_context
+        elif not messages:
+            body_task["assigned_behaviors"] = [dict(item) for item in behaviors]
         body_messages = [
             *messages,
             {"role": "system", "content": (
@@ -474,10 +505,12 @@ def compose_first_pass_java(
                 "without duplicating its effects. Return no package/import directives, "
                 "class declaration or extra method."
             )},
-            {"role": "user", "content": json.dumps({**task, "imports": imports,
+            {"role": "user", "content": json.dumps({
+                "requirement": task["requirement"], "side": task["side"],
+                "target_path": task["target_path"], "imports": imports,
                 "host_signature": declaration_header("method", entrypoint_method, lifecycle),
                 "response_source_frame": frame,
-                "complete_members": finished}, ensure_ascii=False, default=str)},
+                "complete_members": finished[-6:]}, ensure_ascii=False, default=str)},
         ]
         if host_mode and bindings.get("request_feature_entrypoint"):
             calls = [unit["name"] for unit in units if unit.get("host_required_behavior")]
