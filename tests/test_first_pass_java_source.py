@@ -475,3 +475,31 @@ def test_host_metadata_keeps_full_evidence_once_without_duplicate_task():
     assert unit["current_unit"]["name"] == "isReady"
     assert "prerequisite_source" not in unit
     assert "bindings" not in unit
+
+
+def test_field_type_echo_is_normalized_in_actual_host_source_path():
+    class FieldRouter(RecordingJavaRouter):
+        def __init__(self):
+            super().__init__(units=[{
+                "kind": "field", "name": "count",
+                "purpose": "Keep track of the actual event counter",
+            }])
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "submit_java_declaration_1":
+                return {"visibility": "private", "static": False,
+                        "final": False, "type": "int count"}
+            return super().generate_structured_data(
+                role, messages, data_name=data_name, parameters=parameters)
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            assert data_name == "submit_java_implementation_1"
+            assert source_frame["kind"] == "field"
+            return source_frame["empty_value"]
+
+    source = compose_first_pass_java(
+        FieldRouter(), {**SPEC, "side": "COMMON"}, [],
+        construction_context={"symbols": {}, "authoring_contract": {}},
+    )
+    assert "private int count;" in source
+    assert "int count count" not in source
