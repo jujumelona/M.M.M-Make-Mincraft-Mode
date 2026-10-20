@@ -511,7 +511,21 @@ def test_field_type_echo_is_normalized_in_actual_host_source_path():
 
 
 def test_plain_registry_owner_header_cannot_be_model_invented():
-    router = RecordingJavaRouter(
+    class PlainHeaderRouter(RecordingJavaRouter):
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "submit_java_construction_plan_count":
+                self.data_calls.append((data_name, parameters))
+                return {"count": 1}
+            prefix = "submit_java_construction_plan_1_value_"
+            if data_name.startswith(prefix):
+                self.data_calls.append((data_name, parameters))
+                field = data_name[len(prefix):]
+                return {field: {"kind": "method", "name": "isReady",
+                                "purpose": "Expose readiness"}[field]}
+            return super().generate_structured_data(
+                role, messages, data_name=data_name, parameters=parameters)
+
+    router = PlainHeaderRouter(
         superclass="java.lang.Object",
         interfaces="net.minecraft.world.entity.EntityType",
     )
