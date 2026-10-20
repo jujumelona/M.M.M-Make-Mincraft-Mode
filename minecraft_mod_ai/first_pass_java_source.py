@@ -578,8 +578,7 @@ def compose_first_pass_java(
             for index_arg, type_name in enumerate(event_callback["parameters"]):
                 simple = type_name.rsplit(".", 1)[-1].replace("[]", "Array")
                 name_arg = (simple[:1].lower() + simple[1:]
-                            if IDENTIFIER["pattern"] and re.fullmatch(
-                                r"[A-Za-z_$][A-Za-z0-9_$]*", simple)
+                            if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", simple)
                             else f"eventArg{index_arg}")
                 if name_arg in used:
                     name_arg += str(index_arg)
