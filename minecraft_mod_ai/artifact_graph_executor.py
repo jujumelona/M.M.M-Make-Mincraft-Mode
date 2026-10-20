@@ -106,6 +106,15 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
         resolved = path.resolve()
         if not resolved.is_relative_to(root):
             raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_OUTSIDE_WORKSPACE")
+        # The materialization receipt proves the exact byte sequence the
+        # producing job wrote. A changed or unstamped file cannot silently
+        # become a new Fabric startup entrypoint.
+        import hashlib
+        checksum = materialization.get("after_sha256")
+        if (not isinstance(checksum, str) or len(checksum) != 64
+                or not resolved.is_file()
+                or hashlib.sha256(resolved.read_bytes()).hexdigest() != checksum):
+            raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED")
         approved.append((resolved.relative_to(root).as_posix(), job.canonical_leaf))
     if approved:
         from .host_fabric_initializer_wiring import wire_completed_fabric_java
