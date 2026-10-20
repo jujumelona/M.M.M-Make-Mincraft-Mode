@@ -193,3 +193,47 @@ def test_registry_init_precedes_feature_even_if_feature_was_published_first(tmp_
     assert entries[0] == "proof.ExistingInitializer"
     assert "MmmRegistryBootstrap" in entries[1]
     assert entries[2] == "proof.actions.Feature"
+
+
+
+def test_client_source_set_is_loaded_only_from_client_entrypoint(tmp_path):
+    _fixture(tmp_path)
+    client_path = "src/client/java/proof/client/ClientThings.java"
+    _write(tmp_path, client_path, """package proof.client;
+public final class ClientThings {
+    public static int calls = 0;
+    public static void register() { calls++; }
+}""")
+    result = wire_completed_fabric_java(
+        tmp_path, [(client_path, "minecraft/client/registry")]
+    )
+    client_owner = next(
+        item["owner"] for item in result["wired"]
+        if item["owner"].startswith("proof.client.MmmRegistryBootstrap")
+    )
+    metadata = json.loads((tmp_path / "src/main/resources/fabric.mod.json").read_text())
+    assert client_owner in metadata["entrypoints"]["client"]
+    assert client_owner not in metadata["entrypoints"]["main"]
+    source_file = (
+        tmp_path / "src/client/java/proof/client"
+        / (client_owner.rsplit(".", 1)[-1] + ".java")
+    )
+    java = source_file.read_text()
+    assert "implements net.fabricmc.api.ClientModInitializer" in java
+    assert "onInitializeClient()" in java
+    assert "proof.client.ClientThings.register();" in java
+    assert not (tmp_path / "src/main/java/proof/client" / source_file.name).exists()
+
+
+def test_existing_client_entrypoint_in_client_source_set_appears_in_metadata(tmp_path):
+    _fixture(tmp_path)
+    relative = "src/client/java/proof/client/Feature.java"
+    _write(tmp_path, relative, """package proof.client;
+import net.fabricmc.api.ClientModInitializer;
+public final class Feature implements ClientModInitializer {
+    @Override public void onInitializeClient() {}
+}""")
+    wire_completed_fabric_java(tmp_path, [(relative, "minecraft/client/event")])
+    metadata = json.loads((tmp_path / "src/main/resources/fabric.mod.json").read_text())
+    assert "proof.client.Feature" in metadata["entrypoints"]["client"]
+    assert "proof.client.Feature" not in metadata["entrypoints"]["main"]
