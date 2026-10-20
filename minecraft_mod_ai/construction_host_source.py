@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 
 from .construction_direct_writer import (
-    _claim_checkpoint, _digest, _read_checkpoint, _save_checkpoint,
+    _claim_checkpoint,
+    _digest,
+    _read_checkpoint,
+    _save_checkpoint,
 )
 
 
@@ -23,10 +26,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                              package: str, name: str, owner: str,
                              behaviors=(), source_context=()) -> str:
     from .construction_file_author import (
-        _evidence, _read_materialized_context, _verify_full_source,
+        _evidence,
+        _verify_full_source,
     )
-    from .first_pass_java_source import compose_first_pass_java
     from .construction_implementation import construction_implementation_fingerprint
+    from .first_pass_java_source import compose_first_pass_java
+    from .host_prerequisite_api import read_prerequisite_apis
 
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
         raise HostJavaConstructionError("JAVA_HOST_FABRIC_REQUIRED")
@@ -93,7 +98,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 owner=owner, router=router,
                 feature_entrypoint=bool(spec.get("bindings", {}).get(
                     "request_feature_entrypoint"))),
-            "materialized_project_source": _read_materialized_context(
+            "materialized_prerequisite_api": read_prerequisite_apis(
                 context, target_path=spec["target_path"],
                 source_context=source_context),
         }
@@ -124,7 +129,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     package=package, name=name, behaviors=behavior_rows,
                 )
                 if source is None:
-                    from .host_verified_entity_registry import verified_entity_registry_source
+                    from .host_verified_entity_registry import (
+                        verified_entity_registry_source,
+                    )
                     source = verified_entity_registry_source(
                         effective_spec, contract, prompt["inspected_target_api"],
                         context.get("symbols") or {},
@@ -166,6 +173,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         target_path=spec["target_path"],
                         symbols=dict(context.get("symbols") or {}), owner=owner,
                         api_evidence=prompt["inspected_target_api"],
+                        prerequisite_api=prompt["materialized_prerequisite_api"],
                         attempt=attempt + 1,
                     )
                 else:

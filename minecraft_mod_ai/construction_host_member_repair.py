@@ -201,7 +201,8 @@ def _host_declared_neighbor_signatures(source: str, *, selected_name: str) -> li
 
 def repair_compiler_member(router, source: str, diagnostic: str, *,
                            filename: str, target_path: str, symbols: dict,
-                           owner: str, api_evidence: dict, attempt: int) -> str:
+                           owner: str, api_evidence: dict, attempt: int,
+                           prerequisite_api=()) -> str:
     from .host_java_imports import host_add_verified_imports
 
     checked_constructor = _javac_constructor_repair(
@@ -236,6 +237,7 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
             "host_declared_neighbor_signatures": _host_declared_neighbor_signatures(
                 source, selected_name=original.split("{", 1)[0].strip()),
             "inspected_api": api_evidence,
+            "materialized_prerequisite_api": list(prerequisite_api),
         }, ensure_ascii=False, default=str),
     }]
     fingerprint = hashlib.sha256(
