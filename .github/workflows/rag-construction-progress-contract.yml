@@ -17,6 +17,7 @@ on:
       - 'minecraft_mod_ai/integrity_dispatcher.py'
       - 'minecraft_mod_ai/host_verified_entity_type.py'
       - 'minecraft_mod_ai/host_verified_entity_registry.py'
+      - 'minecraft_mod_ai/host_fabric_initializer_wiring.py'
       - 'minecraft_mod_ai/construction_host_member_repair.py'
       - 'minecraft_mod_ai/host_java_imports.py'
       - 'minecraft_mod_ai/first_pass_java_source.py'
@@ -46,6 +47,7 @@ on:
       - 'tests/test_production_checkpoint_fingerprint.py'
       - 'tests/test_host_verified_entity_type.py'
       - 'tests/test_host_verified_entity_registry.py'
+      - 'tests/test_host_fabric_initializer_wiring.py'
       - 'tests/test_javac_generated_dependency_proof.py'
       - 'tests/test_construction_host_member_repair.py'
       - 'tests/test_construction_java_member_journal.py'
@@ -94,6 +96,7 @@ jobs:
             minecraft_mod_ai/integrity_dispatcher.py \
             minecraft_mod_ai/host_verified_entity_type.py \
             minecraft_mod_ai/host_verified_entity_registry.py \
+            minecraft_mod_ai/host_fabric_initializer_wiring.py \
             minecraft_mod_ai/construction_host_member_repair.py \
             minecraft_mod_ai/host_java_imports.py \
             minecraft_mod_ai/first_pass_java_source.py \
@@ -122,6 +125,7 @@ jobs:
             tests/test_production_checkpoint_fingerprint.py \
             tests/test_host_verified_entity_type.py \
             tests/test_host_verified_entity_registry.py \
+            tests/test_host_fabric_initializer_wiring.py \
             tests/test_javac_generated_dependency_proof.py \
             tests/test_construction_host_member_repair.py \
             tests/test_construction_java_member_journal.py \
