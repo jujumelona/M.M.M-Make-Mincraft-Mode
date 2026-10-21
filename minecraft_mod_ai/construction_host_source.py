@@ -203,6 +203,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         api_evidence=prompt["inspected_target_api"],
                         prerequisite_api=prompt["materialized_prerequisite_api"],
                         state_access=state_access,
+                        behaviors=behavior_rows,
+                        runtime_state_bindings=json.loads(spec.get("bindings", {}).get(
+                            "runtime_state_bindings_json") or "{}"),
                         attempt=attempt + 1,
                     )
                 else:

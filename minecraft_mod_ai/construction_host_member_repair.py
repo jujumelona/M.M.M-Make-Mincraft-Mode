@@ -202,7 +202,8 @@ def _host_declared_neighbor_signatures(source: str, *, selected_name: str) -> li
 def repair_compiler_member(router, source: str, diagnostic: str, *,
                            filename: str, target_path: str, symbols: dict,
                            owner: str, api_evidence: dict, attempt: int,
-                           prerequisite_api=(), state_access=()) -> str:
+                           prerequisite_api=(), state_access=(), behaviors=(),
+                           runtime_state_bindings=()) -> str:
     from .host_java_imports import host_add_verified_imports
 
     checked_constructor = _javac_constructor_repair(
@@ -217,6 +218,21 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
         frame["host_state_access"] = list(state_access)
     focused_diagnostic = _first_compiler_error(
         diagnostic, filename=filename)
+    from .host_callback_repair import repair_callback_body
+    callback_repair = repair_callback_body(
+        router, raw=raw, node=node, original=original, frame=frame,
+        diagnostic=focused_diagnostic, target_path=target_path, symbols=symbols,
+        behaviors=behaviors, api_evidence=api_evidence,
+        prerequisite_api=prerequisite_api, attempt=attempt,
+        neighbor_signatures=_host_declared_neighbor_signatures(
+            source, selected_name=original.split("{", 1)[0].strip()),
+        runtime_state_bindings=runtime_state_bindings,
+    )
+    if callback_repair is not None:
+        updated = (raw[:node.start_byte] + callback_repair.encode("utf-8")
+                   + raw[node.end_byte:]).decode("utf-8")
+        return host_add_verified_imports(
+            updated, symbols=symbols, owner=owner, target_path=target_path)
     messages = [{
         "role": "system",
         "content": (
