@@ -66,6 +66,53 @@ def state_access_contract(prerequisite_api) -> list[dict]:
     return contracts
 
 
+
+def state_work_order_scope(work_order, contracts):
+    """Expose planning-to-Java state coverage without inventing new storage.
+
+    A feature work order can name logical state that is not declared in the
+    immutable state model. Those names are NOT callable Java accessors. The
+    coder must use verified world/event state when appropriate, or the work
+    order must be revised upstream; it may never write into an unrelated key.
+    This is provenance, not an inferred state-variable type or default.
+    """
+    import re
+
+    read_names, write_names = set(), set()
+    for row in contracts:
+        for method in row.get("methods", ()):
+            name = method.get("name", "") if isinstance(method, dict) else ""
+            if name.startswith("readState_"):
+                read_names.add(name[len("readState_"):])
+            elif name.startswith("writeState_"):
+                write_names.add(name[len("writeState_"):])
+    plan = work_order if isinstance(work_order, dict) else {}
+    identifier = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+    referenced = {
+        kind: sorted({name for raw in plan.get(kind, ())
+                      if isinstance(raw, str)
+                      and (name := raw.strip())
+                      and identifier.fullmatch(name)})
+        for kind in ("state_reads", "state_writes")
+    }
+    return {
+        "declared_readable": sorted(read_names),
+        "declared_writable": sorted(write_names),
+        "undeclared_plan_reads": [
+            name for name in referenced["state_reads"] if name not in read_names
+        ],
+        "undeclared_plan_writes": [
+            name for name in referenced["state_writes"] if name not in write_names
+        ],
+        "contract": (
+            "Only declared accessors are callable. An undeclared work-order "
+            "state name is not an invitation to invent an accessor or "
+            "overwrite a different state key. Resolve persistent state "
+            "through the canonical state model; use checked event/world "
+            "inputs when behavior explicitly permits it."
+        ),
+    }
+
 def state_prompt_api(prerequisite_api, evidence, contracts):
     """Expose the coder's state ABI, keeping the raw bridge internal to the host.
 
