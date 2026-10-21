@@ -101,6 +101,18 @@ def test_replayed_unproven_alias_is_rejected():
         }, [variable()])
 
 
+def test_serialized_plan_cannot_bypass_alias_validation_on_fast_return():
+    original = plan(reads=["credits"], writes=["credits"])
+    original.request_scope["behavior_state_bindings"] = {
+        "Wallet": {
+            "original_name": "Wallet", "binding": "canonical_state",
+            "state_name": "credits",
+        },
+    }
+    with pytest.raises(ValueError, match="CANONICAL_MEANING_UNPROVEN"):
+        reconcile_behavior_state(BindingRouter(), original)
+
+
 def test_declared_state_keeps_exact_type_default_without_inference():
     original = plan(reads=["credits"], writes=["credits"], variables=[variable(default="12")])
     assert reconcile_behavior_state(BindingRouter(), original).to_dict() == original.to_dict()

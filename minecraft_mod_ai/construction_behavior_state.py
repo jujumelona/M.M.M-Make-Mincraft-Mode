@@ -167,6 +167,13 @@ def reconcile_behavior_state(router, plan):
     variables = deepcopy(specification.get("variables", []))
     original_variables = deepcopy(variables)
     validate_structured_state_section(specification)
+    # Old serialized plans can already contain a wrongly chosen canonical alias.
+    # Audit it BEFORE the no-unresolved-references fast return.
+    prior_bindings = scope.get("behavior_state_bindings", {})
+    if not isinstance(prior_bindings, dict):
+        raise ValueError("BEHAVIOR_STATE_SAVED_BINDINGS_INVALID")
+    for reference, prior in prior_bindings.items():
+        _validate_replayed_binding(reference, prior, variables)
     known = {row["name"] for row in variables}
     uses = {}
     for behavior in behaviors:
