@@ -138,3 +138,51 @@ def test_new_state_cannot_encode_an_aggregate_in_a_scalar_default():
     decisions[4] = {"default": '{"hidden":"collection"}'}
     with pytest.raises(Exception, match="default|pattern"):
         reconcile_behavior_state(BindingRouter(decisions), plan(writes=["charge"]))
+
+
+
+def test_reject_control_plane_label_as_new_scalar_owner():
+    router = BindingRouter([
+        {"binding": "new_scalar_state"},
+        {"owner": "new_scalar_state"},
+        {"owner": "world_state"},
+        {"owner": "canonical_state"},
+    ])
+    with pytest.raises(ValueError, match="BEHAVIOR_STATE_OWNER_CONTROL_LABEL"):
+        reconcile_behavior_state(router, plan(writes=["charge"]))
+    assert len(router.calls) == 4
+
+
+def test_bad_owner_repaired_without_changing_state_concept():
+    router = BindingRouter([
+        {"binding": "new_scalar_state"},
+        {"owner": "new_scalar_state"},
+        {"owner": "player"},
+        {"type": "int"}, {"unit": "charge"}, {"default": "0"},
+        {"domain": "charge"},
+    ])
+    result = reconcile_behavior_state(router, plan(writes=["charge"]))
+    variable_row = result.structured_sections["state_model"]["specification"]["variables"][-1]
+    assert variable_row["owner"] == "player"
+    assert variable_row["name"] == "charge"
+    assert result.request_scope["behavior_requirements"][0]["state_writes"] == ["charge"]
+
+
+def test_saved_control_plane_owner_cannot_be_reused():
+    from minecraft_mod_ai.construction_behavior_state import _validate_replayed_binding
+    with pytest.raises(ValueError, match="BEHAVIOR_STATE_OWNER_CONTROL_LABEL"):
+        _validate_replayed_binding("charge", {
+            "original_name": "charge", "binding": "new_scalar_state",
+            "state_name": "charge",
+            "variable": {"name": "charge", "owner": "world_state"},
+        }, [variable()])
+
+
+def test_final_state_validation_uses_inner_specification_not_wrapper():
+    from minecraft_mod_ai.authored_structured_design import normalize_structured_sections
+    section = {"state_model": {"specification": {
+        "variables": [{**variable(name="capacity", kind="int"),
+                       "default": "not_a_number"}],
+    }}}
+    with pytest.raises(ValueError, match="STRUCTURED_STATE_VARIABLE_DEFAULT"):
+        normalize_structured_sections(section)
