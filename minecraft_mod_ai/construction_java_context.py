@@ -19,6 +19,7 @@ _CURRENT_MEMBER_FIELDS = (
     "current_unit_purpose", "assigned_behavior", "assigned_behaviors",
     "class_declaration", "owner_type", "owner", "declaration_metadata",
     "host_signature", "declared_member_api", "callback_input_api",
+    "host_state_work_order_scope",
     "prerequisite_source", "repair_current_declaration", "repair_only_this_method",
     "diagnostic", "error", "previous_implementation", "previous_candidate",
     "previous_source", "correction_obligation",
