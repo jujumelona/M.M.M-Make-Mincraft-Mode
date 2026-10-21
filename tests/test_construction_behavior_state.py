@@ -74,14 +74,31 @@ def test_world_observation_does_not_become_fake_persistent_scalar():
     assert restored[0].runtime_state_writes == ("build_area_contents",)
 
 
-def test_alias_is_an_explicit_choice_from_canonical_inventory():
-    router = BindingRouter([{"binding": "canonical_state"}, {"state_name": "credits"}])
-    result = reconcile_behavior_state(router, plan(reads=["wallet"], writes=["wallet"]))
+def test_identifier_equivalent_alias_is_bound_by_host_without_model():
+    router = BindingRouter()
+    result = reconcile_behavior_state(router, plan(reads=["Credits"], writes=["Credits"]))
     assert result.request_scope["behavior_requirements"][0]["state_reads"] == ["credits"]
-    assert router.calls[1][1]["properties"]["state_name"]["enum"] == ["credits"]
-    binding = result.request_scope["behavior_state_bindings"]["wallet"]
+    assert router.calls == []
+    binding = result.request_scope["behavior_state_bindings"]["Credits"]
     assert binding["state_name"] == "credits"
-    assert binding["original_name"] == "wallet"
+    assert binding["semantic_status"] == "host_verified_identifier_match"
+
+
+def test_unrelated_reference_cannot_select_existing_canonical_state():
+    router = BindingRouter([{"binding": "canonical_state"}])
+    with pytest.raises(Exception):
+        reconcile_behavior_state(router, plan(reads=["wallet"]))
+    assert router.calls[0][1]["properties"]["binding"]["enum"] == [
+        "new_scalar_state", "world_state",
+    ]
+
+
+def test_replayed_unproven_alias_is_rejected():
+    from minecraft_mod_ai.construction_behavior_state import _validate_replayed_binding
+    with pytest.raises(ValueError, match="CANONICAL_MEANING_UNPROVEN"):
+        _validate_replayed_binding("Wallet", {
+            "original_name": "Wallet", "binding": "canonical_state", "state_name": "credits",
+        }, [variable()])
 
 
 def test_declared_state_keeps_exact_type_default_without_inference():

@@ -172,14 +172,25 @@ def test_rebinding_cannot_fill_missing_required_migrations():
         _lower(reconcile_behavior_state(_Router(), original))
 
 
-@pytest.mark.parametrize("binding", [
-    {"binding": "canonical_state", "state_name": "credits"},
-    {"binding": "world_state", "observation": "live entity energy"},
-])
-def test_alias_and_world_binding_preserve_existing_storage_contract(binding):
+def test_world_binding_preserves_existing_storage_contract():
     original = _persistent_plan()
-    result = reconcile_behavior_state(_Router({"charge": binding}), original)
+    result = reconcile_behavior_state(_Router({"charge": {
+        "binding": "world_state", "observation": "live entity energy",
+    }}), original)
     assert result.typed_plan_ir == original.typed_plan_ir
+    _lower(result)
+
+
+def test_host_identifier_alias_preserves_existing_storage_contract():
+    original = _persistent_plan(behaviors=[{
+        "behavior_id": "b1", "requirement_id": "r1", "intent": "Adjust credits",
+        "trigger": "interaction", "effects": "Update credits",
+        "source_quote": "Update credits",
+        "state_reads": ["Player credits"], "state_writes": ["Player credits"],
+    }])
+    result = reconcile_behavior_state(_Router({"unused": {}}), original)
+    assert result.typed_plan_ir == original.typed_plan_ir
+    assert result.request_scope["behavior_requirements"][0]["state_reads"] == ["credits"]
     _lower(result)
 
 
@@ -194,13 +205,11 @@ def test_state_store_rebinding_survives_checkpoint_and_saved_plan_restore(tmp_pa
     assert _lower(cached).config == _lower(repeated).config
 
 
-def test_captured_67_reference_state_binding_reaches_production_lowering():
+def test_captured_67_reference_replay_rejects_false_canonical_aliases():
     fixture = json.loads((Path(__file__).parent / "fixtures/behavior-state-bindings-67.json").read_text())
     original = _persistent_plan(variables=fixture["variables"], behaviors=fixture["behaviors"])
-    result = reconcile_behavior_state(_Router(fixture["answers"]), original)
-    module = _lower(result)
-    bindings = result.request_scope["behavior_state_bindings"]
-    assert len(bindings) == 67
-    assert sum(row["binding"] == "world_state" for row in bindings.values()) == 7
-    assert len(module.config["typed_plan_state_section"]["specification"]["variables"]) == 2
-    assert module.config["typed_state_store"]["schema_version"] != original.typed_plan_ir["platform_modules"][0]["config"]["schema_version"]
+    assert fixture["answers"]["Player health"] == {
+        "binding": "canonical_state", "state_name": "player_credits",
+    }
+    with pytest.raises(Exception):
+        reconcile_behavior_state(_Router(fixture["answers"]), original)

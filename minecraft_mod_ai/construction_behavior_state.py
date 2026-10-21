@@ -28,16 +28,55 @@ from .typed_host_generation_contract import (
 from .typed_platform_ir import validate_platform_modules
 
 
+def _identifier_parts(value):
+    """Compare identifier spellings; never infer two gameplay concepts are synonyms."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
+    return tuple(re.findall(r"[^\W_]+", spaced.casefold()))
+
+
+def _canonical_targets(reference, variables):
+    parts = _identifier_parts(reference)
+    if not parts:
+        return ()
+    matches = set()
+    for row in variables:
+        name = _identifier_parts(row["name"])
+        owner = _identifier_parts(row.get("owner", ""))
+        if parts == name or (owner and parts == owner + name):
+            matches.add(row["name"])
+    return tuple(sorted(matches))
+
+
+def _validate_replayed_binding(reference, binding, variables):
+    """Revalidate saved LLM choices against the current state authority."""
+    if not isinstance(binding, dict) or binding.get("original_name") != reference:
+        raise ValueError("BEHAVIOR_STATE_BINDING_SOURCE_MISMATCH")
+    kind = binding.get("binding")
+    if kind == "canonical_state":
+        targets = _canonical_targets(reference, variables)
+        if len(targets) != 1 or binding.get("state_name") != targets[0]:
+            raise ValueError("BEHAVIOR_STATE_CANONICAL_MEANING_UNPROVEN: " + reference)
+    elif kind == "world_state":
+        observation = binding.get("observation")
+        if not isinstance(observation, str) or not observation.strip():
+            raise ValueError("BEHAVIOR_STATE_WORLD_OBSERVATION_REQUIRED: " + reference)
+    elif kind == "new_scalar_state":
+        row = binding.get("variable")
+        if not isinstance(row, dict) or row.get("name") != binding.get("state_name"):
+            raise ValueError("BEHAVIOR_STATE_NEW_SCALAR_INVALID: " + reference)
+    else:
+        raise ValueError("BEHAVIOR_STATE_BINDING_KIND_INVALID: " + reference)
+
+
 def _choose(router, field, schema, context):
     page = {"type": "object", "properties": {field: schema},
             "required": [field], "additionalProperties": False}
     response = router.generate_structured_data(
         "planner", [{"role": "system", "content": (
             "Resolve ONE behavior state reference before the host compiles Java. "
-            "canonical_state explicitly binds it to the SAME concept in an existing "
-            "canonical scalar; never substitute another concept just because its type "
-            "fits. new_scalar_state declares a genuinely missing scalar owned by the "
-            "host. world_state keeps actual event/world/entity/inventory/block/UI "
+            "The host resolves existing canonical identifiers deterministically, not "
+            "by guessing synonyms. new_scalar_state declares a genuinely missing scalar "
+            "owned by the host. world_state keeps event/world/entity/inventory/block/UI "
             "observations and mutations in their existing runtime owner. Do not create "
             "a duplicate scalar for world objects or encode collections as strings. "
             "Preserve every original read/write obligation. Author only the requested "
@@ -52,16 +91,19 @@ def _choose(router, field, schema, context):
 def _binding(router, name, uses, variables):
     context = {"original_state_reference": name, "required_uses": uses,
                "canonical_variables": variables}
-    choices = ["new_scalar_state", "world_state"]
-    if variables:
-        choices.insert(0, "canonical_state")
-    kind = _choose(router, "binding", {"type": "string", "enum": choices}, context)
+    targets = _canonical_targets(name, variables)
+    if len(targets) > 1:
+        raise ValueError("BEHAVIOR_STATE_CANONICAL_IDENTIFIER_AMBIGUOUS: " + name)
+    if targets:
+        # No model-selected aliases between unrelated canonical scalars.
+        return {"original_name": name, "binding": "canonical_state",
+                "state_name": targets[0],
+                "semantic_status": "host_verified_identifier_match"}
+    kind = _choose(router, "binding", {
+        "type": "string", "enum": ["new_scalar_state", "world_state"]}, context)
     result = {"original_name": name, "binding": kind,
               "semantic_status": "model_authored_unverified"}
-    if kind == "canonical_state":
-        result["state_name"] = _choose(router, "state_name", {
-            "type": "string", "enum": sorted(row["name"] for row in variables)}, context)
-    elif kind == "world_state":
+    if kind == "world_state":
         result["observation"] = _choose(router, "observation", {
             "type": "string", "minLength": 1, "maxLength": 320}, context)
     else:
@@ -143,7 +185,7 @@ def reconcile_behavior_state(router, plan):
 
     from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
     checkpoint = BehaviorPlanningCheckpoint(scope, router)
-    identity = _digest({"schema": "mmm/behavior-state-bindings-v1",
+    identity = _digest({"schema": "mmm/behavior-state-bindings-v2",
                         "variables": variables, "behaviors": behaviors})
     path = (checkpoint.root / "state-bindings" / (identity + ".json")
             if checkpoint.enabled else None)
@@ -159,8 +201,7 @@ def reconcile_behavior_state(router, plan):
                     _save_checkpoint(path, identity, {
                         key: json.dumps(value, ensure_ascii=False, sort_keys=True)
                         for key, value in accepted.items()})
-            if binding.get("original_name") != name:
-                raise ValueError("BEHAVIOR_STATE_BINDING_SOURCE_MISMATCH")
+            _validate_replayed_binding(name, binding, variables)
             if binding["binding"] == "new_scalar_state":
                 variables.append(deepcopy(binding["variable"]))
                 validate_structured_state_section({**specification, "variables": variables})
