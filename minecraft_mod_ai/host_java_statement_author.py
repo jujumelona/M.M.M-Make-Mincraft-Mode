@@ -1,0 +1,169 @@
+"""Host-owned statement AST authoring for Fabric callback implementations.
+
+The small coder never authors a method declaration or compilation unit. It
+chooses one Java statement at a time through a closed native JSON schema. The
+host parses every statement with Tree-sitter, assembles the fixed signature and
+checks typed state access before returning to the existing javac admission.
+This deliberately replaces the free-form JSON 'implementation' blob for
+request-feature callback handlers, not the entire Java toolchain.
+"""
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from .construction_source_repair import validate_generated_java_source
+from .java_region_parser import _parse, _text
+
+
+_STATEMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        # Empty is a terminal marker; source never contains this sentinel.
+        "statement": {"type": "string", "maxLength": 2048},
+    },
+    "required": ["statement"],
+    "additionalProperties": False,
+}
+_MAX_MEMBER_STATEMENTS = 32
+_COMMENT_NODES = frozenset({"line_comment", "block_comment"})
+
+
+def parse_one_java_statement(fragment: str) -> str:
+    """Admit exactly ONE block-level Java statement, never other members.
+
+    This uses the same tree-sitter-java grammar as the production source
+    validator. Neither regex matching nor string suffix trimming can turn
+    a method declaration into an authorized statement.
+    """
+    if not isinstance(fragment, str) or not fragment.strip():
+        raise ValueError("JAVA_STATEMENT_REQUIRED")
+    raw, root = _parse("class MmmStatementFrame { void f() {\n" + fragment + "\n} }")
+    owner = next((n for n in root.named_children if n.type == "class_declaration"), None)
+    class_body = owner.child_by_field_name("body") if owner is not None else None
+    methods = [n for n in class_body.named_children
+               if n.type == "method_declaration"] if class_body is not None else []
+    if len(methods) != 1:
+        raise ValueError("JAVA_STATEMENT_HOST_METHOD_SCOPE")
+    block = methods[0].child_by_field_name("body")
+    statements = [n for n in block.named_children if n.type not in _COMMENT_NODES
+                  ] if block is not None else []
+    if len(statements) != 1:
+        raise ValueError(
+            f"JAVA_STATEMENT_ATOMICITY: expected one statement, got {len(statements)}")
+    statement = statements[0]
+    if statement.type in {
+        "class_declaration", "interface_declaration", "enum_declaration",
+        "record_declaration", "method_declaration",
+    }:
+        raise ValueError("JAVA_STATEMENT_HOST_DECLARATION_OWNED")
+    # The parser's statement starts after the wrapper. Accept whitespace and
+    # source comments without interpreting or mutating user Java expressions.
+    return fragment.strip()
+
+
+def _executable_effect(source: str) -> bool:
+    """Prevent an effects handler from being admitted as an empty return stub."""
+    raw, root = _parse("class MmmEffectFrame { void f() {\n" + source + "\n} }")
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in {
+            "method_invocation", "assignment_expression", "update_expression",
+            "object_creation_expression", "throw_statement",
+        }:
+            return True
+        pending.extend(node.named_children)
+    return False
+
+
+def author_java_callback_statements(
+    router: Any,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    data_name: str,
+    frame: Mapping[str, Any],
+    require_effect: bool,
+) -> str:
+    """Generate a bounded AST statement sequence with a durable journal.
+
+    Every source statement has a separate closed schema and checkpoint. A bad
+    fragment receives ONE grammar-guided correction rather than replaying a
+    complete invalid method with ever more project source.
+    """
+    from .construction_java_context import scoped_java_member_messages
+
+    scoped = scoped_java_member_messages(messages, frame)
+    statements: list[str] = []
+    for index in range(_MAX_MEMBER_STATEMENTS):
+        last_error = ""
+        for correction in range(2):
+            prompt = [
+                *scoped,
+                {"role": "system", "content": (
+                    "You are authoring ONE Java statement inside an EXISTING "
+                    "method, not a class, method, field or import. Return a JSON "
+                    "object with only the key 'statement'. The statement must "
+                    "be a SINGLE complete Java block statement including its "
+                    "semicolon or its matching braces. To finish, return an "
+                    "EMPTY statement, only after every assigned behavioral "
+                    "effect has been implemented. The immutable method signature "
+                    "and event registration are owned by the host. Never output "
+                    "method signatures, imports, nested class declarations or "
+                    "additional independent statements. Do not invent state "
+                    "accessors or replace one state with another."
+                )},
+                {"role": "user", "content": json.dumps({
+                    "immutable_signature": {
+                        "kind": frame.get("kind"), "prefix": frame.get("prefix"),
+                        "suffix": frame.get("suffix"),
+                    },
+                    "already_accepted_statements": statements,
+                    "next_statement_index": index,
+                    "last_error": last_error,
+                    "instruction": ("Correct the rejected statement only."
+                                    if last_error else
+                                    "Write the next atomic statement, or finish."),
+                }, ensure_ascii=False, separators=(",", ":"))},
+            ]
+            response = router.generate_structured_data(
+                "coder", prompt,
+                data_name=f"{data_name}_statement_{index}_try_{correction}",
+                parameters=_STATEMENT_SCHEMA,
+            )
+            candidate = response["statement"]
+            if not candidate.strip():
+                if not statements:
+                    raise ValueError(
+                        "JAVA_CALLBACK_EMPTY_IMPLEMENTATION: no behavior was authored")
+                combined = "\n".join(statements)
+                if require_effect and not _executable_effect(combined):
+                    raise ValueError(
+                        "JAVA_CALLBACK_EFFECT_REQUIRED: return-only or empty "
+                        "implementation does not implement the assigned effect")
+                source = frame["prefix"] + combined + frame["suffix"]
+                return validate_generated_java_source(
+                    source, frame, frame["prefix"], frame["suffix"])
+            try:
+                statement = parse_one_java_statement(candidate)
+                # Reject a raw state accessor mistake before the next generated
+                # statement; never allow it to drift into a different accessor.
+                trial = frame["prefix"] + "\n".join([*statements, statement]) + frame["suffix"]
+                from .host_typed_state_access import validate_host_state_access
+                validate_host_state_access(trial, frame.get("host_state_access", ()))
+            except ValueError as exc:
+                last_error = (f"{type(exc).__name__}: {exc}; "
+                              "one block-level Java statement only")
+                if correction:
+                    raise ValueError("JAVA_CALLBACK_ATOMIC_STATEMENT_INVALID: " + last_error) from exc
+                continue
+            statements.append(statement)
+            break
+    raise ValueError(
+        "JAVA_CALLBACK_STATEMENT_PLAN_TOO_LARGE: decompose the assigned "
+        "behavior into separately declared host members instead of silently "
+        "truncating Java output")
+
+
+__all__ = ["parse_one_java_statement", "author_java_callback_statements"]
