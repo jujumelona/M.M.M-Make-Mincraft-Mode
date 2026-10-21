@@ -71,6 +71,10 @@ def verified_callback_choices(messages, frame, *, predicate=False):
                 continue
             if predicate and (method.get("return_type") != "boolean" or arguments):
                 continue
+            if not predicate and name.startswith(
+                ("get", "is", "has", "can", "should", "read", "peek")
+            ):
+                continue
             if any(not inputs.get(kind) for kind in arguments):
                 continue
             bound_args = [inputs[kind][0] for kind in arguments]
