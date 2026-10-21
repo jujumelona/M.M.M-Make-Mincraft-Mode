@@ -379,49 +379,94 @@ class FileAPIEvidence:
 
 
     def callback_member_records(self, owners, *, intent, predicate=False, limit=28):
-        """Retrieve actionable, actual callback-input methods, not 16 alphabetical names.
+        """Expose verified callback types and a bounded, usable member sample.
 
-        The complete symbol index is inspected locally; only a small relevant
-        signature slice reaches the coder. Neither method names nor their
-        declaring classes come from model text.
+        Lexical relevance ranks members but must never decide whether an ABI
+        class or an actual accessible member exists. A callback can need a
+        getter, field or result constant whose name is absent from free-text
+        gameplay requirements. Read-only queries are valid predicate inputs,
+        even when their result is not boolean (a comparison may follow).
         """
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
         roots = [name for name in roots if self._accessible(name)]
         words = set(re.findall(r"[a-z]{3,}", re.sub(
             r"(?<=[a-z0-9])(?=[A-Z])", " ", str(intent)).lower()))
-        pool = []
-        for name in roots:
-            for key, row in self._member_options(name):
-                if row.get("kind") != "METHOD" or row.get("static"):
+        by_root = {}
+        selected = {root: [] for root in roots}
+        query_prefixes = ("get", "is", "has", "can", "should", "read", "peek")
+        options_by_root = {}
+
+        for root in roots:
+            options = self._member_options(root)
+            options_by_root[root] = options
+            candidates = []
+            for key, row in options:
+                kind = row.get("kind")
+                member_name = str(row.get("name") or "")
+                if kind == "METHOD":
+                    # A non-static callback input is the only receiver the
+                    # generated method can bind without inventing arguments.
+                    if row.get("static") or int(row.get("access") or 0) & 8:
+                        continue
+                    parameters = parameter_types(row)
+                    if len(parameters) > 3 or any(
+                        canonical_type_name(type_) not in roots for type_ in parameters
+                    ):
+                        continue
+                    if predicate:
+                        if not (member_name.startswith(query_prefixes) or
+                                row.get("return_type") in ("boolean", "java.lang.Boolean")):
+                            continue
+                    elif member_name.startswith(query_prefixes):
+                        continue
+                elif kind == "FIELD":
+                    # A public verified field or result constant may be needed
+                    # for a predicate comparison or callback result branch.
+                    parameters = []
+                else:
                     continue
-                parameters = parameter_types(row)
-                if len(parameters) > 3 or any(
-                    canonical_type_name(kind) not in roots for kind in parameters
-                ):
-                    # The host can only bind arguments backed by this callback's
-                    # declared inputs. A visible method with impossible operands
-                    # is not an executable candidate.
+                member_words = set(re.findall(r"[a-z]{3,}", re.sub(
+                    r"(?<=[a-z0-9])(?=[A-Z])", " ", member_name).lower()))
+                relevance = len(member_words & words)
+                candidates.append((-relevance, kind != "METHOD",
+                                   len(parameters), member_name, str(key), key, row))
+            candidates.sort(key=lambda item: item[:5])
+            by_root[root] = candidates
+
+        # Prioritize text matches, then preserve a small lexical-independent
+        # fallback from EVERY callback input/return type. Returning [] because
+        # a verified method does not share prompt words is an API visibility bug.
+        budget = max(0, limit)
+        used = set()
+        matched = sorted((item, root) for root in roots for item in by_root[root]
+                         if item[0] < 0)
+        for item, root in matched:
+            if budget <= 0:
+                break
+            key = (root, item[5])
+            if key in used:
+                continue
+            selected[root].append((item[5], item[6]))
+            used.add(key)
+            budget -= 1
+
+        # Four non-matching members per type at most: bounded payloads for the
+        # small coder, while retaining getters and inspected result constants.
+        for slot in range(4):
+            for root in roots:
+                if budget <= 0:
+                    break
+                remaining = [item for item in by_root[root]
+                             if (root, item[5]) not in used]
+                if slot >= len(remaining):
                     continue
-                if predicate and (row.get("return_type") != "boolean" or parameters):
-                    continue
-                if not predicate and str(row.get("name") or "").startswith(
-                    ("get", "is", "has", "can", "should", "read", "peek")
-                ):
-                    # Query methods are observations, not evidence of effects.
-                    continue
-                method_words = set(re.findall(r"[a-z]{3,}", re.sub(
-                    r"(?<=[a-z0-9])(?=[A-Z])", " ", str(row.get("name") or "")).lower()))
-                overlap = len(method_words & words)
-                if not overlap:
-                    continue
-                pool.append((-overlap, len(parameters), name, str(row.get("name")), key, row))
-        pool.sort(key=lambda item: item[:5])
-        chosen = pool[:limit]
-        by_root = defaultdict(list)
-        for _score, _arity, root, _method, key, row in chosen:
-            by_root[root].append((key, row))
+                item = remaining[slot]
+                selected[root].append((item[5], item[6]))
+                used.add((root, item[5]))
+                budget -= 1
+
         return [
             self._class_record(root, self.symbols[self.classes[root]],
-                               self._member_options(root), by_root[root])
-            for root in roots if by_root[root]
+                               options_by_root[root], selected[root])
+            for root in roots
         ]
