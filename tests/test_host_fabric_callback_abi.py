@@ -53,21 +53,26 @@ class EventRouter:
     def generate_structured_data(self, role, messages, *, data_name, parameters):
         self.calls.append(data_name)
         assert role == "coder"
-        assert data_name == "select_verified_fabric_event"
-        assert set(parameters["properties"]["event_binding"]["enum"]) == {
-            "UNBOUND", OWNER + "#EVENT",
-        }
-        return {"event_binding": "UNBOUND" if self.selected == "UNBOUND" else self.selected + "#EVENT"}
-    def generate_java_source(self, role, messages, *, data_name, source_frame):
-        self.source_tasks.append(json.loads(messages[-1]["content"]))
-        assert role == "coder"
-        assert data_name == "submit_java_implementation_1"
-        assert "registerBehavior" not in source_frame["prefix"]
-        assert "Player player" in source_frame["prefix"]
-        assert "Level level" in source_frame["prefix"]
-        return (source_frame["prefix"]
-                + "return net.minecraft.world.InteractionResult.PASS;"
-                + source_frame["suffix"])
+        if data_name == "select_verified_fabric_event":
+            assert set(parameters["properties"]["event_binding"]["enum"]) == {
+                "UNBOUND", OWNER + "#EVENT",
+            }
+            return {"event_binding": "UNBOUND" if self.selected == "UNBOUND"
+                    else self.selected + "#EVENT"}
+        assert data_name.startswith("submit_java_implementation_1_statement_")
+        assert set(parameters["properties"]) == {"statement"}
+        index = int(data_name.split("_statement_")[1].split("_")[0])
+        member = json.loads(messages[1]["content"])
+        if index == 0:
+            self.source_tasks.append(member)
+            assert "Player player" in member["immutable_signature"]["prefix"]
+            assert "Level level" in member["immutable_signature"]["prefix"]
+        statements = [
+            "System.out.println(player);",
+            "return net.minecraft.world.InteractionResult.PASS;",
+            "",
+        ]
+        return {"statement": statements[index]}
 
 
 def test_actual_interface_field_and_sam_are_required():
@@ -92,7 +97,12 @@ def test_host_registers_callback_with_method_reference_and_exact_abi():
     assert "Player player" in source
     assert source.count("void onInitialize()") == 1
     assert len(router.source_tasks) == 1
-    assert router.calls == ["select_verified_fabric_event"]
+    assert router.calls == [
+        "select_verified_fabric_event",
+        "submit_java_implementation_1_statement_0_try_0",
+        "submit_java_implementation_1_statement_1_try_0",
+        "submit_java_implementation_1_statement_2_try_0",
+    ]
     assert router.source_tasks[0]["verified_event_callback"]["event_interface"] == OWNER
 
 
