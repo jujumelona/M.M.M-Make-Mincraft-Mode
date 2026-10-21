@@ -219,8 +219,16 @@ class RuleAuthor:
                             except ValueError:
                                 continue
                             valid.append(row["id"])
-                        refs.append(self.ref("Right operand of " + operator,
-                                             candidates=valid, depth=depth))
+                        # A first-time binary expression can require a new
+                        # literal or verified call even if no old RHS is usable.
+                        if valid:
+                            right = self.ref("Right operand of " + operator,
+                                             candidates=valid, depth=depth)
+                        else:
+                            right = self.value("Build right operand of " + operator,
+                                               expected=self.p.kind(left),
+                                               depth=depth + 1)
+                        refs.append(right)
                     self.p.value(op, refs, operator=operator, purpose=operator + " on " + ", ".join(refs))
                 elif op == "ternary":
                     condition = self.ref("Selection condition", expected="boolean", depth=depth)
