@@ -199,3 +199,57 @@ def test_behavior_state_provenance_accepts_matching_owner():
         frame=frame, require_effect=True,
     )
     assert "writeState_spacecraft_sections" in result
+
+
+def test_production_replay_32_identical_pass_returns_is_stopped_at_second_call():
+    """2026-10-21 log: 32 independent model outputs were the same PASS return.
+
+    The host must reject an effect-free early return and must never persist
+    32 valid-but-useless statements in an effects handler.
+    """
+    frame = {
+        "kind": "method",
+        "prefix": "private net.minecraft.world.InteractionResult handleBehavior("
+                  "net.minecraft.world.entity.player.Player player) {\n",
+        "suffix": "\n}",
+        "host_behavior_contract": {
+            "behavior_id": "any_behavior",
+            "intent": "Perform a concrete world mutation",
+            "effects": "Perform its assigned effect",
+        },
+    }
+    router = FakeStatementRouter([
+        "return net.minecraft.world.InteractionResult.PASS;",
+        "return net.minecraft.world.InteractionResult.PASS;",
+    ])
+    with pytest.raises(ValueError, match="JAVA_CALLBACK_ATOMIC_STATEMENT_INVALID") as error:
+        author_java_callback_statements(
+            router, _messages(), data_name="production_pass_loop",
+            frame=frame, require_effect=True,
+        )
+    assert "JAVA_CALLBACK_RETURN_BEFORE_EFFECT" in str(error.value)
+    assert len(router.calls) == 2
+
+
+def test_host_finishes_predicate_on_single_top_level_return():
+    router = FakeStatementRouter(["return 1;"])
+    actual = author_java_callback_statements(
+        router, _messages(), data_name="predicate_once",
+        frame=_FRAME, require_effect=False,
+    )
+    assert actual.endswith("return 1;" + _FRAME["suffix"])
+    assert len(router.calls) == 1
+
+
+def test_conditional_guard_return_does_not_terminate_effect_authoring():
+    router = FakeStatementRouter([
+        "if (entity == null) { return 0; }",
+        "System.out.println(entity);",
+        "return 1;",
+    ])
+    result = author_java_callback_statements(
+        router, _messages(), data_name="early_guard",
+        frame=_FRAME, require_effect=True,
+    )
+    assert "return 1;" in result
+    assert len(router.calls) == 3
