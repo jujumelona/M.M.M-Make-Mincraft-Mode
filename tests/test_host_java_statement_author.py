@@ -141,3 +141,61 @@ def test_missing_typed_state_accessor_is_rejected_before_next_statement():
             router, _messages(), data_name="unknown_state",
             frame=frame, require_effect=True,
         )
+
+
+def test_behavior_state_provenance_rejects_compiler_valid_wrong_state_mutation():
+    # Production spacecraft handler changed credits instead of spacecraft
+    # section state. This was syntactically valid and could compile.
+    frame = {
+        **_FRAME,
+        "host_state_access": [{
+            "owner": "proof.AuthoredStateModel",
+            "methods": [
+                {"name": "writeState_player_credits",
+                 "signature": "public static void writeState_player_credits(String value);"},
+                {"name": "writeState_spacecraft_sections",
+                 "signature": "public static void writeState_spacecraft_sections(String value);"},
+            ],
+        }],
+        "host_behavior_contract": {
+            "behavior_id": "spacecraft_placement",
+            "state_reads": ["selected_section", "spacecraft_sections"],
+            "state_writes": ["spacecraft_sections", "build_area_contents"],
+        },
+    }
+    router = FakeStatementRouter([
+        'proof.AuthoredStateModel.writeState_player_credits("section");',
+        'proof.AuthoredStateModel.writeState_player_credits("section");',
+    ])
+    with pytest.raises(ValueError, match="JAVA_CALLBACK_ATOMIC_STATEMENT_INVALID"):
+        author_java_callback_statements(
+            router, _messages(), data_name="wrong_state_replay",
+            frame=frame, require_effect=True,
+        )
+
+
+def test_behavior_state_provenance_accepts_matching_owner():
+    frame = {
+        **_FRAME,
+        "host_state_access": [{
+            "owner": "proof.AuthoredStateModel",
+            "methods": [
+                {"name": "writeState_spacecraft_sections",
+                 "signature": "public static void writeState_spacecraft_sections(String value);"},
+            ],
+        }],
+        "host_behavior_contract": {
+            "behavior_id": "spacecraft_placement",
+            "state_reads": ["spacecraft_sections"],
+            "state_writes": ["spacecraft_sections"],
+        },
+    }
+    router = FakeStatementRouter([
+        'proof.AuthoredStateModel.writeState_spacecraft_sections("section");',
+        "return 1;", "",
+    ])
+    result = author_java_callback_statements(
+        router, _messages(), data_name="verified_state",
+        frame=frame, require_effect=True,
+    )
+    assert "writeState_spacecraft_sections" in result
