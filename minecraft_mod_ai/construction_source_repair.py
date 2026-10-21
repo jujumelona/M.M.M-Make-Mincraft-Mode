@@ -11,14 +11,25 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
 
     try:
         value = json.loads(response)
-        if (not isinstance(value, dict) or set(value) != {"implementation"}
-                or not isinstance(value["implementation"], str)):
-            raise ValueError("expected exactly one implementation string")
-    except (ValueError, TypeError) as cause:
+    except json.JSONDecodeError as cause:
+        # Open-source json-repair handles *transport syntax* only. Do not use it
+        # when the envelope was valid JSON but the Java string is invalid:
+        # changing Java expressions silently would corrupt feature semantics.
+        try:
+            from json_repair import loads as repair_json_loads
+            value = repair_json_loads(response, skip_json_loads=True)
+        except (ValueError, TypeError, ImportError) as repair_error:
+            error = ModelConfigurationError(
+                "CONSTRUCTION_SOURCE_IMPLEMENTATION_INVALID: " + str(repair_error))
+            error.failed_response = response
+            raise error from cause
+    if (not isinstance(value, dict) or set(value) != {"implementation"}
+            or not isinstance(value["implementation"], str)):
         error = ModelConfigurationError(
-            "CONSTRUCTION_SOURCE_IMPLEMENTATION_INVALID: " + str(cause))
+            "CONSTRUCTION_SOURCE_IMPLEMENTATION_INVALID: expected exactly one "
+            "implementation string")
         error.failed_response = response
-        raise error from cause
+        raise error
     body = value["implementation"]
     source = (frame["empty_value"] if frame.get("kind") == "field"
               and body == "" and "empty_value" in frame
