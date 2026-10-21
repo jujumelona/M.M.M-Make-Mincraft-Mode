@@ -700,6 +700,10 @@ def compose_first_pass_java(
             "host_signature": declaration_header(kind, name, parts),
             "response_source_frame": frame,
             "declared_member_api": signature_index,
+            "host_state_work_order_scope": (
+                (construction_context or {}).get("host_state_work_order_scope")
+                if host_mode else None
+            ),
             # Source already generated for a different member is context, not
             # an invitation to generate another complete compilation unit.
             "previous_complete_members": finished[-3:],
@@ -742,6 +746,10 @@ def compose_first_pass_java(
                 "side, current_unit_purpose and actual prerequisite/member APIs. "
                 "For shared state use only host_state_access typed readState_/writeState_ "
                 "methods; the host owns state keys, value casts and context signatures. "
+                "An undeclared work-order state is NOT a Java accessor: use only "
+                "verified callback/world inputs when that preserves behavior, never "
+                "substitute an unrelated state field. Persistent state absent from "
+                "the canonical plan must be resolved upstream, not fabricated in Java. "
                 "declared_member_api contains the exact signatures of all helpers, "
                 "including forward references. Implement the requested behavior "
                 "without placeholders or TODOs."
