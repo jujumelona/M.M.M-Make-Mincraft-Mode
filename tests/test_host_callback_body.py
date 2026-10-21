@@ -257,3 +257,40 @@ def test_verified_callback_candidate_requires_real_declared_input_types():
                    "prefix": "private void apply(example.Other other) {\n",
                    "suffix": "\n}"}
     assert verified_callback_choices(_verified_messages(), wrong_frame) == []
+
+
+
+def test_callback_api_retrieval_uses_full_index_not_alphabetical_first_page():
+    from minecraft_mod_ai.construction_file_api_evidence import FileAPIEvidence
+    catalog = FileAPIEvidence.__new__(FileAPIEvidence)
+    catalog.classes = {"example.Target": "example.Target"}
+    catalog.symbols = {"example.Target": {
+        "kind": "CLASS", "name": "Target", "owner": "example.Target", "access": 1,
+    }}
+    catalog._accessible = lambda owner: True
+    options = []
+    for idx in range(80):
+        options.append((str(idx), {
+            "kind": "METHOD", "owner": "example.Target",
+            "name": "arbitrary" + str(idx), "return_type": "void",
+            "static": False, "parameters": [],
+        }))
+    options.append(("open", {
+        "kind": "METHOD", "owner": "example.Target",
+        "name": "openTradingMenu", "return_type": "void",
+        "static": False, "parameters": [],
+    }))
+    options.append(("invalid", {
+        "kind": "METHOD", "owner": "example.Target",
+        "name": "openTradingMenuWithUnknownArgument",
+        "return_type": "void", "static": False,
+        "parameters": ["example.ItemStack"],
+    }))
+    catalog._member_options = lambda owner: options
+    api = catalog.callback_member_records(
+        ["example.Target"], intent="Player opens trading menu")
+    assert len(api) == 1
+    names = [row["name"] for row in api[0]["members"]]
+    assert names == ["openTradingMenu"]
+    assert api[0]["member_count"] == len(options)
+    assert api[0]["members_truncated"] is True
