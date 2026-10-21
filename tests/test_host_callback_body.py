@@ -226,13 +226,13 @@ def _verified_frame(return_type="void"):
 
 def test_verified_callback_method_choice_compiles_from_indexed_abi():
     router = OperationRouter([
-        {"action": "call"}, {"verified_call_id": "v1"}, {"action": "complete"},
+        {"action": "call"}, {"verified_call_id": "v0"}, {"action": "complete"},
     ])
     result = author_callback_body(router, _verified_messages(),
                                   data_name="verified_effect", frame=_verified_frame())
     assert "target.apply(hand);" in result
     options = json.loads(router.calls[1][2][-1]["content"])["verified_candidates"]
-    assert options[1]["expression"] == "target.apply(hand)"
+    assert options[0]["expression"] == "target.apply(hand)"
     assert all("madeUpCall" not in x["expression"] and
                "unsupported" not in x["expression"] for x in options)
     assert "method" not in router.calls[1][1]["properties"]
@@ -252,9 +252,7 @@ def test_verified_callback_predicate_choice_is_not_a_java_expression_field():
 def test_verified_callback_candidate_requires_real_declared_input_types():
     from minecraft_mod_ai.host_verified_callback_ops import verified_callback_choices
     matches = verified_callback_choices(_verified_messages(), _verified_frame())
-    assert {x["expression"] for x in matches} == {
-        "target.isReady()", "target.apply(hand)",
-    }
+    assert {x["expression"] for x in matches} == {"target.apply(hand)"}
     wrong_frame = {"kind": "method",
                    "prefix": "private void apply(example.Other other) {\n",
                    "suffix": "\n}"}
