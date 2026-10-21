@@ -671,6 +671,11 @@ def compose_first_pass_java(
             dict(item) for item in behaviors
             if item.get("behavior_id") == owned_behavior_id
         ), None)
+        if host_mode and owned_behavior is not None:
+            # Bind the immutable behavior's own state identifiers to the AST
+            # admission gate. Compiler-valid writes to another behavior's
+            # storage are never an acceptable syntax "repair".
+            frame["host_behavior_contract"] = owned_behavior
         body_task = {
             "target_path": task["target_path"],
             "class": class_name,
