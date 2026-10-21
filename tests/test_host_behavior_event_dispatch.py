@@ -39,17 +39,25 @@ class ConditionRouter:
         self.selections = []
 
     def generate_structured_data(self, role, messages, *, data_name, parameters):
-        self.selections.append((data_name, json.loads(messages[-1]["content"])))
-        if data_name == "select_verified_fabric_event_owner":
-            return {"event_owner": TICKS}
-        return {"event_binding": TICKS + "#END_SERVER_TICK"}
-
-    def generate_java_source(self, role, messages, *, data_name, source_frame):
-        task = json.loads(messages[-1]["content"])
-        self.tasks.append(task)
-        body = ("return minecraftServer.active;" if task["member_role"] == "test_callback_condition"
-                else "minecraftServer.effects++;")
-        return source_frame["prefix"] + body + source_frame["suffix"]
+        assert role == "coder"
+        if data_name in {"select_verified_fabric_event_owner",
+                         "select_verified_fabric_event"}:
+            self.selections.append((data_name, json.loads(messages[-1]["content"])))
+            if data_name == "select_verified_fabric_event_owner":
+                return {"event_owner": TICKS}
+            return {"event_binding": TICKS + "#END_SERVER_TICK"}
+        assert "_statement_" in data_name
+        assert set(parameters["properties"]) == {"statement"}
+        member = json.loads(messages[1]["content"])
+        index = int(data_name.split("_statement_")[1].split("_")[0])
+        if index == 0:
+            self.tasks.append(member)
+        statement = (
+            "return minecraftServer.active;"
+            if member["member_role"] == "test_callback_condition"
+            else "minecraftServer.effects++;"
+        )
+        return {"statement": statement if index == 0 else ""}
 
 
 def compose(router, index=None):
