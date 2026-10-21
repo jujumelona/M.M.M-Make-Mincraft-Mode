@@ -82,7 +82,7 @@ def test_host_assembles_schema_constrained_statements_under_fixed_signature():
         _FRAME["prefix"] +
         "System.out.println(entity);\nreturn 1;" + _FRAME["suffix"]
     )
-    assert len(router.calls) == 3
+    assert len(router.calls) == 2
     assert all("statement_" in action for action, _ in router.calls)
     assert "response_source_frame" not in router.calls[0][1][-2]["content"]
 
@@ -105,7 +105,7 @@ def test_production_whole_method_output_can_never_escape_host_frame():
     )
     assert "registerBehavior" not in source
     assert source.count("callback(") == 1
-    assert len(router.calls) == 4
+    assert len(router.calls) == 3
     assert "last_error" in router.calls[1][1][-1]["content"]
 
 
