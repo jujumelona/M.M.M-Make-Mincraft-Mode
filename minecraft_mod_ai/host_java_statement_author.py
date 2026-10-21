@@ -129,6 +129,12 @@ def author_java_callback_statements(
         for message in scoped
     ]
     statements: list[str] = []
+    # A tiny model often emits the callback's PASS/FAIL result before doing
+    # any effect. The host can postpone that terminal statement without
+    # treating it as a completed implementation or discarding the request.
+    # Neither the return nor a no-op can satisfy an effect contract.
+    deferred_return: str | None = None
+    premature_returns = 0
     for index in range(_MAX_MEMBER_STATEMENTS):
         last_error = ""
         for correction in range(2):
@@ -151,6 +157,9 @@ def author_java_callback_statements(
                     "specific effect using verified APIs. A return is not an "
                     "effect. A top-level return TERMINATES the method: the host "
                     "will not ask for any further statements after it. "
+                    "If a return has been deferred by the host, write the "
+                    "REAL effect as the NEXT statement, using verified APIs, "
+                    "rather than another return or empty implementation. "
                     "Do not repeat a previous statement."
                 )},
                 {"role": "user", "content": json.dumps({
@@ -159,6 +168,8 @@ def author_java_callback_statements(
                         "suffix": frame.get("suffix"),
                     },
                     "already_accepted_statements": statements,
+                    "deferred_terminal": deferred_return,
+                    "effect_required_before_terminal": bool(require_effect and deferred_return),
                     "next_statement_index": index,
                     "last_error": last_error,
                     "instruction": ("Correct the rejected statement only."
@@ -184,9 +195,12 @@ def author_java_callback_statements(
                     raise ValueError(
                         "JAVA_CALLBACK_EFFECT_REQUIRED: return-only or empty "
                         "implementation does not implement the assigned effect")
+                if deferred_return is not None:
+                    combined += "\n" + deferred_return
                 source = frame["prefix"] + combined + frame["suffix"]
                 return validate_generated_java_source(
                     source, frame, frame["prefix"], frame["suffix"])
+            deferred_now = False
             try:
                 statement = parse_one_java_statement(candidate)
                 if statement in statements:
@@ -196,27 +210,40 @@ def author_java_callback_statements(
                 terminal = _top_level_terminates_method(statement)
                 if (terminal and require_effect
                         and not _executable_effect("\n".join(statements))):
-                    raise ValueError(
-                        "JAVA_CALLBACK_RETURN_BEFORE_EFFECT: a callback result "
-                        "does not implement the assigned gameplay effect; author "
-                        "its real world/state mutation before returning")
+                    if deferred_return is None:
+                        deferred_return = statement
+                    premature_returns += 1
+                    if premature_returns >= 3:
+                        raise ValueError(
+                            "JAVA_CALLBACK_EFFECT_NOT_AUTHORED: the model emitted "
+                            "three effect-free returns instead of verified "
+                            "world/state mutations; no no-op source is accepted")
+                    deferred_now = True
+                if deferred_now:
+                    # Keep the host-validated terminal OUTSIDE executable code
+                    # until the model actually authors the assigned effect.
+                    # Continue the next statement slot with explicit ABI context.
+                    pass
                 # Reject a raw state accessor mistake before the next generated
                 # statement; never allow it to drift into a different accessor.
-                trial = frame["prefix"] + "\n".join([*statements, statement]) + frame["suffix"]
-                from .host_typed_state_access import (
-                    validate_host_state_access, validate_behavior_state_provenance,
-                )
-                contracts = frame.get("host_state_access", ())
-                validate_host_state_access(trial, contracts)
-                validate_behavior_state_provenance(
-                    trial, contracts, frame.get("host_behavior_contract"),
-                )
+                if not deferred_now:
+                    trial = frame["prefix"] + "\n".join([*statements, statement]) + frame["suffix"]
+                    from .host_typed_state_access import (
+                        validate_host_state_access, validate_behavior_state_provenance,
+                    )
+                    contracts = frame.get("host_state_access", ())
+                    validate_host_state_access(trial, contracts)
+                    validate_behavior_state_provenance(
+                        trial, contracts, frame.get("host_behavior_contract"),
+                    )
             except ValueError as exc:
                 last_error = (f"{type(exc).__name__}: {exc}; "
                               "one block-level Java statement only")
                 if correction:
                     raise ValueError("JAVA_CALLBACK_ATOMIC_STATEMENT_INVALID: " + last_error) from exc
                 continue
+            if deferred_now:
+                break
             statements.append(statement)
             if terminal:
                 source = frame["prefix"] + "\n".join(statements) + frame["suffix"]
