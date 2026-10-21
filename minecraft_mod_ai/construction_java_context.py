@@ -97,7 +97,7 @@ def _relevant_current_api(evidence: Mapping[str, Any], owners: set[str],
             return False
         owner = str(row.get("owner") or row.get("verified_class") or "")
         return (owner in owners or any(
-            word in words for word in
+            word.casefold() in words for word in
             re.findall(r"[A-Z]?[a-z]+", owner.rsplit(".", 1)[-1])
             if len(word) >= 4
         ))
