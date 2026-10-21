@@ -194,3 +194,68 @@ def test_compiler_rejected_predicate_with_whitespace_changes_is_still_rejected()
     assert len(router.calls) == 2
     retry = json.loads(router.calls[1][2][-1]["content"])
     assert "CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED" in retry["last_error"]
+
+
+
+def _verified_messages():
+    return [{"role": "user", "content": json.dumps({
+        "verified_event_callback": {
+            "parameters": ["example.Target", "example.Hand"],
+        },
+        "callback_input_api": [{
+            "verified_class": "example.Target", "members": [
+                {"kind": "METHOD", "name": "isReady", "static": False,
+                 "return_type": "boolean", "parameters": []},
+                {"kind": "METHOD", "name": "apply", "static": False,
+                 "return_type": "void", "parameters": ["example.Hand"]},
+                {"kind": "METHOD", "name": "madeUpCall", "static": True,
+                 "return_type": "void", "parameters": []},
+                {"kind": "METHOD", "name": "unsupported", "static": False,
+                 "return_type": "void", "parameters": ["example.Missing"]},
+            ],
+        }],
+    })}]
+
+
+def _verified_frame(return_type="void"):
+    return {"kind": "method",
+            "prefix": ("private " + return_type
+                       + " execute(example.Target target, example.Hand hand) {\\n"),
+            "suffix": "\\n}"}
+
+
+def test_verified_callback_method_choice_compiles_from_indexed_abi():
+    router = OperationRouter([
+        {"action": "call"}, {"verified_call_id": "v1"}, {"action": "complete"},
+    ])
+    result = author_callback_body(router, _verified_messages(),
+                                  data_name="verified_effect", frame=_verified_frame())
+    assert "target.apply(hand);" in result
+    options = json.loads(router.calls[1][2][-1]["content"])["verified_candidates"]
+    assert options[1]["expression"] == "target.apply(hand)"
+    assert all("madeUpCall" not in x["expression"] and
+               "unsupported" not in x["expression"] for x in options)
+    assert "method" not in router.calls[1][1]["properties"]
+    assert "receiver" not in router.calls[1][1]["properties"]
+
+
+def test_verified_callback_predicate_choice_is_not_a_java_expression_field():
+    router = OperationRouter([{"verified_call_id": "v0"}])
+    result = author_callback_body(router, _verified_messages(),
+                                  data_name="verified_pred", frame=_verified_frame("boolean"),
+                                  predicate=True)
+    assert "return target.isReady();" in result
+    assert list(router.calls[0][1]["properties"]) == ["verified_call_id"]
+    assert router.calls[0][1]["properties"]["verified_call_id"]["enum"] == ["v0"]
+
+
+def test_verified_callback_candidate_requires_real_declared_input_types():
+    from minecraft_mod_ai.host_verified_callback_ops import verified_callback_choices
+    matches = verified_callback_choices(_verified_messages(), _verified_frame())
+    assert {x["expression"] for x in matches} == {
+        "target.isReady()", "target.apply(hand)",
+    }
+    wrong_frame = {"kind": "method",
+                   "prefix": "private void apply(example.Other other) {\\n",
+                   "suffix": "\\n}"}
+    assert verified_callback_choices(_verified_messages(), wrong_frame) == []
