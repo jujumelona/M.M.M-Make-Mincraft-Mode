@@ -740,8 +740,13 @@ def compose_first_pass_java(
                     construction_context.get("symbols") or {},
                     target_path=task["target_path"], owner=package_name + "." + class_name,
                 )
+            # Include the inspected callback result owner as well as inputs.
+            # Result enums/constants are required to compose exact SAM returns
+            # even if unrelated to the free-text gameplay trigger.
+            callback_types = [*unit_event.get("parameters", ()),
+                              unit_event.get("return_type", "")]
             body_task["callback_input_api"] = callback_api_index.callback_member_records(
-                unit_event.get("parameters", ()),
+                callback_types,
                 intent=purpose,
                 predicate=bool(selected_host_unit.get("host_condition_behavior")),
             )
