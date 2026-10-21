@@ -34,6 +34,18 @@ _CORE_REQUIRED_CONCERNS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _canonical_section_schema(section: str) -> dict[str, Any]:
+    """Preserve planner transport limits, not on accumulated host state."""
+    schema = worksheet_section_schema(section)
+    if section == "state_model":
+        # Only the canonical variable table may outgrow a four-record planner
+        # response. Item typing and the rest of the worksheet remain strict.
+        schema["properties"]["specification"]["properties"]["variables"].pop(
+            "maxItems", None
+        )
+    return schema
+
+
 def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -55,16 +67,7 @@ def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, An
             raise ValueError(
                 f"AUTHORED_STRUCTURED_DESIGN: {section} must be an object"
             )
-        # The authoring schema bounds one small-model worksheet response to
-        # four records. Runtime state symbols subsequently added by the host are
-        # a compiled accumulation, not a new model transport page. Validate
-        # every variable against the SAME item schema without reapplying that
-        # transport-only cardinality bound to the authoritative state table.
-        schema = worksheet_section_schema(section)
-        if section == "state_model":
-            schema["properties"]["specification"]["properties"]["variables"].pop(
-                "maxItems", None
-            )
+        schema = _canonical_section_schema(section)
         error = next(
             Draft202012Validator(schema).iter_errors(value),
             None,
