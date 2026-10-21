@@ -20,7 +20,7 @@ _CURRENT_MEMBER_FIELDS = (
     "host_signature", "declared_member_api", "callback_input_api",
     "prerequisite_source", "repair_current_declaration", "repair_only_this_method",
     "diagnostic", "error", "previous_implementation", "previous_candidate",
-    "previous_source",
+    "previous_source", "correction_obligation",
 )
 
 
@@ -79,6 +79,17 @@ def scoped_java_member_messages(
         # No selected inspected API exists, so the prerequisite declarations
         # are the only source of authoritative types; do not discard them.
         task["materialized_prerequisite_api"] = prerequisite
+    repair_api = current.get("api_evidence")
+    if isinstance(repair_api, Mapping):
+        # Compiler-guided repairs use a separate, already narrowed evidence
+        # ABI. It must survive context compaction: without it the small model
+        # might replace an invalid call with an invented one.
+        task["api_evidence"] = {
+            key: repair_api[key] for key in (
+                "selected_target_api", "typed_input_producers", "class_members",
+                "materialized_prerequisite_api",
+            ) if key in repair_api
+        }
     return (
         {"role": "system", "content": (
             "Complete exactly the current Java member. Preserve the assigned "
