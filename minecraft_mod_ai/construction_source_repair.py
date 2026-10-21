@@ -86,8 +86,14 @@ def validate_generated_java_source(result, frame: Mapping, prefix: str, suffix: 
         raise error
     try:
         validate_source_frame(result, frame)
-        from .host_typed_state_access import validate_host_state_access
-        validate_host_state_access(result, frame.get("host_state_access", ()))
+        from .host_typed_state_access import (
+            validate_host_state_access, validate_behavior_state_provenance,
+        )
+        contracts = frame.get("host_state_access", ())
+        validate_host_state_access(result, contracts)
+        validate_behavior_state_provenance(
+            result, contracts, frame.get("host_behavior_contract"),
+        )
     except ValueError as error:
         error.failed_source = result
         raise
