@@ -434,7 +434,23 @@ class FileAPIEvidence:
                     continue
                 pool.append((rank, name, key, row))
         pool.sort(key=lambda item: item[0])
-        chosen = pool[:limit]
+        # A global top-N list can be filled by hundreds of Player getters and
+        # starve the Level or callback-result owner completely. Reserve one
+        # relevant, inspected member per callback owner before filling the
+        # remaining capacity by global task relevance.
+        chosen, selected = [], set()
+        for root in roots[:limit]:
+            first = next((row for row in pool if row[1] == root), None)
+            if first is not None:
+                chosen.append(first)
+                selected.add((first[1], first[2]))
+        for item in pool:
+            if len(chosen) >= limit:
+                break
+            identity = (item[1], item[2])
+            if identity not in selected:
+                chosen.append(item)
+                selected.add(identity)
         by_root = defaultdict(list)
         for _score, root, key, row in chosen:
             by_root[root].append((key, row))
