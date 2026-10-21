@@ -213,3 +213,29 @@ def test_final_state_validation_uses_inner_specification_not_wrapper():
     }}
     with pytest.raises(ValueError, match="STRUCTURED_STATE_VARIABLE_DEFAULT"):
         normalize_structured_sections(section)
+
+
+
+def test_model_receives_only_the_unbound_requirement_context():
+    router = BindingRouter(new_state_decisions())
+    reconcile_behavior_state(router, plan(writes=["charge"]))
+    payload = json.loads(router.calls[0][2][1]["content"])
+    assert payload["original_state_reference"] == "charge"
+    assert "required_uses" in payload
+    # Canonical names were resolved by the host already. Never stream every
+    # unrelated generated scalar back into the small model's prompt.
+    assert "canonical_variables" not in payload
+
+
+def test_new_scalar_owner_accepts_project_defined_runtime_identity():
+    custom = variable()
+    custom["owner"] = "guild"
+    router = BindingRouter([
+        {"binding": "new_scalar_state"}, {"owner": "guild"}, {"type": "int"},
+        {"unit": "charge"}, {"default": "0"}, {"domain": "nonnegative"},
+    ])
+    result = reconcile_behavior_state(
+        router, plan(writes=["charge"], variables=[custom]),
+    )
+    assert result.structured_sections["state_model"]["specification"]["variables"][-1]["owner"] == "guild"
+    assert "guild" in router.calls[1][1]["properties"]["owner"]["enum"]
