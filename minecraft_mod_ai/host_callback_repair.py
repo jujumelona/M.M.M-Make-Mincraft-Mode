@@ -59,7 +59,9 @@ def repair_callback_body(router, *, raw, node, original, frame, diagnostic,
     }
     revised = author_callback_body(router, [{"role": "user", "content": json.dumps(task)}],
                                    data_name=f"repair_callback_{attempt}_{name}",
-                                   frame=frame, predicate=predicate, effect_receipt=not predicate)
+                                   frame=frame, predicate=predicate, effect_receipt=not predicate,
+                                   rejected_compiler_member=original,
+                                   compiler_diagnostic=diagnostic)
     if revised == original:
         raise ValueError("JAVA_HOST_REPAIR_NO_MEMBER_PROGRESS")
     return revised
