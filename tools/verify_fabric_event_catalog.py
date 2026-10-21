@@ -76,9 +76,20 @@ class _CompilerProbeBodies:
                 )
             return {"expression": result}
         if "_predicate_try_" in data_name:
-            assert "expression" in parameters["properties"]
+            properties = parameters["properties"]
+            if "verified_call_id" in properties:
+                # Verified callback predicates are host-compiled from an
+                # inspected candidate ID, not supplied as free-text Java.
+                choices = properties["verified_call_id"]["enum"]
+                assert choices, "A verified predicate must offer an actual ABI choice"
+                return {"verified_call_id": choices[0]}
+            assert "expression" in properties
             # A compiler fixture only; does not claim to match a real trigger.
             return {"expression": "true"}
+        if "_verified_call_try_" in data_name:
+            choices = parameters["properties"]["verified_call_id"]["enum"]
+            assert choices, "Verified effect invocation has no checked candidate"
+            return {"verified_call_id": choices[0]}
         if "_operation_0_call_try_" in data_name:
             return {
                 "receiver": "java.lang.System", "method": "nanoTime",
