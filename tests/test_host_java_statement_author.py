@@ -221,14 +221,16 @@ def test_production_replay_32_identical_pass_returns_is_stopped_at_second_call()
     router = FakeStatementRouter([
         "return net.minecraft.world.InteractionResult.PASS;",
         "return net.minecraft.world.InteractionResult.PASS;",
+        "return net.minecraft.world.InteractionResult.PASS;",
+        "return net.minecraft.world.InteractionResult.PASS;",
     ])
     with pytest.raises(ValueError, match="JAVA_CALLBACK_ATOMIC_STATEMENT_INVALID") as error:
         author_java_callback_statements(
             router, _messages(), data_name="production_pass_loop",
             frame=frame, require_effect=True,
         )
-    assert "JAVA_CALLBACK_RETURN_BEFORE_EFFECT" in str(error.value)
-    assert len(router.calls) == 2
+    assert "JAVA_CALLBACK_EFFECT_NOT_AUTHORED" in str(error.value)
+    assert len(router.calls) == 4
 
 
 def test_host_finishes_predicate_on_single_top_level_return():
@@ -253,3 +255,46 @@ def test_conditional_guard_return_does_not_terminate_effect_authoring():
     )
     assert "return 1;" in result
     assert len(router.calls) == 3
+
+
+
+def test_host_defers_early_result_until_verified_action_exists():
+    router = FakeStatementRouter([
+        "return 1;", "return 1;",
+        "System.out.println(entity);", "",
+    ])
+    actual = author_java_callback_statements(
+        router, _messages(), data_name="defer_until_action",
+        frame=_FRAME, require_effect=True,
+    )
+    assert actual == (_FRAME["prefix"]
+                      + "System.out.println(entity);\nreturn 1;"
+                      + _FRAME["suffix"])
+    assert len(router.calls) == 4
+    task = json.loads(router.calls[2][1][-1]["content"])
+    assert task["deferred_terminal"] == "return 1;"
+    assert task["effect_required_before_terminal"] is True
+    assert task["already_accepted_statements"] == []
+
+
+def test_deferred_terminal_never_qualifies_as_gameplay_effect():
+    router = FakeStatementRouter(["return 1;", ""])
+    with pytest.raises(ValueError, match="JAVA_CALLBACK_EFFECT_REQUIRED"):
+        author_java_callback_statements(
+            router, _messages(), data_name="deferred_no_mutation",
+            frame=_FRAME, require_effect=True,
+        )
+
+
+def test_deferred_result_uses_explicit_later_return_if_effect_authored():
+    router = FakeStatementRouter([
+        "return 0;",
+        "System.out.println(entity);",
+        "return 1;",
+    ])
+    actual = author_java_callback_statements(
+        router, _messages(), data_name="deferred_override",
+        frame=_FRAME, require_effect=True,
+    )
+    assert actual.count("return ") == 1
+    assert "return 1;" in actual and "return 0;" not in actual
