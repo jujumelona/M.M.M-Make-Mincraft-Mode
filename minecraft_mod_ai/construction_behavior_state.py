@@ -102,20 +102,17 @@ def _choose(router, field, schema, context):
     return _validate_native_arguments(response, page)[field]
 
 
-def _choose_verified_owner(router, schema, context, row, reference):
-    """A scalar's owner must be a runtime identity, not a planner tag."""
-    for attempt in range(3):
-        owner = _choose(router, "owner", schema, {
-            **context, "fixed_variable": row,
-            "owner_repair": (
-                "Name the runtime identity that owns this scalar, "
-                "not a state binding category."
-                if attempt else None
-            ),
-        })
-        if _valid_state_owner(owner):
-            return owner
-    raise ValueError("BEHAVIOR_STATE_OWNER_CONTROL_LABEL: " + reference)
+def _choose_verified_owner(router, schema, context, row, variables):
+    """Choose a known runtime scope; never ask for an unconstrained label."""
+    owners = ["server", "player", "world", "entity"]
+    for variable in variables:
+        owner = variable.get("owner")
+        if _valid_state_owner(owner) and owner not in owners:
+            owners.append(owner)
+    return _choose(
+        router, "owner", {**schema, "enum": owners},
+        {**context, "fixed_variable": row, "permitted_owners": owners},
+    )
 
 
 def _declare_missing_scalar(router, name, context, variables):
@@ -130,7 +127,7 @@ def _declare_missing_scalar(router, name, context, variables):
         field_schema = (state_variable_default_schema(row["type"]) if field == "default"
                         else schema[field])
         row[field] = (
-            _choose_verified_owner(router, field_schema, context, row, name)
+            _choose_verified_owner(router, field_schema, context, row, variables)
             if field == "owner"
             else _choose(router, field, field_schema, {**context, "fixed_variable": row})
         )
@@ -139,8 +136,9 @@ def _declare_missing_scalar(router, name, context, variables):
 
 
 def _binding(router, name, uses, variables):
-    context = {"original_state_reference": name, "required_uses": uses,
-               "canonical_variables": variables}
+    # The host already resolves exact canonical aliases. A model deciding
+    # scalar vs runtime observation need not see every unrelated state value.
+    context = {"original_state_reference": name, "required_uses": uses}
     targets = _canonical_targets(name, variables)
     if len(targets) > 1:
         raise ValueError("BEHAVIOR_STATE_CANONICAL_IDENTIFIER_AMBIGUOUS: " + name)
@@ -149,6 +147,13 @@ def _binding(router, name, uses, variables):
         return {"original_name": name, "binding": "canonical_state",
                 "state_name": targets[0],
                 "semantic_status": "host_verified_identifier_match"}
+    if not any(use["access"] == "state_writes" for use in uses):
+        # Without a canonical declaration or writer, a read-only reference has
+        # no source for a fabricated stored value. Preserve it as an explicit
+        # runtime observation instead of inventing a persistent scalar.
+        return {"original_name": name, "binding": "world_state",
+                "observation": name,
+                "semantic_status": "host_classified_unbound_read"}
     kind = _choose(router, "binding", {
         "type": "string", "enum": ["new_scalar_state", "world_state"]}, context)
     result = {"original_name": name, "binding": kind,
@@ -236,7 +241,7 @@ def reconcile_behavior_state(router, plan):
 
     from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
     checkpoint = BehaviorPlanningCheckpoint(scope, router)
-    identity = _digest({"schema": "mmm/behavior-state-bindings-v3",
+    identity = _digest({"schema": "mmm/behavior-state-bindings-v4",
                         "variables": variables, "behaviors": behaviors})
     path = (checkpoint.root / "state-bindings" / (identity + ".json")
             if checkpoint.enabled else None)
