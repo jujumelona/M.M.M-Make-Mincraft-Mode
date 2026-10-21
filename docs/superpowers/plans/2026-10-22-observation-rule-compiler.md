@@ -28,9 +28,10 @@ Create `minecraft_mod_ai/host_rule_observation.py`, test `tests/test_host_rule_o
 
 Produces `bind_rule_observation(router, behavior, candidates) -> dict`.
 
-- [ ] Test the captured calendar triggers with an inspected tick while rejecting native-hook substitution and uninspected IDs.
-- [ ] Run failing tests, implement semantic observation selection and paged native selection, run passing tests.
-- [ ] Commit and push the independently verified binding component.
+- [x] Test the captured calendar triggers with an inspected tick while rejecting native-hook substitution and uninspected IDs.
+- [x] Run failing tests, implement semantic observation selection and paged native selection, run passing tests.
+- [x] Commit the independently verified binding component (`9eb5945ef`).
+- [ ] Push: blocked by automatic public-disclosure approval review; no transport workaround.
 
 ### Task 2: Typed value and effect authoring
 
@@ -40,9 +41,9 @@ Produces a typed program builder with literal, parameter, symbol, arithmetic,
 comparison, selection, effects and scoped block/iteration operations. Uses
 `JavaOperations` to check the actual ABI rather than model-provided Java types.
 
-- [ ] Test chained clock arithmetic, typed state writes, injection/type rejection, scopes, short circuit and distinct overloads.
-- [ ] Run failing tests, implement the builder and paged small-model authoring, run passing tests.
-- [ ] Commit and push.
+- [x] Test chained clock arithmetic, typed state writes, injection/type rejection, scopes, short circuit and distinct overloads.
+- [x] Run failing tests, implement the builder and paged small-model authoring, run passing tests.
+- [x] Commit (`0e10c0d5d`, completed in `43e608075`); publication pending approval.
 
 ### Task 3: Compile and integrate production rules
 
@@ -52,7 +53,8 @@ Create `minecraft_mod_ai/host_rule_feature.py`; modify
 
 Produces `compose_rule_feature(router, spec, context, *, package, name, behaviors, state_access) -> str`.
 
-- [ ] Test real construction routing, no source/repair fallback, rule IR receipts and compiled Java activation/dispatch behavior.
-- [ ] Run failing tests, implement callbacks and keyed edge/change tracking, wire default production route, run passing tests.
-- [ ] Run regression tests, lint and project suite; document actual results and runtime limits.
-- [ ] Commit and push verified implementation and evidence to main.
+- [x] Test real construction routing, no source/repair fallback, rule IR receipts and compiled Java activation/dispatch behavior.
+- [x] Run failing tests, implement callbacks and keyed edge/change tracking, wire default production route, run passing tests.
+- [x] Run regression tests, lint and project suite; document actual results and runtime limits. Related checks: 81 pass; full suite: 4332 pass, 19 fail, 7 skip. Baseline comparison and follow-ups are retained.
+- [x] Commit verified implementation to local main (`43e608075`).
+- [ ] Publish implementation and evidence: automatic approval review requires explicit approval for the public GitHub destination.
