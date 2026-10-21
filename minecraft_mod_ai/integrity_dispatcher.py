@@ -301,6 +301,8 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
                                  expected_sha256=replacement['before_sha256'])
         receipt = materialize_job_output(target_job, source, base_dir=base_dir)
         materialization = {"path": receipt.target_path, "status": receipt.status,
+                           "operation": receipt.operation,
+                           "before_sha256": receipt.before_sha256,
                            "after_sha256": receipt.after_sha256}
         if spec["language"] == "java":
             from .canonical_java_target_contract import retire_owned_legacy_client_candidate

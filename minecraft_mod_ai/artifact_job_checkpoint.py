@@ -211,7 +211,8 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
                 reusable = prior["receipt"]
                 if is_generator and manifest.get("resource_contract"):
                     from .canonical_resource_contract import (
-                        prepare_resource_context, validate_resource_artifact,
+                        prepare_resource_context,
+                        validate_resource_artifact,
                     )
 
                     resources = prepare_resource_context(
@@ -282,12 +283,24 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             "receipt": receipt,
             "verification_level": "artifact_materialized_not_behavior_proven",
         }
+        history = []
+        if relative.endswith('.java'):
+            from .artifact_java_materialization import (
+                checkpoint_java_patch_edge,
+                read_java_patch_history,
+            )
+            edge = checkpoint_java_patch_edge(checkpoint, root, relative)
+            if edge is not None:
+                history = read_java_patch_history(root, relative, before)
+                if edge not in history:
+                    history.append(edge)
         # One atomic envelope publishes the target identity and this job's
         # complete receipt together. The jobs table is only an index: a crash
         # before updating it cannot detach refreshed bytes from their evidence.
         _write_record(root, "paths", relative, {
             'schema_version': 'mmm/artifact-path-checkpoint-v2',
             'sha256': after, 'job_id': job.job_id, 'job_checkpoint': checkpoint,
+            **({'java_patch_history': history} if relative.endswith('.java') else {}),
         })
         _write_record(root, "jobs", job.job_id, checkpoint)
         return receipt

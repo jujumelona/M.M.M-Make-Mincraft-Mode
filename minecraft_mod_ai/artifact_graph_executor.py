@@ -128,11 +128,16 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
         # other validated, same-path Java patches, independent of finish order.
         import hashlib
 
-        from .artifact_java_materialization import verify_java_patch_chain
+        from .artifact_java_materialization import (
+            read_java_patch_history,
+            verify_java_patch_chain,
+        )
         if not resolved.is_file():
             raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED")
         final_hash = hashlib.sha256(resolved.read_bytes()).hexdigest()
-        if not verify_java_patch_chain([row for _, row in contributions], final_hash):
+        relative = resolved.relative_to(root).as_posix()
+        history = read_java_patch_history(root, relative, final_hash)
+        if not verify_java_patch_chain([row for _, row in contributions] + history, final_hash):
             raise ArtifactGraphError(
                 "ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED: " + resolved.relative_to(root).as_posix())
         approved.extend((resolved.relative_to(root).as_posix(), leaf)
