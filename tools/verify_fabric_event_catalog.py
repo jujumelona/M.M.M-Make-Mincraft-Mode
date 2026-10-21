@@ -49,6 +49,21 @@ def _maven_artifact(url, path):
     return _download(url, path, sha1)
 
 
+def _compiler_probe_decision(data_name, parameters):
+    """Answer only the neutral, compiler-checked predicate/call choices."""
+    if "_predicate_try_" not in data_name and "_verified_call_try_" not in data_name:
+        return None
+    properties = parameters["properties"]
+    if "verified_call_id" in properties:
+        choices = properties["verified_call_id"]["enum"]
+        assert choices, "The compiler probe requires a checked ABI candidate"
+        return {"verified_call_id": choices[0]}
+    # Older paths still support host-validated scalar predicates.
+    if "_predicate_try_" in data_name and "expression" in properties:
+        return {"expression": "true"}
+    raise AssertionError("Compiler probe received an unknown predicate/call schema")
+
+
 class _CompilerProbeBodies:
     """Test-only ABI probe, NOT a gameplay-verified callback generator.
 
@@ -75,21 +90,9 @@ class _CompilerProbeBodies:
                     } else "null"
                 )
             return {"expression": result}
-        if "_predicate_try_" in data_name:
-            properties = parameters["properties"]
-            if "verified_call_id" in properties:
-                # Verified callback predicates are host-compiled from an
-                # inspected candidate ID, not supplied as free-text Java.
-                choices = properties["verified_call_id"]["enum"]
-                assert choices, "A verified predicate must offer an actual ABI choice"
-                return {"verified_call_id": choices[0]}
-            assert "expression" in properties
-            # A compiler fixture only; does not claim to match a real trigger.
-            return {"expression": "true"}
-        if "_verified_call_try_" in data_name:
-            choices = parameters["properties"]["verified_call_id"]["enum"]
-            assert choices, "Verified effect invocation has no checked candidate"
-            return {"verified_call_id": choices[0]}
+        decision = _compiler_probe_decision(data_name, parameters)
+        if decision is not None:
+            return decision
         if "_operation_0_call_try_" in data_name:
             return {
                 "receiver": "java.lang.System", "method": "nanoTime",
