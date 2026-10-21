@@ -47,6 +47,18 @@ def _canonical_targets(reference, variables):
     return tuple(sorted(matches))
 
 
+_BINDING_KINDS = frozenset({"canonical_state", "new_scalar_state", "world_state"})
+
+
+def _valid_state_owner(owner):
+    """Binding kinds name planning decisions, not runtime storage owners."""
+    return (
+        isinstance(owner, str)
+        and bool(owner.strip())
+        and owner.strip().casefold() not in _BINDING_KINDS
+    )
+
+
 def _validate_replayed_binding(reference, binding, variables):
     """Revalidate saved LLM choices against the current state authority."""
     if not isinstance(binding, dict) or binding.get("original_name") != reference:
@@ -64,6 +76,8 @@ def _validate_replayed_binding(reference, binding, variables):
         row = binding.get("variable")
         if not isinstance(row, dict) or row.get("name") != binding.get("state_name"):
             raise ValueError("BEHAVIOR_STATE_NEW_SCALAR_INVALID: " + reference)
+        if not _valid_state_owner(row.get("owner")):
+            raise ValueError("BEHAVIOR_STATE_OWNER_CONTROL_LABEL: " + reference)
     else:
         raise ValueError("BEHAVIOR_STATE_BINDING_KIND_INVALID: " + reference)
 
@@ -118,7 +132,25 @@ def _binding(router, name, uses, variables):
         for field in ("owner", "type", "unit", "default", "domain"):
             field_schema = (state_variable_default_schema(row["type"]) if field == "default"
                             else schema[field])
-            row[field] = _choose(router, field, field_schema, {**context, "fixed_variable": row})
+            if field == "owner":
+                # Allow domain-specific runtime owners, but do not let model
+                # control-plane tags masquerade as variable owners.
+                for attempt in range(3):
+                    owner = _choose(router, field, field_schema, {
+                        **context, "fixed_variable": row,
+                        "owner_repair": (
+                            "Name the runtime identity owning this scalar, "
+                            "not a binding category."
+                            if attempt else None
+                        ),
+                    })
+                    if _valid_state_owner(owner):
+                        row[field] = owner
+                        break
+                else:
+                    raise ValueError("BEHAVIOR_STATE_OWNER_CONTROL_LABEL: " + name)
+            else:
+                row[field] = _choose(router, field, field_schema, {**context, "fixed_variable": row})
         validate_structured_state_section({"variables": [*variables, row]})
         result.update(state_name=target_name, variable=row)
     return result
