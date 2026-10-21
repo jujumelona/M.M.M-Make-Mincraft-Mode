@@ -25,6 +25,8 @@ class BehaviorRequirement:
     state_reads: tuple[str, ...] = ()
     state_writes: tuple[str, ...] = ()
     source_status: str = "grounded"
+    runtime_state_reads: tuple[str, ...] = ()
+    runtime_state_writes: tuple[str, ...] = ()
 
     def __post_init__(self):
         if not all(isinstance(value, str) and value.strip() for value in
@@ -40,6 +42,13 @@ class BehaviorRequirement:
         row = asdict(self)
         row["state_reads"] = list(self.state_reads)
         row["state_writes"] = list(self.state_writes)
+        # Keep old behavior checkpoints byte-compatible when no world/state
+        # distinction was needed; new runtime obligations are explicit data.
+        for field_name in ("runtime_state_reads", "runtime_state_writes"):
+            if getattr(self, field_name):
+                row[field_name] = list(getattr(self, field_name))
+            else:
+                row.pop(field_name)
         return row
 
 

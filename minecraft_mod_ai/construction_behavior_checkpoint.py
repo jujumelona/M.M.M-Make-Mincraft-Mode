@@ -158,6 +158,8 @@ class BehaviorPlanningCheckpoint:
                 **row,
                 "state_reads": tuple(row.get("state_reads", ())),
                 "state_writes": tuple(row.get("state_writes", ())),
+                "runtime_state_reads": tuple(row.get("runtime_state_reads", ())),
+                "runtime_state_writes": tuple(row.get("runtime_state_writes", ())),
             })
             if record.requirement_id != parent or record.behavior_id in identities:
                 raise ValueError("CONSTRUCTION_BEHAVIOR_CHECKPOINT_PARENT: " + parent)

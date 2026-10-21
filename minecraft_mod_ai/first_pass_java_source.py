@@ -707,6 +707,14 @@ def compose_first_pass_java(
             ), None),
             "current_unit_purpose": purpose,
             "assigned_behavior": owned_behavior,
+            "runtime_state_observations": {
+                key: value for key, value in json.loads(
+                    bindings.get("runtime_state_bindings_json") or "{}").items()
+                if owned_behavior is not None and key in {
+                    *owned_behavior.get("runtime_state_reads", ()),
+                    *owned_behavior.get("runtime_state_writes", ()),
+                }
+            },
             "class_declaration": declaration,
             "owner_type": owner_types[owner],
             "owner": owner,

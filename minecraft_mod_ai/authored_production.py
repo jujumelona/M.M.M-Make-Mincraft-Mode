@@ -1064,6 +1064,11 @@ def compile_authored_design(
         from .construction_planner import bind_behavior_scope
 
         plan = replace(plan, request_scope=bind_behavior_scope(plan.request_scope, router))
+        # Behavior planning occurs after the saved state model. Resolve its
+        # state names NOW, before either the state owner or callback jobs are
+        # frozen; Java body authoring cannot invent missing canonical storage.
+        from .construction_behavior_state import reconcile_behavior_state
+        plan = reconcile_behavior_state(router, plan)
         design["authored_plan"] = plan.to_dict()
 
     production_state_section = compile_production_state_section(plan)

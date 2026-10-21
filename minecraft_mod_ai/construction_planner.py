@@ -78,7 +78,7 @@ def author_behavior_requirements(scope, router, *, checkpoint=None):
     if saved is not None:
         for row in saved:
             row = dict(row)
-            for name in ("state_reads", "state_writes"):
+            for name in ("state_reads", "state_writes", "runtime_state_reads", "runtime_state_writes"):
                 row[name] = tuple(row.get(name, ()))
             result.append(BehaviorRequirement(**row))
         if {row.requirement_id for row in result} != {

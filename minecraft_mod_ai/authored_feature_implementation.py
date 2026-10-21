@@ -160,6 +160,10 @@ def compile_request_feature_jobs(
             owner_records(plan.structured_sections, runtime_owners, rid), ensure_ascii=False, separators=(",", ":"))
         bindings["shared_state_contract_json"] = json.dumps(
             plan.structured_sections.get("state_model", {}), ensure_ascii=False, separators=(",", ":"))
+        bindings["runtime_state_bindings_json"] = json.dumps({
+            key: value for key, value in plan.request_scope.get("behavior_state_bindings", {}).items()
+            if value.get("binding") == "world_state"
+        }, ensure_ascii=False, separators=(",", ":"))
         bindings["retained_typed_behavior_json"] = json.dumps({
             "event_bindings": plan.typed_plan_ir.get("event_bindings", ()),
             "functions": [{"id": fn["id"], "covers": fn.get("covers", ())}

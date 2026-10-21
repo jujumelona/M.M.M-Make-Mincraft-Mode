@@ -4,6 +4,17 @@ import json
 from minecraft_mod_ai.construction_java_context import scoped_java_member_messages
 
 
+def test_runtime_state_observation_bindings_reach_the_current_callback():
+    frame = {"kind": "method", "prefix": "private void apply() {\n", "suffix": "\n}"}
+    observations = {"build_area_contents": {"binding": "world_state",
+                    "observation": "Read and change actual blocks in the event world"}}
+    messages = [{"role": "user", "content": json.dumps({
+        "response_source_frame": frame, "runtime_state_observations": observations})}]
+    projected = scoped_java_member_messages(messages, frame)
+    assert json.loads(projected[-1]["content"])["runtime_state_observations"] == observations
+
+
+
 def _record(name, count=16):
     return {
         "verified_class": name,
