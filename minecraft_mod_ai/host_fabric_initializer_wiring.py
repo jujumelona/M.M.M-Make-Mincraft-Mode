@@ -21,6 +21,19 @@ from .project_write_lock import project_write_lock
 _MAIN = "net.fabricmc.api.ModInitializer"
 _CLIENT = "net.fabricmc.api.ClientModInitializer"
 _REGISTRATION = re.compile(r"^\s*public\s+static\s+void\s+(register|initialize)\s*\(\s*\)\s*;\s*$")
+
+
+def _registry_key_only_template(template_id: str) -> bool:
+    """Recognize declared Fabric key-definition artifacts, not registry executors.
+
+    An ID template publishes ResourceKey constants; loading that class is not
+    the same as invoking the registry that publishes blocks/items. Only the
+    graph-verified template identity may exempt the initialization contract.
+    """
+    parts = template_id.split("/")
+    return (len(parts) == 3 and parts[0] == "fabric"
+            and parts[2] in {"key", "key_identifier", "key_resource_location"})
+
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 
 
@@ -150,11 +163,11 @@ def _already_called_by_loader(root: Path, entrypoints: dict, kind: str,
 
 def wire_completed_fabric_java(
     project_root: str | Path,
-    approved: Sequence[tuple[str, str]],
+    approved: Sequence[tuple[str, str] | tuple[str, str, str]],
 ) -> dict:
     """Add verified startup obligations; cannot silently rewrite user classes.
 
-    approved=(materialized relative Java path, canonical leaf) tuples. The
+    approved=(materialized relative Java path, canonical leaf, template id)\n    tuples; legacy two-field tuples are also supported. The
     caller must pass only successfully published and validated graph jobs.
     Empty/missing scaffold is not claimed as verified startup.
     """
@@ -170,7 +183,14 @@ def wire_completed_fabric_java(
         if not isinstance(entrypoints, dict):
             raise ValueError("FABRIC_INIT_METADATA_ENTRYPOINTS_INVALID")
         mutations: list[tuple[str, str, str | None]] = []
-        for relative, leaf in sorted(set(approved)):
+        for record in sorted(set(approved)):
+            if len(record) == 2:
+                relative, leaf = record
+                template_id = ""
+            elif len(record) == 3:
+                relative, leaf, template_id = record
+            else:
+                raise ValueError("FABRIC_INIT_APPROVAL_INVALID")
             source_path = _admitted_java(root, relative)
             source = source_path.read_text(encoding="utf-8")
             try:
@@ -185,7 +205,8 @@ def wire_completed_fabric_java(
             kind = _entrypoint_kind(source, declaration["declaration"])
             if kind:
                 mutations.append((kind, owner, None))
-            if isinstance(leaf, str) and leaf.endswith("/registry"):
+            if (isinstance(leaf, str) and leaf.endswith("/registry")
+                    and not _registry_key_only_template(template_id)):
                 methods = [
                     _REGISTRATION.fullmatch(method)
                     for method in declaration["members"]
