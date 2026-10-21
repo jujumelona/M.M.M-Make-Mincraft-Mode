@@ -106,7 +106,7 @@ def verified_state_accessor_symbols(contracts) -> dict:
             header = declaration.get("signature", "")
             if not isinstance(header, str):
                 continue
-            raw, root = _parse("class MmmCheckedSource {\\n" + header + "\\n}")
+            raw, root = _parse("class MmmCheckedSource {\n" + header + "\n}")
             owner_node = next((node for node in root.named_children
                                if node.type == "class_declaration"), None)
             if owner_node is None:
