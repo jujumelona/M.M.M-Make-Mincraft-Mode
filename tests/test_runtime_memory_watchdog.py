@@ -75,6 +75,7 @@ def test_cleanup_ignores_snapshot_for_current_kernel(monkeypatch, tmp_path):
 
 
 def test_cgroup_zero_available_is_critical_not_host_free_memory(monkeypatch):
+    monkeypatch.setattr(watchdog, "_reclaimable_cgroup_file_cache_bytes", lambda: 0)
     monkeypatch.setattr(watchdog, "_meminfo", lambda: (16 * 1024**3, 10 * 1024**3))
     monkeypatch.setattr(
         watchdog, "_cgroup_memory",
@@ -87,6 +88,7 @@ def test_cgroup_zero_available_is_critical_not_host_free_memory(monkeypatch):
 
 def test_preflight_fails_before_production_with_memory_evidence(monkeypatch, tmp_path):
     import pytest
+    monkeypatch.setattr(watchdog, "_reclaimable_cgroup_file_cache_bytes", lambda: 0)
 
     path = tmp_path / "ram-last.json"
     monkeypatch.setenv("MMM_RUNTIME_MEMORY_SNAPSHOT", str(path))

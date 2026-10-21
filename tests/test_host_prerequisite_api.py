@@ -23,6 +23,8 @@ public final class AuthoredStateModel {
     public static synchronized Object getState(String name) { return null; }
     public static synchronized Object getState(String name, Map<String, Object> context) { return null; }
     public static synchronized void setState(String name, Object value) {}
+    public static synchronized boolean readState_ready() { return true; }
+    public static synchronized void writeState_ready(boolean value) {}
     private static Object hidden() { return null; }
 } """,
         "example/AuthoredHostCapabilities.java": """package example;
@@ -69,7 +71,9 @@ def test_generation_and_compiler_repair_receive_every_dependency_api(tmp_path, m
             apis = payload["materialized_prerequisite_api"]
             assert len(apis) == 5
             evidence = json.dumps(apis)
-            assert "getState(String name, Map<String, Object> context)" in evidence
+            assert "boolean readState_ready()" in evidence
+            assert "void writeState_ready(boolean value)" in evidence
+            assert "getState(" not in evidence and "setState(" not in evidence
             assert "Class<AlienEntity> ENTITY_TYPE" in evidence
             assert "Object invoke(String action)" in evidence
             assert "implementation detail" not in evidence
