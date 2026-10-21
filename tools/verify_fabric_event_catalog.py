@@ -52,18 +52,32 @@ def _maven_artifact(url, path):
 class _CompilerProbeBodies:
     """A test-only source provider; production routers are never replaced."""
 
-    def generate_structured_data(self, *args, **kwargs):
-        raise AssertionError("The compiler probe supplies an already inspected binding")
+    def generate_structured_data(self, role, messages, *, data_name, parameters):
+        # The production callback writer requests one typed statement at a
+        # time. This fixture supplies NEUTRAL compiler-only statements against
+        # real inspected signatures; it does not claim behavioral validation.
+        if "_statement_" not in data_name:
+            raise AssertionError("The compiler probe supplies an already inspected binding")
+        assert set(parameters["properties"]) == {"statement"}
+        task = json.loads(messages[1]["content"])
+        returns = task["declaration_metadata"]["return_type"]
+        index = int(data_name.split("_statement_")[1].split("_")[0])
+        condition = task.get("member_role") == "test_callback_condition"
+        if index == 0 and not condition:
+            return {"statement": "java.lang.System.nanoTime();"}
+        if index == (0 if condition else 1):
+            expression = (
+                "" if returns == "void" else "true" if returns == "boolean"
+                else "'a'" if returns == "char"
+                else "0" if returns in {"byte", "short", "int", "long", "float", "double"}
+                else "null"
+            )
+            return {"statement": ("return" + (" " + expression if expression else "") + ";")
+                    if returns != "void" else ""}
+        return {"statement": ""}
 
     def generate_java_source(self, role, messages, *, data_name, source_frame):
-        task = json.loads(messages[-1]["content"])
-        returns = task["declaration_metadata"]["return_type"]
-        expression = ("" if returns == "void" else "true" if returns == "boolean"
-                      else "'a'" if returns == "char"
-                      else "0" if returns in {"byte", "short", "int", "long", "float", "double"}
-                      else "null")
-        return (source_frame["prefix"] + "return"
-                + (" " + expression if expression else "") + ";" + source_frame["suffix"])
+        raise AssertionError("Callback compiler proof must use the host statement protocol")
 
 
 def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
