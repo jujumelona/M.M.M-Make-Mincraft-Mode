@@ -67,6 +67,88 @@ def state_access_contract(prerequisite_api) -> list[dict]:
 
 
 
+def verified_state_accessor_symbols(contracts) -> dict:
+    """Index only public static accessors parsed from materialized Java source.
+
+    The target classpath snapshot predates generated prerequisites. Therefore
+    a method can be compile-valid in a prerequisite but absent from the
+    872k-symbol target inventory. Never infer a method from a state name:
+    this bridge accepts only previously extracted declaration headers.
+    """
+    result = {}
+    common = {"String": "java.lang.String", "Object": "java.lang.Object",
+              "Boolean": "java.lang.Boolean", "Integer": "java.lang.Integer",
+              "Long": "java.lang.Long", "Double": "java.lang.Double"}
+
+    def typename(source):
+        source = source.strip()
+        # The checked bytecode ABI uses erased parameter types. The declared
+        # Java source retains generic arguments; erase only that type wrapper.
+        depth, chars = 0, []
+        for char in source:
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif depth == 0:
+                chars.append(char)
+        erased = "".join(chars).strip().replace("...", "[]")
+        suffix = ""
+        while erased.endswith("[]"):
+            erased, suffix = erased[:-2], "[]" + suffix
+        return common.get(erased, erased) + suffix
+
+    for contract in contracts:
+        owner = contract.get("owner")
+        if not isinstance(owner, str) or not owner:
+            continue
+        for declaration in contract.get("methods", ()):
+            header = declaration.get("signature", "")
+            if not isinstance(header, str):
+                continue
+            raw, root = _parse("class MmmCheckedSource {\\n" + header + "\\n}")
+            owner_node = next((node for node in root.named_children
+                               if node.type == "class_declaration"), None)
+            if owner_node is None:
+                continue
+            methods = [node for node in owner_node.child_by_field_name("body").named_children
+                       if node.type == "method_declaration"]
+            if len(methods) != 1:
+                continue
+            method = methods[0]
+            name_node = method.child_by_field_name("name")
+            type_node = method.child_by_field_name("type")
+            if name_node is None or type_node is None:
+                continue
+            method_name = _text(raw, name_node)
+            if (method_name != declaration.get("name")
+                    or not method_name.startswith(("readState_", "writeState_"))):
+                continue
+            modifiers = next((node for node in method.named_children
+                              if node.type == "modifiers"), None)
+            keywords = _text(raw, modifiers).split() if modifiers is not None else []
+            if "public" not in keywords or "static" not in keywords:
+                continue
+            parameters = []
+            for argument in method.child_by_field_name("parameters").named_children:
+                if argument.type != "formal_parameter":
+                    continue
+                declared = argument.child_by_field_name("type")
+                if declared is None:
+                    break
+                parameters.append(typename(_text(raw, declared)))
+            else:
+                result[owner] = {"kind": "CLASS", "owner": owner, "access": 1}
+                key = "materialized:" + owner + "#" + method_name + "(" + ",".join(parameters) + ")"
+                result[key] = {
+                    "kind": "METHOD", "owner": owner, "name": method_name,
+                    "access": 9, "static": True, "parameters": parameters,
+                    "return_type": typename(_text(raw, type_node)),
+                    "provenance": "materialized_prerequisite_declaration",
+                }
+    return result
+
+
 def state_work_order_scope(work_order, contracts):
     """Expose planning-to-Java state coverage without inventing new storage.
 
