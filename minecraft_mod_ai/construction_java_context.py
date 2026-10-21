@@ -8,6 +8,7 @@ the full prompt cannot fit. No Java API is invented or inferred from prompt text
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -87,7 +88,6 @@ def _relevant_current_api(evidence: Mapping[str, Any], owners: set[str],
     behavior = current.get("assigned_behavior") or {}
     words = set()
     if isinstance(behavior, Mapping):
-        import re
         words = {
             w.casefold() for key in ("intent", "trigger", "effects")
             for w in re.findall(r"[A-Za-z]{4,}", str(behavior.get(key) or ""))
@@ -98,7 +98,7 @@ def _relevant_current_api(evidence: Mapping[str, Any], owners: set[str],
         owner = str(row.get("owner") or row.get("verified_class") or "")
         return (owner in owners or any(
             word in words for word in
-            __import__("re").findall(r"[A-Z]?[a-z]+", owner.rsplit(".", 1)[-1])
+            re.findall(r"[A-Z]?[a-z]+", owner.rsplit(".", 1)[-1])
             if len(word) >= 4
         ))
     return {
