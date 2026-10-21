@@ -472,8 +472,10 @@ class ModelRouter:
                 "all requested effects. No Markdown, reasoning, package/import "
                 "wrapper or additional members. An empty implementation is allowed "
                 "for an uninitialized field only when empty_value is present. "
-                "Host-owned declaration context: "
-                + json.dumps(dict(source_frame), ensure_ascii=False)
+                "Host-owned Java signature: "
+                + json.dumps({"kind": source_frame.get("kind"),
+                              "prefix": prefix, "suffix": suffix},
+                             ensure_ascii=False)
             )}], config=config, tools=(),
         )
         # Do not attach ANY native schema to free-form Java implementations.
@@ -493,12 +495,18 @@ class ModelRouter:
             assemble_java_implementation, focused_java_correction_messages,
         )
         from dataclasses import replace
+        from .construction_java_context import ensure_live_java_source_capacity
 
         # Correct only this implementation after a concrete decode/parser error.
         # Transport/backend failures retain their own handling and are not
         # mistaken for invalid Java. No whole-file regeneration or strategy switch.
         for attempt in range(2):
             with self._generation_scope(config):
+                request = ensure_live_java_source_capacity(
+                    adapter, config, request,
+                    messages if attempt == 0 else request.messages,
+                    source_frame,
+                )
                 result = adapter.generate(request)
             try:
                 return assemble_java_implementation(result, source_frame)
