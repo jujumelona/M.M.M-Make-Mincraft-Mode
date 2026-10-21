@@ -16,6 +16,8 @@ class EventSelector:
     def generate_structured_data(self, role, messages, *, data_name, parameters):
         task = json.loads(messages[-1]["content"])
         self.calls.append((data_name, task, parameters))
+        if data_name == "select_verified_fabric_event_index":
+            return {"event_binding": "UNBOUND"}
         if data_name == "select_verified_fabric_event_owner":
             return {"event_owner": "test.LifecycleEvents"}
         if data_name == "select_verified_fabric_event":
@@ -51,6 +53,7 @@ def test_event_owner_search_recovers_from_first_group_unbound():
     ])
     assert result is candidate
     assert [name for name, _, _ in router.calls] == [
+        "select_verified_fabric_event_index",
         "select_verified_fabric_event_owner", "select_verified_fabric_event",
         "select_verified_fabric_event_owner_alternative_1",
         "select_verified_fabric_event_alternative_1",
@@ -70,3 +73,27 @@ def test_event_binding_refuses_to_invent_any_hook_after_exhaustion():
         select_behavior_callback(NoVerifiedHook(),
             {"behavior_id": "unresolvable", "trigger": "No observable callback"},
             [_event("test.LifecycleEvents", "AFTER_SAVE")])
+
+
+
+def test_global_index_recovers_time_tick_without_wrong_owner_selection():
+    class GlobalSelector:
+        def __init__(self):
+            self.calls = []
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "select_verified_fabric_event_index"
+            payload = json.loads(messages[-1]["content"])
+            self.calls.append(payload)
+            offered = {row["event_id"] for row in payload["verified_hook_index"]}
+            assert "test.TickEvents#END_LEVEL_TICK" in offered
+            assert "test.LifecycleEvents#AFTER_SAVE" in offered
+            return {"event_binding": "test.TickEvents#END_LEVEL_TICK"}
+
+    router = GlobalSelector()
+    tick = _event("test.TickEvents", "END_LEVEL_TICK")
+    result = select_behavior_callback(router, {
+        "behavior_id": "world-period", "trigger": "Game time reaches an interval boundary",
+    }, [_event("test.LifecycleEvents", "AFTER_SAVE"), tick])
+    assert result is tick
+    assert len(router.calls) == 1
