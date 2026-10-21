@@ -95,3 +95,39 @@ def test_non_event_tasks_keep_full_inspected_api_ownership():
     projected = _relevant_current_api(evidence, set(), {})
     assert projected["target_api"] == evidence["target_api"]
     assert projected["class_members"][0]["verified_class"] == "my.Verified"
+
+
+def test_state_work_order_exposes_missing_canonical_values_without_fabricating_accessors():
+    from minecraft_mod_ai.host_typed_state_access import state_work_order_scope
+    order = {
+        "state_reads": ["selected_section", "spacecraft_sections",
+                        "Player health", "player_credits"],
+        "state_writes": ["spacecraft_sections", "build_area_contents"],
+    }
+    contracts = [{"owner": "proof.AuthoredStateModel", "methods": [
+        {"name": "readState_player_credits"},
+        {"name": "writeState_player_credits"},
+    ]}]
+    scope = state_work_order_scope(order, contracts)
+    assert scope["declared_readable"] == ["player_credits"]
+    assert scope["undeclared_plan_reads"] == [
+        "selected_section", "spacecraft_sections",
+    ]
+    assert scope["undeclared_plan_writes"] == [
+        "build_area_contents", "spacecraft_sections",
+    ]
+    assert "unrelated" in scope["contract"]
+    assert "readState_spacecraft_sections" not in str(scope)
+
+
+def test_scoped_member_keeps_plan_gap_provenance_for_correction():
+    frame = {"kind": "method", "prefix": "public void f() {",
+             "suffix": "}"}
+    gap = {"declared_readable": ["credits"],
+           "undeclared_plan_reads": ["selected_section"]}
+    task = {"response_source_frame": frame,
+            "host_state_work_order_scope": gap,
+            "assigned_behavior": {"behavior_id": "b", "effects": "Set section"}}
+    messages = [{"role": "user", "content": json.dumps(task)}]
+    scoped = scoped_java_member_messages(messages, frame)
+    assert json.loads(scoped[-1]["content"])["host_state_work_order_scope"] == gap
