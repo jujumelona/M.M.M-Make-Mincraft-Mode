@@ -756,8 +756,23 @@ def compose_first_pass_java(
             )},
             {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
         ]
-        parts["source"] = router.generate_java_source("coder", body_messages,
-            data_name=action, source_frame=frame)
+        if host_mode and unit_event and owned_behavior_id and kind == "method":
+            # Feature callback logic is a sequence of Tree-sitter-validated
+            # statements, not one free-form Java source blob. The host already
+            # owns the method signature, listener registration and lifecycle.
+            # Every source fragment has a closed schema and a durable journal.
+            from .host_java_statement_author import author_java_callback_statements
+
+            parts["source"] = author_java_callback_statements(
+                router, body_messages, data_name=action, frame=frame,
+                require_effect=bool(
+                    selected_host_unit.get("host_effect_behavior")
+                    or selected_host_unit.get("host_handler_behavior")
+                ),
+            )
+        else:
+            parts["source"] = router.generate_java_source("coder", body_messages,
+                data_name=action, source_frame=frame)
     for index, (unit, parts) in enumerate(declarations, 1):
         kind, member_name = unit["kind"], unit["name"]
         implement(kind, member_name, parts, owner=class_name,
