@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .construction_source_repair import validate_generated_java_source
-from .java_region_parser import _parse, _text
+from .java_region_parser import _parse
 
 
 _STATEMENT_SCHEMA = {
