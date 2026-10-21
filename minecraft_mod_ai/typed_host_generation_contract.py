@@ -223,6 +223,48 @@ def normalize_typed_state_store_config(
     return canonical
 
 
+def rebind_host_state_store_after_canonical_state_change(
+    typed_plan_ir: Mapping[str, Any],
+    *,
+    structured_sections: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reconcile ONLY the host-derived state-store projection after new state.
+
+    Behavioral authoring can add a verified scalar to the canonical state_model
+    after Typed PlanIR was authored. The old content-derived schema hash is
+    then stale: it is not an independent planner decision or permission to
+    downgrade persistence. Keep namespace and coverage; recompute version,
+    migrations, corruption policy and respawn semantics strictly from the new
+    canonical state authority. Explicit unknown config keys remain errors.
+    """
+    from copy import deepcopy
+
+    if not isinstance(typed_plan_ir, Mapping):
+        raise ValueError("TYPED_PLAN_REQUIRED")
+    updated = deepcopy(dict(typed_plan_ir))
+    modules = updated.get("platform_modules", ())
+    if not isinstance(modules, list):
+        raise ValueError("TYPED_PLAN_PLATFORM_MODULES_INVALID")
+    for item in modules:
+        if not isinstance(item, dict) or item.get("kind") != "state_store":
+            continue
+        old = item.get("config")
+        if not isinstance(old, Mapping):
+            raise ValueError("TYPED_STATE_STORE_CONFIG_INVALID")
+        unknown = set(old) - _STATE_STORE_KEYS
+        if unknown:
+            raise ValueError("TYPED_STATE_STORE_CONFIG_UNKNOWN_FIELDS: "
+                             + ", ".join(sorted(str(key) for key in unknown)))
+        covers = item.get("covers", ())
+        transfer = "persistence.transfers" in covers
+        item["config"] = canonical_typed_state_store_config(
+            structured_sections=structured_sections,
+            namespace=str(old.get("namespace") or "authored_state"),
+            transfer_required=transfer,
+        )
+    return updated
+
+
 def normalize_typed_network_sync_config(
     raw_config: Mapping[str, Any],
     *,
@@ -273,6 +315,7 @@ def normalize_typed_resource_policy_config(
 
 __all__ = [
     "canonical_typed_state_store_config",
+    "rebind_host_state_store_after_canonical_state_change",
     "normalize_typed_network_sync_config",
     "normalize_typed_resource_policy_config",
     "normalize_typed_state_store_config",
