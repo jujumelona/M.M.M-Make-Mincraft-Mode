@@ -14,6 +14,7 @@ from .fixed_template_generation import _validate_native_arguments
 from .java_operation_ir import identifier
 from .java_region_parser import _parse, _text, class_body_token_identity
 from .structured_output import StructuredOutputValidationError
+from .host_verified_callback_ops import verified_callback_choices
 
 
 def _object(properties):
@@ -141,6 +142,36 @@ def _ask(router, messages, *, name, schema, context, lower):
     raise AssertionError("unreachable")
 
 
+def lower_operation_from_host_verified_call(expression, frame, statements, blocks):
+    """Admit a host-assembled verified invocation into its actual body context."""
+    code = expression + ";"
+    source = (frame["prefix"] + "\n".join([*statements, code])
+              + "\n}" * len(blocks) + frame["suffix"])
+    validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
+    _validate_state(source, frame)
+    return code
+
+
+def _choose_verified_expression(router, scoped, *, name, choices, context, frame,
+                                rejected_compiler_member=None):
+    by_id = {row["id"]: row["expression"] for row in choices}
+
+    def lower(row):
+        expression = by_id[row["verified_call_id"]]
+        if context.get("predicate"):
+            source = frame["prefix"] + "return " + expression + ";" + frame["suffix"]
+        else:
+            source = frame["prefix"] + expression + ";" + frame["suffix"]
+        if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
+            raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
+        _validate_state(source, frame)
+        return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
+
+    return _ask(router, scoped, name=name, schema=_object({
+        "verified_call_id": {"type": "string", "enum": list(by_id)}}),
+        context={**context, "verified_candidates": choices}, lower=lower)
+
+
 def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                          effect_receipt=False, rejected_compiler_member=None,
                          compiler_diagnostic="") -> str:
@@ -173,6 +204,12 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         "javac_rejected_member": rejected_compiler_member,
         "javac_diagnostic": compiler_diagnostic,
     } if rejected_compiler_member is not None else {}
+    verified = verified_callback_choices(scoped, frame, predicate=predicate)
+    if predicate and verified:
+        return _choose_verified_expression(
+            router, scoped, name=data_name + "_verified_predicate",
+            choices=verified, context={**correction, "predicate": True},
+            frame=frame, rejected_compiler_member=rejected_compiler_member)
     if predicate:
         def lower_predicate(response):
             expression = parse_expression(response["expression"], predicate=True)
@@ -187,6 +224,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                     lower=lower_predicate)
 
     statements, blocks, locals_ = [], [], []
+    verified_calls = verified_callback_choices(scoped, frame, predicate=False)
     receipt_name = "__mmmHostEffectApplied"
     while receipt_name in frame["prefix"]:
         receipt_name += "_"
@@ -245,10 +283,25 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             return code
 
         if action in _SCHEMAS:
-            code = _ask(router, scoped, name=f"{data_name}_operation_{index}_{action}",
-                        schema=_SCHEMAS[action], context={**context, "action": action,
-                            "host_local_name": new_local if action in {"declare", "foreach"} else None},
-                        lower=lower_operation)
+            if action == "call" and verified_calls:
+                # The model selects an existing (receiver, method, typed inputs)
+                # tuple; the host writes the invocation. No arbitrary API names.
+                expressions = {row["id"]: row["expression"] for row in verified_calls}
+                selected = _ask(
+                    router, scoped, name=f"{data_name}_operation_{index}_verified_call",
+                    schema=_object({"verified_call_id": {
+                        "type": "string", "enum": list(expressions)}}),
+                    context={**context, "action": action,
+                             "verified_candidates": verified_calls},
+                    lower=lambda row: expressions[row["verified_call_id"]],
+                )
+                code = lower_operation_from_host_verified_call(
+                    selected, frame, statements, blocks)
+            else:
+                code = _ask(router, scoped, name=f"{data_name}_operation_{index}_{action}",
+                            schema=_SCHEMAS[action], context={**context, "action": action,
+                                "host_local_name": new_local if action in {"declare", "foreach"} else None},
+                            lower=lower_operation)
             statements.append(code)
             effect_attempted = action in {"call", "assign", "declare"} and _effect_operation(action, code)
             effects += int(effect_attempted)
