@@ -213,3 +213,32 @@ def test_captured_67_reference_replay_rejects_false_canonical_aliases():
     }
     with pytest.raises(Exception):
         reconcile_behavior_state(_Router(fixture["answers"]), original)
+
+
+
+def test_host_compiled_state_table_can_grow_beyond_planning_page_limit():
+    from minecraft_mod_ai.authored_structured_design import normalize_structured_sections
+    from minecraft_mod_ai.planning_detail_template import worksheet_section_schema
+
+    # Keep the planner's one-response record limit; only the final canonical
+    # state accumulation can exceed that page size.
+    assert worksheet_section_schema("state_model")["properties"]["specification"]["properties"]["variables"]["maxItems"] == 4
+    names = [f"charge_{index}" for index in range(6)]
+    original = _persistent_plan(behaviors=[{
+        "behavior_id": "b1", "requirement_id": "r1", "intent": "Store independent charge counters",
+        "trigger": "interaction", "effects": "Store the new charge counters",
+        "source_quote": "Store independent charge counters",
+        "state_reads": [], "state_writes": names,
+    }])
+    answers = {
+        name: {"binding": "new_scalar_state", "owner": "player",
+               "type": "int", "unit": name, "default": "0", "domain": name}
+        for name in names
+    }
+    result = reconcile_behavior_state(_Router(answers), original)
+    normalized = normalize_structured_sections(result.structured_sections)
+    rows = normalized["state_model"]["specification"]["variables"]
+    assert len(rows) == len(names) + 1
+    assert set(names).issubset({row["name"] for row in rows})
+    module = _lower(result)
+    assert module.config["typed_state_store"]["schema_version"] != original.typed_plan_ir["platform_modules"][0]["config"]["schema_version"]
