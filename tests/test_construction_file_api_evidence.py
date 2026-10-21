@@ -1,11 +1,13 @@
 """Regressions for the real class-only/JDK-Builder production failure."""
+import json
 from collections import OrderedDict
 from types import SimpleNamespace
-import json
 
-from minecraft_mod_ai.construction_file_author import _diagnostic_api_evidence, _evidence
 from minecraft_mod_ai.construction_file_api_evidence import prompt_symbol_record
-
+from minecraft_mod_ai.construction_file_author import (
+    _diagnostic_api_evidence,
+    _evidence,
+)
 
 ENTITY = 'net.minecraft.world.entity.EntityType'
 BUILDER = ENTITY + '.Builder'
@@ -106,6 +108,47 @@ def test_initial_file_prompt_exposes_nested_factory_and_build_signatures():
     assert build['parameters'] == [KEY]
     assert 'generic_signature' in build
     assert all(row['evidence'] == 'actual_target_symbol_index' for row in classes.values())
+
+
+def test_body_and_repair_retain_inspected_nested_builder_and_factory_contracts():
+    from minecraft_mod_ai.construction_file_api_evidence import scoped_body_api_records
+    from minecraft_mod_ai.construction_source_repair import (
+        focused_java_correction_messages,
+    )
+
+    evidence = _evidence(context(), 'Register alien entity type',
+                         target_path='src/main/java/demo/AlienRegistry.java',
+                         owner='demo.AlienRegistry', router=SimpleNamespace())
+    scoped = scoped_body_api_records(evidence)
+    by_owner = {row['verified_class']: row for row in scoped}
+    assert {BUILDER, FACTORY, KEY} <= by_owner.keys()
+    assert any(row['name'] == 'build' for row in by_owner[BUILDER]['members'])
+    assert by_owner[FACTORY]['declaration']['functional_parameters']
+    correction = focused_java_correction_messages([
+        {'role': 'user', 'content': json.dumps({'inspected_target_api': evidence})},
+    ], frame={'kind': 'method', 'prefix': 'void run() {\n', 'suffix': '\n}'},
+        response='{"implementation":"bad;"}', diagnostic='cannot find symbol')
+    preserved = json.loads(correction[-1]['content'])['api_evidence']['class_members']
+    assert {BUILDER, FACTORY, KEY} <= {row['verified_class'] for row in preserved}
+
+
+def test_nested_factory_promotion_preserves_methods_in_every_input_order():
+    from minecraft_mod_ai.construction_file_api_evidence import scoped_body_api_records
+
+    parent, child = 'proof.ZParent', 'proof.ZParent.Builder'
+    records = [
+        {'verified_class': parent, 'members': []},
+        {'verified_class': child, 'declaration': {'enclosing_owner': parent}, 'members': [
+            {'owner': child, 'kind': 'METHOD', 'name': 'of', 'return_type': 'void'},
+            {'owner': child, 'kind': 'METHOD', 'name': 'build', 'return_type': 'void'},
+        ]},
+    ]
+    anchors = [{'owner': parent, 'kind': 'CLASS', 'name': 'ZParent'},
+               {'owner': child, 'kind': 'METHOD', 'name': 'of'}]
+    for ordering in (records, records[::-1]):
+        scoped = scoped_body_api_records({'target_api': anchors, 'class_members': ordering})
+        result = next(row for row in scoped if row['verified_class'] == child)
+        assert {row['name'] for row in result['members']} == {'of', 'build'}
 
 
 def test_diagnostic_selection_is_independent_of_classpath_insertion_order():
