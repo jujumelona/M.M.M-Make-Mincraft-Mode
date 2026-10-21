@@ -19,6 +19,11 @@ JDTLS_VERSION = "1.60.0"
 JDTLS_BUILD = "202606262232"
 JDTLS_ARCHIVE = f"jdt-language-server-{JDTLS_VERSION}-{JDTLS_BUILD}.tar.gz"
 JDTLS_BASE_URL = f"https://download.eclipse.org/jdtls/milestones/{JDTLS_VERSION}"
+# Pinned release archive checksum, independently published in Homebrew's
+# jdtls 1.60.0 formula (Homebrew/homebrew-core @ 165f299fce01).
+# A fixed version must not require a second network fetch of the .sha256
+# sidecar: Eclipse mirrors can return an unexpected HTML/binary response.
+JDTLS_ARCHIVE_SHA256 = "e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d"
 ADOPTIUM_BASE_URL = "https://api.adoptium.net/v3"
 _MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 _MAX_JDK_ARCHIVE_BYTES = 512 * 1024 * 1024
@@ -444,14 +449,8 @@ def _install_jdtls(root: Path) -> Path:
     with tempfile.TemporaryDirectory(prefix=".jdtls-install-", dir=root.parent) as temporary:
         stage = Path(temporary)
         archive_path = stage / JDTLS_ARCHIVE
-        checksum_path = stage / f"{JDTLS_ARCHIVE}.sha256"
         _download(f"{JDTLS_BASE_URL}/{JDTLS_ARCHIVE}", archive_path, max_bytes=_MAX_ARCHIVE_BYTES)
-        _download(
-            f"{JDTLS_BASE_URL}/{JDTLS_ARCHIVE}.sha256",
-            checksum_path,
-            max_bytes=4096,
-        )
-        expected = _expected_sha256(checksum_path)
+        expected = JDTLS_ARCHIVE_SHA256
         observed = _sha256(archive_path)
         if observed != expected:
             raise JDTLSBootstrapError(
