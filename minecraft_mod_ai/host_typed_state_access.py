@@ -157,6 +157,63 @@ def state_prompt_api(prerequisite_api, evidence, contracts):
     return apis, inspected
 
 
+
+def validate_behavior_state_provenance(source: str, contracts, behavior) -> None:
+    """Reject a state call that targets a different behavior's state value.
+
+    A method compiling successfully is insufficient: a spacecraft placement
+    handler writing 'player_credits' is silent feature corruption even though
+    both symbol and signature exist. Enforce the authoritatively assigned
+    read/write identifiers, not hand-written prompt-specific substitutions.
+    Non-identifier descriptive state names remain non-callable until planning
+    gives them a typed canonical declaration.
+    """
+    if not isinstance(behavior, dict) or not contracts:
+        return
+    from .java_region_parser import _parse, _text
+    import re
+
+    identifier = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+    permitted = {
+        "readState_": set(),
+        "writeState_": set(),
+    }
+    for name in behavior.get("state_reads", ()):
+        if isinstance(name, str) and identifier.fullmatch(name):
+            permitted["readState_"].add(name)
+    for name in behavior.get("state_writes", ()):
+        if isinstance(name, str) and identifier.fullmatch(name):
+            permitted["writeState_"].add(name)
+            # Read-modify-write legitimately reads the same target.
+            permitted["readState_"].add(name)
+
+    owner_names = {str(row["owner"]) for row in contracts}
+    owner_names.update(name.rsplit(".", 1)[-1] for name in owner_names)
+    raw, root = _parse("class MmmStateProvenance {\n" + source + "\n}")
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type == "method_invocation":
+            receiver = node.child_by_field_name("object")
+            name = node.child_by_field_name("name")
+            if receiver is not None and name is not None:
+                owner = _text(raw, receiver)
+                called = _text(raw, name)
+                for method_prefix, accepted in permitted.items():
+                    if (owner in owner_names and called.startswith(method_prefix)
+                            and called[len(method_prefix):] not in accepted):
+                        raise ValueError(
+                            "JAVA_BEHAVIOR_STATE_PROVENANCE_MISMATCH: "
+                            + called + " is not a declared " + method_prefix
+                            + " target of behavior "
+                            + str(behavior.get("behavior_id") or "")
+                            + "; permitted=" + repr(sorted(accepted))
+                            + ". Repair canonical state planning or use a "
+                              "verified non-state world API; never redirect to "
+                              "an unrelated existing state variable."
+                        )
+        pending.extend(node.named_children)
+
 def validate_host_state_access(source: str, contracts) -> None:
     """Admit only declared typed state access in model-authored members.
 
