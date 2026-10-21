@@ -326,3 +326,33 @@ def test_typed_initializer_cannot_smuggle_extra_statements_or_symbols(bad):
     from minecraft_mod_ai.host_callback_body import parse_initializer
     with pytest.raises(ValueError):
         parse_initializer(bad, host_local="mmmValue0")
+
+
+
+def test_callback_abi_retains_baseline_getter_and_return_constant_without_prompt_overlap():
+    from minecraft_mod_ai.construction_file_api_evidence import FileAPIEvidence
+    api = FileAPIEvidence.__new__(FileAPIEvidence)
+    api.classes = {"example.Player": "example.Player", "example.Result": "example.Result"}
+    api.symbols = {owner: {"kind": "CLASS", "owner": owner, "access": 1,
+                           "name": owner.split(".")[-1]} for owner in api.classes}
+    api._accessible = lambda owner: True
+    options = {
+        "example.Player": [("uuid", {
+            "kind": "METHOD", "owner": "example.Player",
+            "name": "getUUID", "access": 1,
+            "return_type": "java.util.UUID", "parameters": [],
+        })],
+        "example.Result": [("pass", {
+            "kind": "FIELD", "owner": "example.Result",
+            "name": "PASS", "return_type": "example.Result", "access": 25,
+        })],
+    }
+    api._member_options = lambda owner: options[owner]
+    # Neither method name is mentioned by the behavior specification. The
+    # host must still retain typed callback inputs and return-type constants.
+    records = api.callback_member_records(
+        list(api.classes), intent="Assemble floating workshop", predicate=True)
+    by_owner = {row["verified_class"]: row for row in records}
+    assert set(by_owner) == set(api.classes)
+    assert [row["name"] for row in by_owner["example.Player"]["members"]] == ["getUUID"]
+    assert [row["name"] for row in by_owner["example.Result"]["members"]] == ["PASS"]
