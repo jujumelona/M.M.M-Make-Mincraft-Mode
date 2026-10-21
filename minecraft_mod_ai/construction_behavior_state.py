@@ -102,6 +102,22 @@ def _choose(router, field, schema, context):
     return _validate_native_arguments(response, page)[field]
 
 
+def _choose_verified_owner(router, schema, context, row, reference):
+    """A scalar's owner must be a runtime identity, not a planner tag."""
+    for attempt in range(3):
+        owner = _choose(router, "owner", schema, {
+            **context, "fixed_variable": row,
+            "owner_repair": (
+                "Name the runtime identity that owns this scalar, "
+                "not a state binding category."
+                if attempt else None
+            ),
+        })
+        if _valid_state_owner(owner):
+            return owner
+    raise ValueError("BEHAVIOR_STATE_OWNER_CONTROL_LABEL: " + reference)
+
+
 def _binding(router, name, uses, variables):
     context = {"original_state_reference": name, "required_uses": uses,
                "canonical_variables": variables}
@@ -132,25 +148,11 @@ def _binding(router, name, uses, variables):
         for field in ("owner", "type", "unit", "default", "domain"):
             field_schema = (state_variable_default_schema(row["type"]) if field == "default"
                             else schema[field])
-            if field == "owner":
-                # Allow domain-specific runtime owners, but do not let model
-                # control-plane tags masquerade as variable owners.
-                for attempt in range(3):
-                    owner = _choose(router, field, field_schema, {
-                        **context, "fixed_variable": row,
-                        "owner_repair": (
-                            "Name the runtime identity owning this scalar, "
-                            "not a binding category."
-                            if attempt else None
-                        ),
-                    })
-                    if _valid_state_owner(owner):
-                        row[field] = owner
-                        break
-                else:
-                    raise ValueError("BEHAVIOR_STATE_OWNER_CONTROL_LABEL: " + name)
-            else:
-                row[field] = _choose(router, field, field_schema, {**context, "fixed_variable": row})
+            row[field] = (
+                _choose_verified_owner(router, field_schema, context, row, name)
+                if field == "owner"
+                else _choose(router, field, field_schema, {**context, "fixed_variable": row})
+            )
         validate_structured_state_section({"variables": [*variables, row]})
         result.update(state_name=target_name, variable=row)
     return result
@@ -180,6 +182,14 @@ def _rebind_state_stores(plan, sections):
     return typed_plan
 
 
+def _audit_saved_bindings(scope, variables):
+    prior_bindings = scope.get("behavior_state_bindings", {})
+    if not isinstance(prior_bindings, dict):
+        raise ValueError("BEHAVIOR_STATE_SAVED_BINDINGS_INVALID")
+    for reference, prior in prior_bindings.items():
+        _validate_replayed_binding(reference, prior, variables)
+
+
 def reconcile_behavior_state(router, plan):
     """Return a resolved plan; never mutate the saved user design in place.
 
@@ -201,11 +211,7 @@ def reconcile_behavior_state(router, plan):
     validate_structured_state_section(specification)
     # Old serialized plans can already contain a wrongly chosen canonical alias.
     # Audit it BEFORE the no-unresolved-references fast return.
-    prior_bindings = scope.get("behavior_state_bindings", {})
-    if not isinstance(prior_bindings, dict):
-        raise ValueError("BEHAVIOR_STATE_SAVED_BINDINGS_INVALID")
-    for reference, prior in prior_bindings.items():
-        _validate_replayed_binding(reference, prior, variables)
+    _audit_saved_bindings(scope, variables)
     known = {row["name"] for row in variables}
     uses = {}
     for behavior in behaviors:
@@ -224,7 +230,7 @@ def reconcile_behavior_state(router, plan):
 
     from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
     checkpoint = BehaviorPlanningCheckpoint(scope, router)
-    identity = _digest({"schema": "mmm/behavior-state-bindings-v2",
+    identity = _digest({"schema": "mmm/behavior-state-bindings-v3",
                         "variables": variables, "behaviors": behaviors})
     path = (checkpoint.root / "state-bindings" / (identity + ".json")
             if checkpoint.enabled else None)
