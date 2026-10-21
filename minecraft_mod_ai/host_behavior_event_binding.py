@@ -54,27 +54,57 @@ def select_behavior_callback(router, behavior, candidates):
     groups = defaultdict(list)
     for row in candidates:
         groups[row["event_owner"]].append(row)
-    available = list(candidates)
-    # 26.2 has over a hundred common event fields. Sending every SAM on every
-    # choice repeats a 55K-character catalogue. Select a real holder first,
-    # then send only that holder's field contracts, without truncating data.
-    if len(groups) > 1:
-        payload = {**context, "verified_event_groups": [
-            {"event_owner": owner, "fields": [row["event_field"] for row in rows]}
-            for owner, rows in sorted(groups.items())]}
-        selection = _select(router, payload, "event_owner", sorted(groups),
-                            "select_verified_fabric_event_owner")
-        owner = selection.get("event_owner")
-        if owner not in groups:
-            raise HostEventBindingError(behavior, selection)
-        available = groups[owner]
-    selection = _select(router, {**context, "verified_listeners": available},
-                        "event_binding", [row["event_id"] for row in available],
-                        "select_verified_fabric_event")
-    selected = selection.get("event_binding")
-    if selected not in {row["event_id"] for row in available}:
-        raise HostEventBindingError(behavior, selection)
-    return by_event[selected]
+    # A hierarchy of event owners is a search index, not proof that the first
+    # owner contains an adequate hook. Earlier behavior stopped after choosing
+    # ServerLifecycleEvents and then UNBOUND, although ServerTickEvents was in
+    # the original inspected catalogue. Keep the complete candidate index and
+    # search *other* owners when the inspected owner cannot observe the trigger.
+    # Every selected hook must still come from the verified original inventory.
+    rejected = []
+    checked = set()
+    attempts = min(5, len(groups))
+    for attempt in range(attempts):
+        remaining = {owner: rows for owner, rows in groups.items()
+                     if owner not in checked}
+        if not remaining:
+            break
+        if len(remaining) == 1:
+            owner = next(iter(remaining))
+        else:
+            payload = {**context, "verified_event_groups": [
+                {"event_owner": owner, "fields": [row["event_field"] for row in rows]}
+                for owner, rows in sorted(remaining.items())],
+                "rejected_event_owners": rejected}
+            selection = _select(
+                router, payload, "event_owner", sorted(remaining),
+                "select_verified_fabric_event_owner" if attempt == 0
+                else f"select_verified_fabric_event_owner_alternative_{attempt}")
+            owner = selection.get("event_owner")
+            if owner not in remaining:
+                raise HostEventBindingError(behavior, {
+                    "owner_selection": selection, "rejected": rejected,
+                })
+        available = remaining[owner]
+        checked.add(owner)
+        selection = _select(
+            router, {**context, "verified_listeners": available,
+                     "rejected_event_owners": rejected},
+            "event_binding", [row["event_id"] for row in available],
+            "select_verified_fabric_event" if attempt == 0
+            else f"select_verified_fabric_event_alternative_{attempt}")
+        selected = selection.get("event_binding")
+        if selected in {row["event_id"] for row in available}:
+            return by_event[selected]
+        if selected != "UNBOUND":
+            raise HostEventBindingError(behavior, {
+                "event_selection": selection, "rejected": rejected,
+            })
+        rejected.append({"event_owner": owner,
+                         "reason": "No event within the selected owner can observe this trigger."})
+    raise HostEventBindingError(behavior, {
+        "event_binding": "UNBOUND", "checked_event_owners": rejected,
+        "remaining_owner_count": len(groups) - len(checked),
+    })
 
 
 def _select(router, payload, field, choices, action):
