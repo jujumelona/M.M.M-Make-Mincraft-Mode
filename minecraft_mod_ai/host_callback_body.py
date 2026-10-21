@@ -68,6 +68,14 @@ def parse_expression(value: str, *, predicate=False) -> str:
             raise ValueError("CALLBACK_EXPRESSION_SIDE_EFFECT_OR_DECLARATION")
         if node.type == "identifier" and _text(raw, node).startswith("__mmmHostEffectApplied"):
             raise ValueError("CALLBACK_EXPRESSION_HOST_OWNED_RECEIPT")
+        if predicate and node.type == "field_access":
+            field = node.child_by_field_name("field")
+            if field is not None and _text(raw, field) == "EVENT":
+                # An event listener already runs inside the selected callback.
+                # Calling its dispatcher from a condition is re-entrancy, not
+                # a read of gameplay state. This is structural, not a version-
+                # specific blacklist of Fabric method names.
+                raise ValueError("CALLBACK_PREDICATE_EVENT_DISPATCH")
         if predicate and node.type == "method_invocation":
             name = _text(raw, node.child_by_field_name("name"))
             if name.startswith("writeState_") or name == "setState":
@@ -129,7 +137,8 @@ def _ask(router, messages, *, name, schema, context, lower):
 
 
 def author_callback_body(router, messages, *, data_name, frame, predicate=False,
-                         effect_receipt=False) -> str:
+                         effect_receipt=False, rejected_compiler_member=None,
+                         compiler_diagnostic="") -> str:
     """Author expressions and operation parameters, never Java statements."""
     from .construction_java_context import scoped_java_member_messages
     scoped = list(scoped_java_member_messages(messages, frame))
@@ -145,6 +154,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         "to actual event/world owners, never invented host state accessors; implement "
         "their reads and mutations through verified callback/world APIs. "
         "Each expression is one value; lambdas and embedded assignments are forbidden. "
+        "A predicate executes INSIDE an event listener; never register or redispatch an event bus. "
         "For call choose receiver, method name and argument values; the host writes "
         "the invocation. For assign choose an existing field/array target, operator "
         "and value. Declare creates a host-named local from your initializer. "
@@ -154,14 +164,21 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         "be supplied as effects. Do not replace missing state with an unrelated key."
     )
     scoped.insert(0, {"role": "system", "content": instruction})
+    correction = {
+        "javac_rejected_member": rejected_compiler_member,
+        "javac_diagnostic": compiler_diagnostic,
+    } if rejected_compiler_member is not None else {}
     if predicate:
         def lower_predicate(response):
             expression = parse_expression(response["expression"], predicate=True)
             source = frame["prefix"] + "return " + expression + ";" + frame["suffix"]
+            if rejected_compiler_member is not None and source.strip() == rejected_compiler_member.strip():
+                raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
             _validate_state(source, frame)
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         return _ask(router, scoped, name=data_name + "_predicate", schema=_EXPRESSION_SCHEMA,
-                    context={"instruction": "One pure boolean expression for the original trigger and preconditions."},
+                    context={**correction,
+                             "instruction": "One pure boolean expression for the original trigger and preconditions."},
                     lower=lower_predicate)
 
     statements, blocks, locals_ = [], [], []
@@ -181,7 +198,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             choices.extend(["break", "continue"])
         if effects and not blocks:
             choices.append("complete")
-        context = {"accepted_host_statements": statements, "host_locals": locals_,
+        context = {**correction, "accepted_host_statements": statements, "host_locals": locals_,
                    "open_blocks": blocks, "next_operation": index}
         action = _ask(router, scoped, name=f"{data_name}_operation_{index}",
                       schema=_object({"action": {"type": "string", "enum": choices}}),
@@ -191,6 +208,8 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             if effect_receipt:
                 completed.append(f"return {receipt_name};")
             source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
+            if rejected_compiler_member is not None and source.strip() == rejected_compiler_member.strip():
+                raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         new_local = f"mmmValue{len(locals_)}"
 
