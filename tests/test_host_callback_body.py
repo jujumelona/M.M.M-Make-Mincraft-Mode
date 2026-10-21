@@ -176,3 +176,21 @@ def test_compiler_failed_effect_cannot_be_reaccepted_unchanged():
             rejected_compiler_member=original,
             compiler_diagnostic="Demo.java:4: error: cannot find symbol mutate(int)",
         )
+
+
+
+def test_compiler_rejected_predicate_with_whitespace_changes_is_still_rejected():
+    old = frame("boolean")["prefix"] + "return target.active;" + frame()["suffix"]
+    router = OperationRouter([
+        {"expression": "target . active"},
+        {"expression": "target.ready"},
+    ])
+    result = author_callback_body(
+        router, [], data_name="repair_tokens", frame=frame("boolean"),
+        predicate=True, rejected_compiler_member=old,
+        compiler_diagnostic="Demo.java:1: error: cannot find symbol active",
+    )
+    assert "target.ready" in result
+    assert len(router.calls) == 2
+    retry = json.loads(router.calls[1][2][-1]["content"])
+    assert "CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED" in retry["last_error"]
