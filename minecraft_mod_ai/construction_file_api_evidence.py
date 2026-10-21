@@ -395,9 +395,19 @@ class FileAPIEvidence:
                 if row.get("kind") != "METHOD" or row.get("static"):
                     continue
                 parameters = parameter_types(row)
-                if len(parameters) > 3:
+                if len(parameters) > 3 or any(
+                    canonical_type_name(kind) not in roots for kind in parameters
+                ):
+                    # The host can only bind arguments backed by this callback's
+                    # declared inputs. A visible method with impossible operands
+                    # is not an executable candidate.
                     continue
                 if predicate and (row.get("return_type") != "boolean" or parameters):
+                    continue
+                if not predicate and str(row.get("name") or "").startswith(
+                    ("get", "is", "has", "can", "should", "read", "peek")
+                ):
+                    # Query methods are observations, not evidence of effects.
                     continue
                 method_words = set(re.findall(r"[a-z]{3,}", re.sub(
                     r"(?<=[a-z0-9])(?=[A-Z])", " ", str(row.get("name") or "")).lower()))
