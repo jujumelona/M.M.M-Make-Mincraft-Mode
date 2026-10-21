@@ -150,8 +150,14 @@ def author_java_callback_statements(
                 # Reject a raw state accessor mistake before the next generated
                 # statement; never allow it to drift into a different accessor.
                 trial = frame["prefix"] + "\n".join([*statements, statement]) + frame["suffix"]
-                from .host_typed_state_access import validate_host_state_access
-                validate_host_state_access(trial, frame.get("host_state_access", ()))
+                from .host_typed_state_access import (
+                    validate_host_state_access, validate_behavior_state_provenance,
+                )
+                contracts = frame.get("host_state_access", ())
+                validate_host_state_access(trial, contracts)
+                validate_behavior_state_provenance(
+                    trial, contracts, frame.get("host_behavior_contract"),
+                )
             except ValueError as exc:
                 last_error = (f"{type(exc).__name__}: {exc}; "
                               "one block-level Java statement only")
