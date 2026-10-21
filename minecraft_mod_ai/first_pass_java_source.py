@@ -740,9 +740,10 @@ def compose_first_pass_java(
                     construction_context.get("symbols") or {},
                     target_path=task["target_path"], owner=package_name + "." + class_name,
                 )
-            body_task["callback_input_api"] = callback_api_index.records(
-                [*unit_event.get("parameters", ()), unit_event.get("return_type", "")],
+            body_task["callback_input_api"] = callback_api_index.callback_member_records(
+                unit_event.get("parameters", ()),
                 intent=purpose,
+                predicate=bool(selected_host_unit.get("host_condition_behavior")),
             )
         if not host_mode:
             # Without the host's initial evidence payload this is the only
