@@ -51,6 +51,27 @@ def select_behavior_callback(router, behavior, candidates):
 
     context = {key: behavior.get(key) for key in (
         "behavior_id", "intent", "trigger", "effects", "state_reads", "state_writes")}
+    # Choose from a compact, *global* index before grouping. The group-first
+    # search loses the correct event when an earlier owner is misclassified.
+    # Supplying just verified IDs and callback input types is much smaller than
+    # repeating the full 26.2 functional-interface catalogue (>55 KB).
+    compact = [
+        {"event_id": row["event_id"], "inputs": row.get("parameters", ())}
+        for row in sorted(candidates, key=lambda item: item["event_id"])
+    ]
+    direct = _select(
+        router, {**context, "verified_hook_index": compact},
+        "event_binding", [row["event_id"] for row in compact],
+        "select_verified_fabric_event_index",
+    )
+    selected = direct.get("event_binding")
+    if selected in by_event:
+        return by_event[selected]
+    if selected != "UNBOUND":
+        raise HostEventBindingError(behavior, direct)
+    # A model's UNBOUND assessment is not proof that the global index contains
+    # no usable hook. Re-examine bounded event-owner groups with independent
+    # names and preserve all rejection evidence rather than inventing an event.
     groups = defaultdict(list)
     for row in candidates:
         groups[row["event_owner"]].append(row)
