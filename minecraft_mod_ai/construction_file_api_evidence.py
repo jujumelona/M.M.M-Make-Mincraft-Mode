@@ -409,7 +409,11 @@ class FileAPIEvidence:
                 result_constant = (kind == "FIELD" and is_static
                                    and canonical_type_name(row.get("return_type", "")) == name)
                 if kind == "METHOD":
-                    if len(params) > 3:
+                    if len(params) > 3 or any(
+                        canonical_type_name(t) not in roots for t in params
+                    ):
+                        # A verified signature without any typed producer is
+                        # documentation, not an executable callback choice.
                         continue
                     # Predicate code can directly call only zero-argument
                     # boolean observers; keep result constants separately.
@@ -420,11 +424,7 @@ class FileAPIEvidence:
                         pass  # Keep a small baseline; it is not a gameplay effect.
                     elif not overlap and not observer:
                         continue
-                    # Prefer APIs whose actual argument types are callback
-                    # inputs; retain matched methods needing a value builder
-                    # as documented evidence, never as immediately callable IDs.
-                    callable_now = all(canonical_type_name(t) in roots for t in params)
-                    rank = (0 if overlap else 2, -overlap, not callable_now,
+                    rank = (0 if overlap else 2, -overlap, False,
                             len(params), name, member_name, key)
                 elif result_constant:
                     rank = (1, 0, False, 0, name, member_name, key)
