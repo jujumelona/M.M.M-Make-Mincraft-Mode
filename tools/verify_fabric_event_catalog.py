@@ -50,35 +50,52 @@ def _maven_artifact(url, path):
 
 
 class _CompilerProbeBodies:
-    """A test-only source provider; production routers are never replaced."""
+    """Test-only ABI probe, NOT a gameplay-verified callback generator.
+
+    Production now compiles callback conditions, effect operation frames, and
+    return results separately. This neutral probe feeds those same authoring
+    channels so javac proves their exact signatures against official jars.
+    """
 
     def generate_structured_data(self, role, messages, *, data_name, parameters):
-        # The production callback writer requests one typed statement at a
-        # time. This fixture supplies NEUTRAL compiler-only statements against
-        # real inspected signatures; it does not claim behavioral validation.
-        if "_statement_" not in data_name:
-            raise AssertionError("The compiler probe supplies an already inspected binding")
-        assert set(parameters["properties"]) == {"statement"}
-        task = json.loads(messages[1]["content"])
-        returns = task["declaration_metadata"]["return_type"]
-        index = int(data_name.split("_statement_")[1].split("_")[0])
-        condition = task.get("member_role") == "test_callback_condition"
-        if index == 0 and not condition:
-            return {"statement": "java.lang.System.nanoTime();"}
-        if index == (0 if condition else 1):
-            expression = (
-                "" if returns == "void" else "true" if returns == "boolean"
-                else "'a'" if returns == "char"
-                else "0" if returns in {"byte", "short", "int", "long", "float", "double"}
-                else "null"
-            )
-            return {"statement": ("return" + (" " + expression if expression else "") + ";")
-                    if returns != "void" else ""}
-        return {"statement": ""}
+        assert role == "coder"
+        if data_name.startswith("select_callback_result_"):
+            payload = json.loads(messages[1]["content"])
+            callback = payload["verified_callback"]
+            choices = parameters["properties"]["expression"].get("enum")
+            if choices:
+                result = choices[-1] if data_name.endswith("_handled") else choices[0]
+            else:
+                result_type = callback["return_type"]
+                result = (
+                    "true" if result_type == "boolean"
+                    else "'a'" if result_type == "char"
+                    else "0" if result_type in {
+                        "byte", "short", "int", "long", "float", "double"
+                    } else "null"
+                )
+            return {"expression": result}
+        if "_predicate_try_" in data_name:
+            assert "expression" in parameters["properties"]
+            # A compiler fixture only; does not claim to match a real trigger.
+            return {"expression": "true"}
+        if "_operation_0_call_try_" in data_name:
+            return {
+                "receiver": "java.lang.System", "method": "nanoTime",
+                "arguments": [],
+            }
+        if "_operation_0_try_" in data_name:
+            assert "return" not in parameters["properties"]["action"]["enum"]
+            return {"action": "call"}
+        if "_operation_1_try_" in data_name:
+            return {"action": "complete"}
+        raise AssertionError(
+            "The real Fabric callback compiler probe received an unknown "
+            "host-authored operation: " + data_name
+        )
 
     def generate_java_source(self, role, messages, *, data_name, source_frame):
-        raise AssertionError("Callback compiler proof must use the host statement protocol")
-
+        raise AssertionError("Compiler proof must not hand Java source ownership to a model")
 
 def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
     root = Path(root).resolve()
