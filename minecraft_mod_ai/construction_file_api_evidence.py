@@ -379,94 +379,67 @@ class FileAPIEvidence:
 
 
     def callback_member_records(self, owners, *, intent, predicate=False, limit=28):
-        """Expose verified callback types and a bounded, usable member sample.
+        """Search the full verified ABI and retain essential typed input APIs.
 
-        Lexical relevance ranks members but must never decide whether an ABI
-        class or an actual accessible member exists. A callback can need a
-        getter, field or result constant whose name is absent from free-text
-        gameplay requirements. Read-only queries are valid predicate inputs,
-        even when their result is not boolean (a comparison may follow).
+        Relevance ranking may prioritize specific operations, but lexical
+        overlap is never a prerequisite for exposing a callback's basic
+        observers or its typed callback-result constants. Every input owner
+        remains visible, even if no method is currently selected.
         """
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
         roots = [name for name in roots if self._accessible(name)]
         words = set(re.findall(r"[a-z]{3,}", re.sub(
             r"(?<=[a-z0-9])(?=[A-Z])", " ", str(intent)).lower()))
-        by_root = {}
-        selected = {root: [] for root in roots}
-        query_prefixes = ("get", "is", "has", "can", "should", "read", "peek")
-        options_by_root = {}
-
-        for root in roots:
-            options = self._member_options(root)
-            options_by_root[root] = options
-            candidates = []
+        pool = []
+        all_options = {}
+        for name in roots:
+            options = self._member_options(name)
+            all_options[name] = options
             for key, row in options:
                 kind = row.get("kind")
                 member_name = str(row.get("name") or "")
+                name_words = set(re.findall(r"[a-z]{3,}", re.sub(
+                    r"(?<=[a-z0-9])(?=[A-Z])", " ", member_name).lower()))
+                overlap = len(name_words & words)
+                is_static = bool(row.get("static") or int(row.get("access", 0)) & 8)
+                params = parameter_types(row) if kind == "METHOD" else []
+                observer = (kind == "METHOD" and not is_static and not params
+                            and member_name.startswith((
+                                "get", "is", "has", "can", "should", "read", "peek")))
+                result_constant = (kind == "FIELD" and is_static
+                                   and canonical_type_name(row.get("return_type", "")) == name)
                 if kind == "METHOD":
-                    # A non-static callback input is the only receiver the
-                    # generated method can bind without inventing arguments.
-                    if row.get("static") or int(row.get("access") or 0) & 8:
+                    if len(params) > 3:
                         continue
-                    parameters = parameter_types(row)
-                    if len(parameters) > 3 or any(
-                        canonical_type_name(type_) not in roots for type_ in parameters
-                    ):
-                        continue
-                    if predicate:
-                        if not (member_name.startswith(query_prefixes) or
-                                row.get("return_type") in ("boolean", "java.lang.Boolean")):
+                    # Predicate code can directly call only zero-argument
+                    # boolean observers; keep result constants separately.
+                    if predicate and (row.get("return_type") != "boolean" or params):
+                        if not observer:
                             continue
-                    elif member_name.startswith(query_prefixes):
+                    if not predicate and observer and not overlap:
+                        pass  # Keep a small baseline; it is not a gameplay effect.
+                    elif not overlap and not observer:
                         continue
-                elif kind == "FIELD":
-                    # A public verified field or result constant may be needed
-                    # for a predicate comparison or callback result branch.
-                    parameters = []
+                    # Prefer APIs whose actual argument types are callback
+                    # inputs; retain matched methods needing a value builder
+                    # as documented evidence, never as immediately callable IDs.
+                    callable_now = all(canonical_type_name(t) in roots for t in params)
+                    rank = (0 if overlap else 2, -overlap, not callable_now,
+                            len(params), name, member_name, key)
+                elif result_constant:
+                    rank = (1, 0, False, 0, name, member_name, key)
+                elif kind == "FIELD" and overlap:
+                    rank = (1, -overlap, False, 0, name, member_name, key)
                 else:
                     continue
-                member_words = set(re.findall(r"[a-z]{3,}", re.sub(
-                    r"(?<=[a-z0-9])(?=[A-Z])", " ", member_name).lower()))
-                relevance = len(member_words & words)
-                candidates.append((-relevance, kind != "METHOD",
-                                   len(parameters), member_name, str(key), key, row))
-            candidates.sort(key=lambda item: item[:5])
-            by_root[root] = candidates
-
-        # Prioritize text matches, then preserve a small lexical-independent
-        # fallback from EVERY callback input/return type. Returning [] because
-        # a verified method does not share prompt words is an API visibility bug.
-        budget = max(0, limit)
-        used = set()
-        matched = sorted((item, root) for root in roots for item in by_root[root]
-                         if item[0] < 0)
-        for item, root in matched:
-            if budget <= 0:
-                break
-            key = (root, item[5])
-            if key in used:
-                continue
-            selected[root].append((item[5], item[6]))
-            used.add(key)
-            budget -= 1
-
-        # Four non-matching members per type at most: bounded payloads for the
-        # small coder, while retaining getters and inspected result constants.
-        for slot in range(4):
-            for root in roots:
-                if budget <= 0:
-                    break
-                remaining = [item for item in by_root[root]
-                             if (root, item[5]) not in used]
-                if slot >= len(remaining):
-                    continue
-                item = remaining[slot]
-                selected[root].append((item[5], item[6]))
-                used.add((root, item[5]))
-                budget -= 1
-
+                pool.append((rank, name, key, row))
+        pool.sort(key=lambda item: item[0])
+        chosen = pool[:limit]
+        by_root = defaultdict(list)
+        for _score, root, key, row in chosen:
+            by_root[root].append((key, row))
         return [
             self._class_record(root, self.symbols[self.classes[root]],
-                               options_by_root[root], selected[root])
+                               all_options[root], by_root[root])
             for root in roots
         ]
