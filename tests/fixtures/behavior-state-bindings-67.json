@@ -1,0 +1,533 @@
+{
+  "provenance": "Production trace 99c313cfa866: captured state-binding inputs and model answers only; persistence fixture supplied by regression test. No gameplay verification.",
+  "variables": [
+    {
+      "name": "player_credits",
+      "owner": "player",
+      "type": "string",
+      "unit": "credits",
+      "default": "0",
+      "domain": "credits"
+    }
+  ],
+  "behaviors": [
+    {
+      "behavior_id": "behavior_4301c4c5663d0e34bc06",
+      "intent": "Fight aliens in space",
+      "trigger": "Encounter an alien entity in the space environment",
+      "effects": "Combat with aliens using available weapons or tools",
+      "source_quote": "외게인과 싸움",
+      "requirement_id": "r1",
+      "state_reads": [
+        "Alien entity health and position",
+        "Player inventory and equipped weapon",
+        "Space environment hazards"
+      ],
+      "state_writes": [
+        "Alien entity health",
+        "Combat particles and effects",
+        "Player health and inventory"
+      ]
+    },
+    {
+      "behavior_id": "behavior_07000b123c21eb0a40a4",
+      "intent": "Fight aliens in space.",
+      "trigger": "Alien encounter in space",
+      "effects": "Combat with aliens",
+      "source_quote": "외게인과 싸움",
+      "requirement_id": "r1",
+      "state_reads": [
+        "Alien presence",
+        "Player health",
+        "Weapon inventory"
+      ],
+      "state_writes": [
+        "Combat damage",
+        "Player health",
+        "Weapon durability"
+      ]
+    },
+    {
+      "behavior_id": "behavior_51abfccc946fe0413520",
+      "intent": "Colonize worlds and unlock multiple gameplay possibilities.",
+      "trigger": "Player reaches a planet or space location and initiates colonization.",
+      "effects": "Colonization becomes available, enabling multiple gameplay possibilities.",
+      "source_quote": "식민지화등 여러가지가 가능한 모드",
+      "requirement_id": "r1",
+      "state_reads": [
+        "Available planets",
+        "Colonization prerequisites",
+        "Player location"
+      ],
+      "state_writes": [
+        "Colonization status",
+        "Player-owned territory",
+        "Unlocked gameplay features"
+      ]
+    },
+    {
+      "behavior_id": "behavior_6e3b0b1f95dfd12a9307",
+      "intent": "Colonize planets in space",
+      "trigger": "Player selects a planet and initiates colonization",
+      "effects": "Establishes a colony on the planet",
+      "source_quote": "식민지화",
+      "requirement_id": "r1",
+      "state_reads": [
+        "Available resources",
+        "Player inventory",
+        "Selected planet"
+      ],
+      "state_writes": [
+        "Colony established on planet",
+        "Player resources updated"
+      ]
+    },
+    {
+      "behavior_id": "behavior_adb184d2f33904db0ea2",
+      "intent": "Upgrade ship performance, weapons, and crew via trading and purchases",
+      "trigger": "Player opens trading interface or selects purchase option for ship performance, weapons, or crew",
+      "effects": "Player spends resources to upgrade ship performance, weapons, or crew, expanding ship capabilities",
+      "source_quote": "무기 선원 우주선 성능을 거래 구매 등으로 업그레이드 확장 할 수 있고",
+      "requirement_id": "r1",
+      "state_reads": [
+        "Owned crew level",
+        "Owned ship performance level",
+        "Owned weapon level",
+        "Player currency/resources"
+      ],
+      "state_writes": [
+        "Crew level",
+        "Player currency/resources",
+        "Ship performance level",
+        "Weapon level"
+      ]
+    },
+    {
+      "behavior_id": "behavior_ade0b089290071e763b8",
+      "intent": "Multiple gameplay modes available",
+      "trigger": "Player discovers or selects an additional mode",
+      "effects": "Enables one of several possible gameplay modes beyond fighting aliens and colonizing planets",
+      "source_quote": "등 여러가지가 가능한 모드",
+      "requirement_id": "r1",
+      "state_reads": [
+        "active_mode",
+        "available_modes"
+      ],
+      "state_writes": [
+        "active_mode"
+      ]
+    },
+    {
+      "behavior_id": "behavior_43d64705afc8c90835df",
+      "intent": "Fight aliens in space.",
+      "trigger": "Player initiates combat against an alien entity in a space environment.",
+      "effects": "Player attacks alien with weapon; alien takes damage and may die; combat resolution occurs in space.",
+      "source_quote": "외게인과 싸움",
+      "requirement_id": "r1",
+      "state_reads": [
+        "alien.alive",
+        "alien.health",
+        "player.health",
+        "player.weapon",
+        "space_environment"
+      ],
+      "state_writes": [
+        "alien.alive",
+        "alien.health",
+        "combat_result",
+        "player.weapon_damage"
+      ]
+    },
+    {
+      "behavior_id": "behavior_7e44c67dc12bf6885bb9",
+      "intent": "Trade and purchase goods to fund spacecraft construction and upgrades",
+      "trigger": "Player has accumulated money and wants to build or upgrade a spacecraft",
+      "effects": "Player trades mined resources for goods, then purchases spacecraft construction materials and upgrades",
+      "source_quote": "거래 등으로",
+      "requirement_id": "r1",
+      "state_reads": [
+        "available goods",
+        "player money",
+        "spacecraft build requirements",
+        "spacecraft upgrade requirements"
+      ],
+      "state_writes": [
+        "player inventory",
+        "player money",
+        "spacecraft construction progress",
+        "spacecraft upgrades"
+      ]
+    },
+    {
+      "behavior_id": "behavior_1b42fe830757dacbd15d",
+      "intent": "Enter space and explore other planets to mine special minerals.",
+      "trigger": "Space key pressed",
+      "effects": "Player enters space and can explore other planets to mine special minerals.",
+      "source_quote": "그렇게해서 우주로 나갈수있고 우주로 나가면 다른행성의 특수 광물",
+      "requirement_id": "r1",
+      "state_reads": [
+        "available planets",
+        "game mode",
+        "player position",
+        "special minerals"
+      ],
+      "state_writes": [
+        "available planets",
+        "game mode",
+        "player position",
+        "special minerals"
+      ]
+    },
+    {
+      "behavior_id": "behavior_d8aa0a41d417210c37cf",
+      "intent": "Expose special minerals on other planets for the player to mine.",
+      "trigger": "Player reaches another planet after traveling into space.",
+      "effects": "Other planets contain special minerals that the player can mine.",
+      "source_quote": "우주로 나가면 다른행성의 특수 광물",
+      "requirement_id": "r1",
+      "state_reads": [
+        "available special minerals",
+        "current planet",
+        "player location"
+      ],
+      "state_writes": [
+        "mined special minerals",
+        "player inventory"
+      ]
+    },
+    {
+      "behavior_id": "behavior_51f3c309cd7a8361f7a8",
+      "intent": "Modular spacecraft section-by-section construction",
+      "trigger": "Player selects a spacecraft section and places it in the build area",
+      "effects": "Adds the selected section to the spacecraft, allowing further sections to be added",
+      "source_quote": "우주선을  부위마다 만들어서 만들수있고",
+      "requirement_id": "r1",
+      "state_reads": [
+        "build_area_contents",
+        "selected_section",
+        "spacecraft_sections"
+      ],
+      "state_writes": [
+        "build_area_contents",
+        "spacecraft_sections"
+      ]
+    },
+    {
+      "behavior_id": "behavior_8d2855665f18630939b5",
+      "intent": "Enable the player to travel into space and reach other planets.",
+      "trigger": "Player reaches the space-exit condition or activates the space travel transition.",
+      "effects": "Transition the player from the current world into space and allow travel toward other planets.",
+      "source_quote": "그렇게해서 우주로 나갈수있고",
+      "requirement_id": "r1",
+      "state_reads": [
+        "current world",
+        "player armor durability",
+        "player health",
+        "player hunger",
+        "player inventory",
+        "player position",
+        "space-exit condition",
+        "travel target"
+      ],
+      "state_writes": [
+        "current world",
+        "player armor durability",
+        "player health",
+        "player hunger",
+        "player inventory",
+        "player position"
+      ]
+    },
+    {
+      "behavior_id": "behavior_cb07907d8517987b77dd",
+      "intent": "Resource-gathering loop that converts mined resources into money",
+      "trigger": "Player enters a resource-rich area and begins mining/gathering",
+      "effects": "Accumulates currency in the player's inventory",
+      "source_quote": "자원파밍 돈모으기 거래 등으로",
+      "requirement_id": "r1",
+      "state_reads": [
+        "player.inventory",
+        "player.location",
+        "world.resource_nodes"
+      ],
+      "state_writes": [
+        "player.inventory.currency",
+        "world.resource_nodes.depleted"
+      ]
+    }
+  ],
+  "answers": {
+    "Alien entity health": {
+      "observation": "Alien entity health is a missing scalar owned by the player, declared as a new_scalar_state for the player's combat state.",
+      "binding": "world_state"
+    },
+    "Alien entity health and position": {
+      "binding": "world_state",
+      "observation": "Alien entity health and position"
+    },
+    "Alien presence": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Available planets": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Available resources": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Colonization prerequisites": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Colonization status": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Colony established on planet": {
+      "binding": "world_state",
+      "observation": "Player selects a planet and initiates colonization, establishing a colony on the planet."
+    },
+    "Combat damage": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Combat particles and effects": {
+      "binding": "world_state",
+      "observation": "Combat particles and effects: weapon fire, alien hit sparks, explosions, and screen shake during space combat"
+    },
+    "Crew level": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Owned crew level": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Owned ship performance level": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Owned weapon level": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Player currency/resources": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Player health": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Player health and inventory": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Player inventory": {
+      "observation": "Player inventory",
+      "binding": "world_state"
+    },
+    "Player inventory and equipped weapon": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Player location": {
+      "observation": "Player location",
+      "binding": "world_state"
+    },
+    "Player resources updated": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Player-owned territory": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Selected planet": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Ship performance level": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "Space environment hazards": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "Unlocked gameplay features": {
+      "binding": "new_scalar_state",
+      "owner": "player",
+      "type": "boolean",
+      "unit": "Unlocked gameplay features",
+      "default": "false",
+      "domain": "player"
+    },
+    "Weapon durability": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "Weapon inventory": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "Weapon level": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "active_mode": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "alien.alive": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "alien.health": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "available goods": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "available planets": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "available special minerals": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "available_modes": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "build_area_contents": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "combat_result": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "current planet": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "current world": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "game mode": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "mined special minerals": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "player armor durability": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "player health": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "player hunger": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "player inventory": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "player location": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "player money": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "player position": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "player.health": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "player.inventory": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "player.inventory.currency": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "player.location": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "player.weapon": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "player.weapon_damage": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "selected_section": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "space-exit condition": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "space_environment": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "spacecraft build requirements": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "spacecraft construction progress": {
+      "state_name": "player_credits",
+      "binding": "canonical_state"
+    },
+    "spacecraft upgrade requirements": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "spacecraft upgrades": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    },
+    "spacecraft_sections": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "special minerals": {
+      "state_name": "state_fb364f18d6e9b15fda76",
+      "binding": "canonical_state"
+    },
+    "travel target": {
+      "binding": "canonical_state",
+      "state_name": "state_fb364f18d6e9b15fda76"
+    },
+    "world.resource_nodes": {
+      "observation": "Resource-gathering loop that converts mined resources into money; player enters a resource-rich area and begins mining/gathering, accumulating currency in the player's inventory.",
+      "binding": "world_state"
+    },
+    "world.resource_nodes.depleted": {
+      "binding": "canonical_state",
+      "state_name": "player_credits"
+    }
+  }
+}

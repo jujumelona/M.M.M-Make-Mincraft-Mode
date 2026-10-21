@@ -21,6 +21,11 @@ from .structured_state_runtime import (
     state_variable_default_schema,
     validate_structured_state_section,
 )
+from .typed_host_generation_contract import (
+    canonical_typed_state_store_config,
+    normalize_typed_state_store_config,
+)
+from .typed_platform_ir import validate_platform_modules
 
 
 def _choose(router, field, schema, context):
@@ -77,6 +82,30 @@ def _binding(router, name, uses, variables):
     return result
 
 
+def _rebind_state_stores(plan, sections):
+    """Validate the old storage contract before deriving one for new authority.
+
+    Schema versions and migration destinations are host-owned projections of
+    canonical state. Updating them is part of the state planning transaction,
+    never a relaxation of the production drift gate.
+    """
+    typed_plan = deepcopy(plan.typed_plan_ir)
+    for module in typed_plan.get("platform_modules", ()):
+        if module.get("kind") != "state_store":
+            continue
+        normalize_typed_state_store_config(
+            module["config"], structured_sections=plan.structured_sections,
+            covers=module.get("covers", ()),
+        )
+        validate_platform_modules([module])
+        derived = canonical_typed_state_store_config(structured_sections=sections)
+        # Only authority-dependent fields change. Carry other settings verbatim
+        # so deriving a new schema cannot sanitize an invalid saved contract.
+        module["config"].update(schema_version=derived["schema_version"],
+                                migrations=derived["migrations"])
+    return typed_plan
+
+
 def reconcile_behavior_state(router, plan):
     """Return a resolved plan; never mutate the saved user design in place.
 
@@ -94,6 +123,7 @@ def reconcile_behavior_state(router, plan):
     if not isinstance(specification, dict):
         raise TypeError("BEHAVIOR_STATE_CANONICAL_SPECIFICATION_REQUIRED")
     variables = deepcopy(specification.get("variables", []))
+    original_variables = deepcopy(variables)
     validate_structured_state_section(specification)
     known = {row["name"] for row in variables}
     uses = {}
@@ -155,10 +185,13 @@ def reconcile_behavior_state(router, plan):
     validate_structured_state_section(specification)
     sections["state_model"] = section
     scope["behavior_state_bindings"] = {**scope.get("behavior_state_bindings", {}), **accepted}
+    typed_plan = (_rebind_state_stores(plan, sections)
+                  if variables != original_variables else plan.typed_plan_ir)
     print("CONSTRUCTION_BEHAVIOR_STATE_BOUND: " + json.dumps({
         "references": len(accepted), "new_variables": sum(
             b["binding"] == "new_scalar_state" for b in accepted.values()),
         "runtime_observations": sum(b["binding"] == "world_state" for b in accepted.values()),
         "runtime_verified": False,
     }), flush=True)
-    return replace(plan, request_scope=scope, structured_sections=sections)
+    return replace(plan, request_scope=scope, structured_sections=sections,
+                   typed_plan_ir=typed_plan)

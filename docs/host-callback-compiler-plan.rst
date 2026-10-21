@@ -29,3 +29,14 @@ Known blocked tests (isolated replay, before model/gameplay work):
 - tests/test_deterministic_debug_full_pipeline_e2e.py::test_debug_fixture_runs_real_build_and_packaging_without_live_model
 - tests/test_deterministic_debug_full_pipeline_e2e.py::test_debug_fixture_releases_when_only_jdt_infrastructure_is_unavailable
 Both encounter unavailable Maven/Gradle dependencies in the JDT bootstrap under restricted networking. The broader run was not green. tests/test_external_mcp_role_scope.py passed when replayed independently.
+
+State-store reconciliation regression (2026-10-21)
+-----------------------------------------------
+
+The next Colab run reached state binding but failed because adding a canonical variable left the previously derived state-store schema version and migration destinations stale. The state-binding transformation must return the new state authority and its derived storage contract atomically. Validate the old contract against the old authority before regenerating it; preserve namespace, transfer policy, migration operations, other platform modules, and original design text. Do not weaken the production drift gate.
+
+Follow-up checks: reproduce through reconciliation and production lowering; materialize state/persistence/network sources from the same authority; reject pre-existing drift; verify aliases/world observations leave the typed plan untouched; replay captured 67-reference bindings and checkpoint restore. Add failing regressions first, implement the host-only rebind, run related checks, review, commit and push main.
+
+Follow-up outcome: the captured 67-reference inputs reproduced the exact schema-version drift before the fix and now reach production lowering. The host validates the untouched old state-store contract, then changes only its schema version and canonical migration destinations in the same returned plan as the new scalar. Namespace, transfer settings, other modules and original source remain unchanged. Invalid settings stay invalid.
+
+Thirteen new regressions and the related state/Typed PlanIR suites pass (101 tests). Generated state, persistence and network sources use the same updated variables. Independent review identified a missing-migrations field that could otherwise be silently filled; its regression failed before adding old platform-module validation and passes afterward. The final review found no remaining Critical or Important defects. Ruff and diff whitespace checks pass. This replay does not certify the external model's semantic choices or Minecraft gameplay.
