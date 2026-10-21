@@ -27,23 +27,27 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
         from .first_pass_java_declarations import validate_source_frame
         validate_source_frame(source, frame)
     except ValueError as error:
-        # The host owns the outer member braces. Small JSON coders sometimes
-        # echo precisely one final '}' after otherwise complete statements.
-        # Accept it ONLY when removing that surplus delimiter makes the full
-        # original member parse with its immutable signature. This is syntax
-        # ownership, not a rewrite/truncation of any Java statement.
+        # The host owns the member braces and the JSON transport envelope.
+        # Some source coders copy its last delimiter into the decoded Java
+        # string (e.g. 'return PASS;"}'). Reclaim ONLY an exact delimiter
+        # suffix, and ONLY if the immutable Java frame parses afterward.
+        # This is not an arbitrary string cleanup or an escape hatch for
+        # broken Java statements: both original and recovered responses are
+        # preserved for diagnostic-guided retries.
         if frame.get("kind") in {"method", "constructor"}:
-            without_trailing_space = body.rstrip()
-            if without_trailing_space.endswith("}"):
-                candidate_body = without_trailing_space[:-1].rstrip()
+            trimmed = body.rstrip()
+            for transport_suffix in ('"}', '}'):
+                if not trimmed.endswith(transport_suffix):
+                    continue
+                candidate_body = trimmed[:-len(transport_suffix)].rstrip()
                 candidate = frame["prefix"] + candidate_body + frame["suffix"]
                 try:
                     validate_source_frame(candidate, frame)
                 except ValueError:
-                    pass
-                else:
-                    source = candidate
-                    error = None
+                    continue
+                source = candidate
+                error = None
+                break
         if error is not None:
             error.failed_source = source
             error.failed_response = response
