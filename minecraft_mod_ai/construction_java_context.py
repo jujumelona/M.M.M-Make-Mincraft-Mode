@@ -177,15 +177,31 @@ def scoped_java_member_messages(
         task["materialized_prerequisite_api"] = prerequisite
     repair_api = current.get("api_evidence")
     if isinstance(repair_api, Mapping):
-        # Compiler-guided repairs use a separate, already narrowed evidence
-        # ABI. It must survive context compaction: without it the small model
-        # might replace an invalid call with an invented one.
-        task["api_evidence"] = {
-            key: repair_api[key] for key in (
-                "selected_target_api", "typed_input_producers", "class_members",
-                "materialized_prerequisite_api",
-            ) if key in repair_api
-        }
+        # Compiler diagnostics sometimes return very large search result sets
+        # dominated by unrelated JDK owners. Restrict them to the actual
+        # callback type evidence. Preserve the full authoritative prerequisite
+        # declarations and retain the original host index for javac.
+        if verified_callback_types:
+            projected = _relevant_current_api({
+                "target_api": repair_api.get("selected_target_api", ()),
+                "typed_input_producers": repair_api.get("typed_input_producers", ()),
+                "class_members": repair_api.get("class_members", ()),
+            }, verified_callback_types, current)
+            task["api_evidence"] = {
+                "selected_target_api": projected["target_api"],
+                "typed_input_producers": projected["typed_input_producers"],
+                "class_members": projected["class_members"],
+            }
+            if "materialized_prerequisite_api" in repair_api:
+                task["api_evidence"]["materialized_prerequisite_api"] = repair_api[
+                    "materialized_prerequisite_api"]
+        else:
+            task["api_evidence"] = {
+                key: repair_api[key] for key in (
+                    "selected_target_api", "typed_input_producers", "class_members",
+                    "materialized_prerequisite_api",
+                ) if key in repair_api
+            }
     return (
         {"role": "system", "content": (
             "Complete exactly the current Java member. Preserve the assigned "
