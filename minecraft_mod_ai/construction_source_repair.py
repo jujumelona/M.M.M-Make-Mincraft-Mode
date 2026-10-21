@@ -138,7 +138,7 @@ def focused_java_correction_messages(
         "requirement", "current_unit_purpose", "member_role", "assigned_behavior",
         "host_signature", "declared_member_api", "declaration_metadata",
         "verified_event_callback", "callback_input_api", "implementation_requirements",
-        "side", "target_path",
+        "side", "target_path", "host_state_work_order_scope",
     )
     task = {key: selected[key] for key in selected_fields if key in selected}
     previous_source = None
@@ -168,7 +168,12 @@ def focused_java_correction_messages(
             "or state ABI diagnostic. The host fixes its signature and wrapper. "
             "If a Java grammar construct expects a type, supply a type; never "
             "reuse an expression in a type position. Preserve the feature behavior "
-            "and all executable obligations. No imports, new classes or prose."
+            "and all executable obligations. No imports, new classes or prose. "
+            "Never replace missing readState_/writeState_ calls with an unrelated "
+            "declared state key. If the required persistent state is missing "
+            "from the canonical model, do not fabricate methods or defaults; "
+            "use verified Minecraft world/event inputs only if they implement "
+            "the original behavior."
         )},
         {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)},
     ]
