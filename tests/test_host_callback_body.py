@@ -220,8 +220,8 @@ def _verified_messages():
 def _verified_frame(return_type="void"):
     return {"kind": "method",
             "prefix": ("private " + return_type
-                       + " execute(example.Target target, example.Hand hand) {\\n"),
-            "suffix": "\\n}"}
+                       + " execute(example.Target target, example.Hand hand) {\n"),
+            "suffix": "\n}"}
 
 
 def test_verified_callback_method_choice_compiles_from_indexed_abi():
@@ -256,6 +256,6 @@ def test_verified_callback_candidate_requires_real_declared_input_types():
         "target.isReady()", "target.apply(hand)",
     }
     wrong_frame = {"kind": "method",
-                   "prefix": "private void apply(example.Other other) {\\n",
-                   "suffix": "\\n}"}
+                   "prefix": "private void apply(example.Other other) {\n",
+                   "suffix": "\n}"}
     assert verified_callback_choices(_verified_messages(), wrong_frame) == []
