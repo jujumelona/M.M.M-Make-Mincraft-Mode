@@ -294,3 +294,35 @@ def test_callback_api_retrieval_uses_full_index_not_alphabetical_first_page():
     assert names == ["openTradingMenu"]
     assert api[0]["member_count"] == len(options)
     assert api[0]["members_truncated"] is True
+
+
+
+def test_model_typed_local_declaration_is_lowered_to_host_owned_initializer():
+    # Production failed when the coder repeated "boolean mmmValue0 = false;"
+    # while the host asked for one expression. Recover the parsed initializer.
+    router = OperationRouter([
+        {"action": "declare"}, {"expression": "boolean mmmValue0 = false;"},
+        {"action": "assign"},
+        {"target": "target.active", "operator": "=", "value": "mmmValue0"},
+        {"action": "complete"},
+    ])
+    result = author_callback_body(
+        router, [], data_name="typed_initializer", frame=frame("boolean"),
+        effect_receipt=True)
+    assert "var mmmValue0 = false;" in result
+    assert "target.active = mmmValue0;" in result
+    assert "boolean mmmValue0 = false;" not in result
+    assert "__mmmHostEffectApplied = true;" in result
+
+
+@pytest.mark.parametrize("bad", [
+    "boolean mmmValue0 = false; target.mutate();",
+    "boolean mmmValue0 = false, injected = true;",
+    "boolean wrongName = false;",
+    "boolean mmmValue0;",
+    "return false;",
+])
+def test_typed_initializer_cannot_smuggle_extra_statements_or_symbols(bad):
+    from minecraft_mod_ai.host_callback_body import parse_initializer
+    with pytest.raises(ValueError):
+        parse_initializer(bad, host_local="mmmValue0")
