@@ -260,3 +260,55 @@ def test_author_can_narrow_a_computed_clock_and_construct_typed_null():
     ])
     absent = author.value("A typed null to compare a nullable world", expected="example.World")
     assert p.kind(absent) == "example.World" and p.source(absent) == "null"
+
+
+def test_rule_author_can_build_new_rhs_while_old_numeric_operand_exists():
+    import json
+    from collections import deque
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    p = program()
+    p.value("literal", type="long", value=6)
+    decisions = deque([
+        ("rule_value_operation", {"operation": "binary"}),
+        ("rule_binary_operator", {"operator": "/"}),
+        ("rule_operand", {"value_ref": "v1"}),
+        ("rule_operand", {"value_ref": "build"}),
+        ("rule_value_operation", {"operation": "literal"}),
+        ("rule_literal_type", {"type": "long"}),
+        ("rule_literal", {"value": 3}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v2"}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v3"}),
+    ])
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            expected, output = decisions.popleft()
+            assert data_name == expected
+            if data_name == "rule_operand" and output.get("value_ref") == "build":
+                assert "build" in parameters["properties"]["value_ref"]["enum"]
+            return output
+
+    result = RuleAuthor(Router(), p).value("A computed ratio", expected="long")
+    assert result == "v3"
+    assert p.kind(result) == "long"
+    assert "3L" in p.declarations()
+    assert not decisions
+
+
+def test_rule_api_query_accepts_static_access_bit_without_static_metadata():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    method = {"kind": "METHOD", "owner": "example.Utility",
+              "name": "readSeason", "access": 9,
+              "parameters": [], "return_type": "int"}
+    stub = SimpleNamespace(symbols={"readSeason": method}, values={}, active=set(),
+                           checker=SimpleNamespace(assignable=lambda *_: False))
+    stub._symbol = lambda key, **kwargs: method
+    author = RuleAuthor(None, stub)
+    author.ask = lambda name, purpose, properties, **kwargs: (
+        {"query": "readSeason"} if name == "rule_api_query" else {"symbol": "s0"})
+    assert author.symbol("Read the inspected static API", "METHOD") == ("readSeason", method)
