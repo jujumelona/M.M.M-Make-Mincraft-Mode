@@ -24,8 +24,8 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
               and body == "" and "empty_value" in frame
               else frame["prefix"] + body + frame["suffix"])
     try:
-        return validate_generated_java_source(
-            source, frame, frame["prefix"], frame["suffix"])
+        from .first_pass_java_declarations import validate_source_frame
+        validate_source_frame(source, frame)
     except ValueError as error:
         # The host owns the outer member braces. Small JSON coders sometimes
         # echo precisely one final '}' after otherwise complete statements.
@@ -38,10 +38,23 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
                 candidate_body = without_trailing_space[:-1].rstrip()
                 candidate = frame["prefix"] + candidate_body + frame["suffix"]
                 try:
-                    return validate_generated_java_source(
-                        candidate, frame, frame["prefix"], frame["suffix"])
+                    validate_source_frame(candidate, frame)
                 except ValueError:
                     pass
+                else:
+                    source = candidate
+                    error = None
+        if error is not None:
+            error.failed_source = source
+            error.failed_response = response
+            raise
+    # Syntax normalization and semantic admission are separate stages. A
+    # corrected wrapper must expose its real state/API error to the retry;
+    # otherwise the model sees the obsolete brace error and repeats its body.
+    try:
+        return validate_generated_java_source(
+            source, frame, frame["prefix"], frame["suffix"])
+    except ValueError as error:
         error.failed_response = response
         raise
 

@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai.construction_source_repair import focused_java_correction_messages
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
-
 
 FRAME = {
     "kind": "method", "prefix": "private boolean check(Object value) {\n",
@@ -87,3 +88,49 @@ def test_java_source_router_repairs_parse_failure_with_focused_second_turn(monke
     second = calls[1].messages
     assert "UNRELATED_MODEL_INVENTORY" not in str(second)
     assert len(str(second)) < len(str(calls[0].messages)) / 3
+
+
+def test_surplus_body_brace_does_not_hide_the_actual_state_abi_failure():
+    from minecraft_mod_ai.construction_source_repair import assemble_java_implementation
+
+    frame = {**FRAME, "host_state_access": [{
+        "owner": "example.AuthoredStateModel",
+        "methods": [{"name": "readState_balance", "signature": "public static int readState_balance();"}],
+    }]}
+    response = json.dumps({"implementation":
+        'return AuthoredStateModel.getState("missing") != null;\n}'})
+    with pytest.raises(ValueError, match="JAVA_HOST_RAW_STATE_ACCESS") as caught:
+        assemble_java_implementation(response, frame)
+    assert caught.value.failed_response == response
+    assert caught.value.failed_source == (
+        FRAME["prefix"] + 'return AuthoredStateModel.getState("missing") != null;' + FRAME["suffix"]
+    )
+
+
+def test_focused_correction_receives_state_error_after_host_brace_normalization(monkeypatch):
+    from test_first_pass_java_data_transport import DataRouter
+
+    monkeypatch.setattr("minecraft_mod_ai.model_context_budget.fit_messages_to_context",
+                        lambda messages, **kwargs: messages)
+    calls = []
+    frame = {**FRAME, "host_state_access": [{
+        "owner": "example.AuthoredStateModel", "methods": [{"name": "readState_balance"}],
+    }]}
+
+    def generate(request):
+        calls.append(request)
+        if len(calls) == 1:
+            body = 'return AuthoredStateModel.getState("balance") != null;\n}'
+        else:
+            payload = json.loads(request.messages[-1]["content"])
+            assert "JAVA_HOST_RAW_STATE_ACCESS" in payload["diagnostic"]
+            assert "readState_balance" in str(payload["immutable_source_frame"])
+            body = "return AuthoredStateModel.readState_balance() > 0;"
+        return json.dumps({"implementation": body})
+
+    adapter = SimpleNamespace(config=AdapterConfig(role="coder", adapter="llama_cpp"),
+                              generate=generate)
+    source = DataRouter(adapter).generate_java_source(
+        "coder", [], data_name="state_failure", source_frame=frame)
+    assert "AuthoredStateModel.readState_balance() > 0;" in source
+    assert len(calls) == 2
