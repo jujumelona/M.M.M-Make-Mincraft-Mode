@@ -174,7 +174,10 @@ def author_java_callback_statements(
             if not candidate.strip():
                 if not statements:
                     raise ValueError(
-                        "JAVA_CALLBACK_EMPTY_IMPLEMENTATION: no behavior was authored")
+                        ("JAVA_CALLBACK_EFFECT_REQUIRED: no concrete gameplay "
+                         "effect has been authored" if require_effect else
+                         "JAVA_CALLBACK_EMPTY_IMPLEMENTATION: no behavior was authored")
+                    )
                 combined = "\n".join(statements)
                 if require_effect and not _executable_effect(combined):
                     raise ValueError(
