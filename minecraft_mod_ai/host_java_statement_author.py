@@ -39,7 +39,7 @@ def parse_one_java_statement(fragment: str) -> str:
     """
     if not isinstance(fragment, str) or not fragment.strip():
         raise ValueError("JAVA_STATEMENT_REQUIRED")
-    raw, root = _parse("class MmmStatementFrame { void f() {\n" + fragment + "\n} }")
+    _, root = _parse("class MmmStatementFrame { void f() {\n" + fragment + "\n} }")
     owner = next((n for n in root.named_children if n.type == "class_declaration"), None)
     class_body = owner.child_by_field_name("body") if owner is not None else None
     methods = [n for n in class_body.named_children
@@ -65,7 +65,7 @@ def parse_one_java_statement(fragment: str) -> str:
 
 def _executable_effect(source: str) -> bool:
     """Prevent an effects handler from being admitted as an empty return stub."""
-    raw, root = _parse("class MmmEffectFrame { void f() {\n" + source + "\n} }")
+    _, root = _parse("class MmmEffectFrame { void f() {\n" + source + "\n} }")
     pending = [root]
     while pending:
         node = pending.pop()
