@@ -118,6 +118,26 @@ def _choose_verified_owner(router, schema, context, row, reference):
     raise ValueError("BEHAVIOR_STATE_OWNER_CONTROL_LABEL: " + reference)
 
 
+def _declare_missing_scalar(router, name, context, variables):
+    """Compile one host-owned scalar declaration from verified field decisions."""
+    target_name = (name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name)
+                   else "state_" + hashlib.sha256(name.encode()).hexdigest()[:20])
+    if target_name in {row["name"] for row in variables}:
+        raise ValueError("BEHAVIOR_STATE_IDENTIFIER_COLLISION: " + name)
+    row = {"name": target_name}
+    schema = state_concern_schema("variables")["properties"]
+    for field in ("owner", "type", "unit", "default", "domain"):
+        field_schema = (state_variable_default_schema(row["type"]) if field == "default"
+                        else schema[field])
+        row[field] = (
+            _choose_verified_owner(router, field_schema, context, row, name)
+            if field == "owner"
+            else _choose(router, field, field_schema, {**context, "fixed_variable": row})
+        )
+    validate_structured_state_section({"variables": [*variables, row]})
+    return row
+
+
 def _binding(router, name, uses, variables):
     context = {"original_state_reference": name, "required_uses": uses,
                "canonical_variables": variables}
@@ -139,22 +159,8 @@ def _binding(router, name, uses, variables):
     else:
         # The reference is semantic data, not necessarily an identifier. Keep
         # it in the binding record while the host fixes one legal stable name.
-        target_name = (name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name)
-                       else "state_" + hashlib.sha256(name.encode()).hexdigest()[:20])
-        if target_name in {row["name"] for row in variables}:
-            raise ValueError("BEHAVIOR_STATE_IDENTIFIER_COLLISION: " + name)
-        row = {"name": target_name}
-        schema = state_concern_schema("variables")["properties"]
-        for field in ("owner", "type", "unit", "default", "domain"):
-            field_schema = (state_variable_default_schema(row["type"]) if field == "default"
-                            else schema[field])
-            row[field] = (
-                _choose_verified_owner(router, field_schema, context, row, name)
-                if field == "owner"
-                else _choose(router, field, field_schema, {**context, "fixed_variable": row})
-            )
-        validate_structured_state_section({"variables": [*variables, row]})
-        result.update(state_name=target_name, variable=row)
+        row = _declare_missing_scalar(router, name, context, variables)
+        result.update(state_name=row["name"], variable=row)
     return result
 
 
