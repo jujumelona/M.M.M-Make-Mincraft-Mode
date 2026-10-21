@@ -376,3 +376,42 @@ class FileAPIEvidence:
                 # of a required parameter type (e.g. Identifier for ResourceKey).
                 self._append_signature_dependencies(pending, name, chosen, seen)
         return answer
+
+
+    def callback_member_records(self, owners, *, intent, predicate=False, limit=28):
+        """Retrieve actionable, actual callback-input methods, not 16 alphabetical names.
+
+        The complete symbol index is inspected locally; only a small relevant
+        signature slice reaches the coder. Neither method names nor their
+        declaring classes come from model text.
+        """
+        roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
+        roots = [name for name in roots if self._accessible(name)]
+        words = set(re.findall(r"[a-z]{3,}", re.sub(
+            r"(?<=[a-z0-9])(?=[A-Z])", " ", str(intent)).lower()))
+        pool = []
+        for name in roots:
+            for key, row in self._member_options(name):
+                if row.get("kind") != "METHOD" or row.get("static"):
+                    continue
+                parameters = parameter_types(row)
+                if len(parameters) > 3:
+                    continue
+                if predicate and (row.get("return_type") != "boolean" or parameters):
+                    continue
+                method_words = set(re.findall(r"[a-z]{3,}", re.sub(
+                    r"(?<=[a-z0-9])(?=[A-Z])", " ", str(row.get("name") or "")).lower()))
+                overlap = len(method_words & words)
+                if not overlap:
+                    continue
+                pool.append((-overlap, len(parameters), name, str(row.get("name")), key, row))
+        pool.sort(key=lambda item: item[:5])
+        chosen = pool[:limit]
+        by_root = defaultdict(list)
+        for _score, _arity, root, _method, key, row in chosen:
+            by_root[root].append((key, row))
+        return [
+            self._class_record(root, self.symbols[self.classes[root]],
+                               self._member_options(root), by_root[root])
+            for root in roots if by_root[root]
+        ]
