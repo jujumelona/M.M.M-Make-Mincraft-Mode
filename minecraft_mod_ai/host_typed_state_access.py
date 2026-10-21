@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from copy import deepcopy
 
 from .java_region_parser import _parse, _text
 
@@ -63,6 +64,50 @@ def state_access_contract(prerequisite_api) -> list[dict]:
             if has_state_api:
                 contracts.append({"owner": owner, "methods": methods})
     return contracts
+
+
+def state_prompt_api(prerequisite_api, evidence, contracts):
+    """Expose the coder's state ABI, keeping the raw bridge internal to the host.
+
+    Showing getState/setState implementations alongside a rule forbidding
+    those calls teaches small coders the wrong API. Project source, compiler
+    inputs and canonical state declarations remain authoritative and intact.
+    """
+    if not contracts:
+        return prerequisite_api, evidence
+    owners = {row['owner'] for row in contracts}
+    apis, inspected = deepcopy(prerequisite_api), deepcopy(evidence)
+    state_paths = set()
+    for api in apis:
+        for declared in api.get('types', ()):
+            if declared.get('owner') not in owners:
+                continue
+            state_paths.add(api.get('path'))
+            members = []
+            for header in declared.get('members', ()):
+                raw, root = _parse('class MmmStatePrompt {\n' + header + '\n}')
+                body = root.named_children[0].child_by_field_name('body')
+                blocked = any(member.type == 'method_declaration'
+                    and _text(raw, member.child_by_field_name('name')) in {'getState', 'setState'}
+                    for member in body.named_children)
+                if not blocked:
+                    members.append(header)
+            declared['members'] = members
+
+    def allowed(row, owner=''):
+        return not (row.get('owner', owner) in owners
+                    and row.get('name') in {'getState', 'setState'})
+
+    inspected['source'] = [row for row in inspected.get('source', ())
+                           if row.get('path') not in state_paths]
+    inspected['target_api'] = [row for row in inspected.get('target_api', ()) if allowed(row)]
+    for row in inspected.get('class_members', ()):
+        row['members'] = [member for member in row.get('members', ())
+                          if allowed(member, row.get('verified_class', ''))]
+    for row in inspected.get('typed_input_producers', ()):
+        row['verified_producers'] = [member for member in row.get('verified_producers', ())
+                                    if allowed(member)]
+    return apis, inspected
 
 
 def validate_host_state_access(source: str, contracts) -> None:

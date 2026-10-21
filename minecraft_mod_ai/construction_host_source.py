@@ -28,7 +28,7 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
     """Assemble immutable checked API and behavior evidence once per file."""
     from .construction_file_author import _evidence
     from .host_prerequisite_api import read_prerequisite_apis
-    from .host_typed_state_access import state_access_contract
+    from .host_typed_state_access import state_access_contract, state_prompt_api
 
     contract = context.get("authoring_contract") or {}
     requirement = str(spec.get("requirement", ""))
@@ -69,6 +69,9 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
             source_context=source_context),
     }
     state_access = state_access_contract(prompt["materialized_prerequisite_api"])
+    prompt["materialized_prerequisite_api"], prompt["inspected_target_api"] = state_prompt_api(
+        prompt["materialized_prerequisite_api"], prompt["inspected_target_api"], state_access,
+    )
     prompt["host_state_access"] = state_access
     return contract, requirement, behavior_rows, prompt, state_access
 

@@ -85,6 +85,41 @@ def test_only_declared_typed_state_names_are_admitted():
     assert "return proof.AuthoredStateModel.readState_label();" in assemble_java_implementation(json.dumps({"implementation": body}), _frame())
 
 
+def test_host_prompt_exposes_typed_state_api_without_its_forbidden_raw_bridge(tmp_path, monkeypatch):
+    from copy import deepcopy
+
+    from test_construction_host_source import SPEC, _context
+
+    from minecraft_mod_ai.construction_host_source import _build_host_java_prompt
+
+    relative = "src/main/java/proof/AuthoredStateModel.java"
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(_source())
+    evidence = {
+        "target_api": [{"kind": "METHOD", "owner": "proof.AuthoredStateModel",
+                        "name": "getState", "parameters": ["String"], "return_type": "Object"}],
+        "source": [{"path": relative, "code": _source()}],
+        "class_members": [{"verified_class": "proof.AuthoredStateModel", "members": [
+            {"kind": "METHOD", "owner": "proof.AuthoredStateModel", "name": "getState"},
+            {"kind": "METHOD", "owner": "proof.AuthoredStateModel", "name": "readState_credits"},
+        ]}],
+    }
+    original = deepcopy(evidence)
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._evidence", lambda *a, **k: evidence)
+    _, _, _, prompt, access = _build_host_java_prompt(
+        None, SPEC, _context(tmp_path), package="example", name="Bridge", owner="example.Bridge",
+        behaviors=[], source_context=[{"path": relative}],
+    )
+    exposed = json.dumps(prompt)
+    assert "getState" not in exposed
+    assert "setState" not in exposed
+    assert "readState_credits" in exposed
+    assert "writeState_credits" in exposed
+    assert access[0]["owner"] == "proof.AuthoredStateModel"
+    assert evidence == original
+
+
 def test_method_references_cannot_bypass_state_contract():
     with pytest.raises(ValueError, match="JAVA_HOST_RAW_STATE_ACCESS"):
         assemble_java_implementation(json.dumps({"implementation": "java.util.function.Function<String, Object> read = AuthoredStateModel::getState; return null;"}), _frame())
