@@ -71,18 +71,19 @@ class RuleAuthor:
             return key
         raise ValueError("RULE_DATA_VALUE_REQUIRED: " + data_id)
 
-    def ref(self, purpose, *, expected=None, candidates=None, depth=0):
+    def ref(self, purpose, *, expected=None, candidates=None, depth=0,
+            allow_build=False):
         keys = [row["id"] for row in self.p.menu()
                 if (expected is None or self.p.checker.assignable(row["type"], expected))
                 and (candidates is None or row["id"] in candidates)]
         if not keys:
-            if candidates is not None:
+            if candidates is not None and not allow_build:
                 raise ValueError("RULE_COMPATIBLE_OPERAND_REQUIRED: " + purpose)
             return self.value(purpose, expected=expected, depth=depth + 1)
         for offset in range(0, len(keys), PAGE_SIZE):
             page = keys[offset:offset + PAGE_SIZE]
             options = [*page, *( ["next_page"] if offset + len(page) < len(keys) else []),
-                       *( ["build"] if candidates is None else [])]
+                       *( ["build"] if candidates is None or allow_build else [])]
             key = self.ask("rule_operand", purpose,
                 {"value_ref": {"type": "string", "enum": options}},
                 expected_type=expected,
@@ -221,13 +222,9 @@ class RuleAuthor:
                             valid.append(row["id"])
                         # A first-time binary expression can require a new
                         # literal or verified call even if no old RHS is usable.
-                        if valid:
-                            right = self.ref("Right operand of " + operator,
-                                             candidates=valid, depth=depth)
-                        else:
-                            right = self.value("Build right operand of " + operator,
-                                               expected=self.p.kind(left),
-                                               depth=depth + 1)
+                        right = self.ref("Right operand of " + operator,
+                            expected=self.p.kind(left), candidates=valid,
+                            depth=depth, allow_build=True)
                         refs.append(right)
                     self.p.value(op, refs, operator=operator, purpose=operator + " on " + ", ".join(refs))
                 elif op == "ternary":
