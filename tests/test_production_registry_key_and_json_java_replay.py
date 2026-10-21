@@ -108,9 +108,11 @@ def test_decoded_json_closer_cannot_be_embedded_in_java_member():
 
 
 def test_java_string_with_brace_is_not_truncated():
-    response = json.dumps({"implementation": 'return "}";'})
+    response = json.dumps({"implementation": 'return value != null && "}".length() == 1;'})
     result = assemble_java_implementation(response, _FRAME)
-    assert result == _FRAME["prefix"] + 'return "}";' + _FRAME["suffix"]
+    assert result == (_FRAME["prefix"] +
+                      'return value != null && "}".length() == 1;' +
+                      _FRAME["suffix"])
 
 
 def test_json_trailer_repair_cannot_hide_invalid_java():
