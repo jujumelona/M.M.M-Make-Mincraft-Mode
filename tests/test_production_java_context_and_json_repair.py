@@ -158,3 +158,28 @@ def test_non_scopable_overflow_fails_before_model_runs(monkeypatch):
             "coder", [{"role": "user", "content": "unknown context"}],
             data_name="submit_java_implementation_1", source_frame=FRAME,
         )
+
+
+def test_scoped_compiler_repair_keeps_repair_diagnostic_and_verified_api():
+    response = '{"implementation":"return bad;"}'
+    from minecraft_mod_ai.construction_source_repair import focused_java_correction_messages
+    original = [
+        {"role": "user", "content": json.dumps({
+            "response_source_frame": FRAME,
+            "current_unit_purpose": "Use verified helper",
+            "assigned_behavior": {"behavior_id": "real", "intent": "real effect"},
+            "inspected_target_api": {"target_api": [
+                {"owner": "verified.RealApi", "name": "go", "kind": "METHOD"}],
+                "class_members": [], "typed_input_producers": []},
+        })},
+    ]
+    retry = focused_java_correction_messages(
+        original, frame=FRAME, response=response,
+        diagnostic="cannot find symbol: bad",
+    )
+    scoped = scoped_java_member_messages(retry, FRAME)
+    payload = json.loads(scoped[-1]["content"])
+    assert "cannot find symbol" in payload["diagnostic"]
+    assert "Change the actual invalid Java expression" in payload["correction_obligation"]
+    assert payload["api_evidence"]["selected_target_api"][0]["owner"] == "verified.RealApi"
+    assert payload["previous_implementation"] == "return bad;"
