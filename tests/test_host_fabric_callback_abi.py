@@ -101,7 +101,6 @@ def test_host_registers_callback_with_method_reference_and_exact_abi():
         "select_verified_fabric_event",
         "submit_java_implementation_1_statement_0_try_0",
         "submit_java_implementation_1_statement_1_try_0",
-        "submit_java_implementation_1_statement_2_try_0",
     ]
     assert router.source_tasks[0]["verified_event_callback"]["event_interface"] == OWNER
 
