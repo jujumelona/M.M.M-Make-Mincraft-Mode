@@ -311,3 +311,56 @@ def test_rule_api_query_accepts_static_access_bit_without_static_metadata():
     author.ask = lambda name, purpose, properties, **kwargs: (
         {"query": "readSeason"} if name == "rule_api_query" else {"symbol": "s0"})
     assert author.symbol("Read the inspected static API", "METHOD") == ("readSeason", method)
+
+
+
+def test_rule_program_can_use_materialized_declared_state_accessors():
+    from minecraft_mod_ai.host_typed_state_access import verified_state_accessor_symbols
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+
+    owner = "example.AuthoredStateModel"
+    accessors = verified_state_accessor_symbols([{
+        "owner": owner,
+        "methods": [
+            {"name": "readState_phase",
+             "signature": "public static synchronized long readState_phase();"},
+            {"name": "writeState_phase",
+             "signature": "public static synchronized void writeState_phase(long value);"},
+            {"name": "writeState_phase",
+             "signature": "public static synchronized void writeState_phase("
+                          "long value, java.util.Map<String, Object> context);"},
+            {"name": "writeState_unknown",
+             "signature": "public static void unrelated(long value);"},
+        ],
+    }])
+    assert accessors[owner]["kind"] == "CLASS"
+    methods = {key: row for key, row in accessors.items() if row["kind"] == "METHOD"}
+    assert len(methods) == 3
+    assert not any(row["name"] == "writeState_unknown" for row in methods.values())
+    assert any(row["parameters"] == ["long", "java.util.Map"]
+               for row in methods.values())
+
+    classpath = {**symbols(), **accessors}
+    classpath["java.util.Map"] = {
+        "kind": "CLASS", "owner": "java.util.Map", "access": 1537,
+    }
+    p = RuleProgram(classpath, [{"type": "example.World", "name": "arg0"}],
+        {"behavior_id": "phase-transition", "state_reads": ["phase"],
+         "state_writes": ["phase"]},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java",
+        state_owners=[owner])
+    read = next(key for key, row in methods.items()
+                if row["name"] == "readState_phase")
+    write = next(key for key, row in methods.items()
+                 if row["name"] == "writeState_phase" and row["parameters"] == ["long"])
+    old_value = p.value("call", [], symbol_ref=read)
+    p.effect("call", [old_value], symbol_ref=write)
+    assert p.written_states == {"phase"}
+    assert "writeState_phase" in p.render()
+
+    forbidden = RuleProgram(classpath, [], {
+        "behavior_id": "no-state-permission", "state_reads": [], "state_writes": [],
+    }, owner="example.Bridge", target_path="src/main/java/example/Bridge.java",
+        state_owners=[owner])
+    with pytest.raises(ValueError, match="STATE_AUTHORITY"):
+        forbidden.value("call", [], symbol_ref=read)
