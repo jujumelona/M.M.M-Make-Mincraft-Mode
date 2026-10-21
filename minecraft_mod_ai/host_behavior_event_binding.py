@@ -51,6 +51,17 @@ def select_behavior_callback(router, behavior, candidates):
 
     context = {key: behavior.get(key) for key in (
         "behavior_id", "intent", "trigger", "effects", "state_reads", "state_writes")}
+    # With exactly one inspected hook, there is no search or ranking problem.
+    # Keep the established single-hook ABI (and one model decision) rather than
+    # issuing a new global-index request that existing callers cannot fulfill.
+    if len(by_event) == 1:
+        only = next(iter(by_event))
+        decision = _select(router, {**context, "verified_listeners": candidates},
+                           "event_binding", [only], "select_verified_fabric_event")
+        if decision.get("event_binding") != only:
+            raise HostEventBindingError(behavior, decision)
+        return by_event[only]
+
     # Choose from a compact, *global* index before grouping. The group-first
     # search loses the correct event when an earlier owner is misclassified.
     # Supplying just verified IDs and callback input types is much smaller than
