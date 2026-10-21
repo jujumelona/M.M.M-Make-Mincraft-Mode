@@ -239,3 +239,32 @@ def test_new_scalar_owner_accepts_project_defined_runtime_identity():
     )
     assert result.structured_sections["state_model"]["specification"]["variables"][-1]["owner"] == "guild"
     assert "guild" in router.calls[1][1]["properties"]["owner"]["enum"]
+
+
+
+def test_prose_cannot_become_custom_owner_or_enter_owner_choices():
+    prior = [variable("credits"), variable("territory")]
+    prior[0]["owner"] = "available planets"
+    prior[1]["owner"] = "player_currency/resources"
+    router = BindingRouter([
+        {"binding": "new_scalar_state"}, {"owner": "server"},
+        {"type": "int"}, {"unit": "charge"}, {"default": "0"},
+        {"domain": "nonnegative"},
+    ])
+    result = reconcile_behavior_state(
+        router, plan(writes=["charge"], variables=prior),
+    )
+    allowed = router.calls[1][1]["properties"]["owner"]["enum"]
+    assert "available planets" not in allowed
+    assert "player_currency/resources" not in allowed
+    assert result.structured_sections["state_model"]["specification"]["variables"][-1]["owner"] == "server"
+
+
+def test_replayed_description_owner_is_invalid():
+    from minecraft_mod_ai.construction_behavior_state import _validate_replayed_binding
+    with pytest.raises(ValueError, match="BEHAVIOR_STATE_OWNER_CONTROL_LABEL"):
+        _validate_replayed_binding("charge", {
+            "original_name": "charge", "binding": "new_scalar_state",
+            "state_name": "charge",
+            "variable": {"name": "charge", "owner": "available planets"},
+        }, [variable()])
