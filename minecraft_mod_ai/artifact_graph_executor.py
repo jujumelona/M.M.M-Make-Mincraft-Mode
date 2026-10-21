@@ -91,6 +91,7 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
     if not (root / "src/main/resources/fabric.mod.json").is_file():
         return
     approved = []
+    by_path = {}
     for job, receipt in zip(jobs, receipts, strict=True):
         if not job.canonical_leaf or not isinstance(receipt, dict):
             continue
@@ -119,16 +120,23 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
         resolved = path.resolve()
         if not resolved.is_relative_to(root):
             raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_OUTSIDE_WORKSPACE")
-        # The materialization receipt proves the exact byte sequence the
-        # producing job wrote. A changed or unstamped file cannot silently
-        # become a new Fabric startup entrypoint.
+        by_path.setdefault(resolved, []).append((job.canonical_leaf, materialization))
+
+    for resolved, contributions in by_path.items():
+        # Anchored registries compose several jobs into one compilation unit.
+        # Verify every intermediate receipt reaches the actual final bytes via
+        # other validated, same-path Java patches, independent of finish order.
         import hashlib
-        checksum = materialization.get("after_sha256")
-        if (not isinstance(checksum, str) or len(checksum) != 64
-                or not resolved.is_file()
-                or hashlib.sha256(resolved.read_bytes()).hexdigest() != checksum):
+
+        from .artifact_java_materialization import verify_java_patch_chain
+        if not resolved.is_file():
             raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED")
-        approved.append((resolved.relative_to(root).as_posix(), job.canonical_leaf))
+        final_hash = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if not verify_java_patch_chain([row for _, row in contributions], final_hash):
+            raise ArtifactGraphError(
+                "ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED: " + resolved.relative_to(root).as_posix())
+        approved.extend((resolved.relative_to(root).as_posix(), leaf)
+                        for leaf, _ in contributions)
     if approved:
         from .host_fabric_initializer_wiring import wire_completed_fabric_java
         wire_completed_fabric_java(root, approved)
@@ -163,7 +171,8 @@ def _generation_parallelism(job_count: int, router: Any) -> int:
     """
     workers = _parallelism(job_count)
     from .model_concurrency import (
-        router_native_model_parallelism, router_owns_native_model,
+        router_native_model_parallelism,
+        router_owns_native_model,
     )
     if router_owns_native_model(router, role="coder"):
         workers = min(workers, router_native_model_parallelism(router, role="coder"))
