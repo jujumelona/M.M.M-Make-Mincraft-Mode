@@ -115,3 +115,64 @@ def test_only_assigning_a_local_value_cannot_complete_a_gameplay_effect():
     with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
         author_callback_body(router, [], data_name="local_only", frame=frame("boolean"),
                              effect_receipt=True)
+
+
+
+def test_event_callback_registry_cannot_be_invoked_by_condition():
+    # Captured from a failed Minecraft/Fabric compiler run: a listener's
+    # predicate must not recursively call its own event dispatcher.
+    bad = ("net.fabricmc.fabric.api.event.player.UseItemCallback.EVENT"
+           ".interact(player, level, interactionHand)"
+           " == net.minecraft.world.InteractionResult.ResultType.PASS")
+    with pytest.raises(ValueError, match="CALLBACK_PREDICATE_EVENT_DISPATCH"):
+        parse_expression(bad, predicate=True)
+
+
+def test_event_registry_mistake_is_rejected_and_an_actual_condition_is_selected():
+    bad = "example.UseItemCallback.EVENT.interact(player, level, hand) == PASS"
+    router = OperationRouter([
+        {"expression": bad},
+        {"expression": "target.active"},
+    ])
+    result = author_callback_body(
+        router, [], data_name="event_condition",
+        frame=frame("boolean"), predicate=True,
+    )
+    assert "return target.active;" in result
+    assert "EVENT" not in result
+    correction = json.loads(router.calls[1][2][-1]["content"])
+    assert "CALLBACK_PREDICATE_EVENT_DISPATCH" in correction["last_error"]
+
+
+def test_compiler_failed_predicate_cannot_be_reaccepted_unchanged():
+    original = frame("boolean")["prefix"] + "return target.active;" + frame()["suffix"]
+    router = OperationRouter([
+        {"expression": "target.active"},
+        {"expression": "target.ready"},
+    ])
+    revised = author_callback_body(
+        router, [], data_name="repair_predicate", frame=frame("boolean"),
+        predicate=True, rejected_compiler_member=original,
+        compiler_diagnostic="Demo.java:4: error: cannot find symbol target.active",
+    )
+    assert "target.ready" in revised
+    assert revised != original
+    retry = json.loads(router.calls[1][2][-1]["content"])
+    assert "CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED" in retry["last_error"]
+    assert "cannot find symbol" in retry["javac_diagnostic"]
+    assert retry["javac_rejected_member"] == original
+
+
+def test_compiler_failed_effect_cannot_be_reaccepted_unchanged():
+    original = frame()["prefix"] + "target.mutate(1);" + frame()["suffix"]
+    router = OperationRouter([
+        {"action": "call"},
+        {"receiver": "target", "method": "mutate", "arguments": ["1"]},
+        {"action": "complete"},
+    ])
+    with pytest.raises(ValueError, match="CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED"):
+        author_callback_body(
+            router, [], data_name="repair_effect", frame=frame(),
+            rejected_compiler_member=original,
+            compiler_diagnostic="Demo.java:4: error: cannot find symbol mutate(int)",
+        )
