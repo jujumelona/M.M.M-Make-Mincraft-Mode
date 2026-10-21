@@ -130,7 +130,7 @@ def test_malformed_outer_json_is_repaired_and_java_is_ast_validated():
 
 def test_json_repair_cannot_accept_invalid_java():
     with pytest.raises(ValueError):
-        assemble_java_implementation('{"implementation": "return ;"', FRAME)
+        assemble_java_implementation('{"implementation": "if () return true;"', FRAME)
 
 
 def test_json_repair_cannot_add_other_fields():
