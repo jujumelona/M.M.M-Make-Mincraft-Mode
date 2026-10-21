@@ -104,9 +104,11 @@ def focused_java_correction_messages(
         if "response_source_frame" in payload:
             selected = payload
         if isinstance(payload.get("inspected_target_api"), dict):
+            from .construction_file_api_evidence import scoped_body_api_records
             evidence = payload["inspected_target_api"]
             context["selected_target_api"] = evidence.get("target_api", ())
             context["typed_input_producers"] = evidence.get("typed_input_producers", ())
+            context["class_members"] = scoped_body_api_records(evidence)
         if "materialized_prerequisite_api" in payload:
             context["materialized_prerequisite_api"] = payload["materialized_prerequisite_api"]
         if "host_state_access" in payload:
@@ -120,7 +122,7 @@ def focused_java_correction_messages(
     selected_fields = (
         "requirement", "current_unit_purpose", "member_role", "assigned_behavior",
         "host_signature", "declared_member_api", "declaration_metadata",
-        "verified_event_callback", "implementation_requirements",
+        "verified_event_callback", "callback_input_api", "implementation_requirements",
         "side", "target_path",
     )
     task = {key: selected[key] for key in selected_fields if key in selected}

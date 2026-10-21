@@ -107,6 +107,29 @@ def test_surplus_body_brace_does_not_hide_the_actual_state_abi_failure():
     )
 
 
+def test_focused_retry_keeps_verified_receiver_and_callback_result_contracts():
+    receiver = {"verified_class": "example.Player", "members": [{
+        "owner": "example.Player", "name": "getUUID", "parameters": [],
+        "return_type": "java.util.UUID", "kind": "METHOD",
+    }]}
+    callback = {"verified_class": "example.Result", "members": [{
+        "owner": "example.Result", "name": "PASS", "kind": "FIELD",
+        "return_type": "example.Result", "static": True,
+    }]}
+    messages = [{"role": "user", "content": json.dumps({
+        "inspected_target_api": {"target_api": [{
+            "owner": "example.Player", "name": "Player", "kind": "CLASS",
+        }], "class_members": [receiver]},
+    })}, {"role": "user", "content": json.dumps({
+        "response_source_frame": FRAME, "callback_input_api": [callback],
+    })}]
+    focused = focused_java_correction_messages(messages, frame=FRAME,
+        response='{"implementation":"return bad;"}', diagnostic="cannot find symbol")
+    payload = json.loads(focused[-1]["content"])
+    assert payload["callback_input_api"] == [callback]
+    assert payload["api_evidence"]["class_members"][0]["members"] == receiver["members"]
+
+
 def test_focused_correction_receives_state_error_after_host_brace_normalization(monkeypatch):
     from test_first_pass_java_data_transport import DataRouter
 

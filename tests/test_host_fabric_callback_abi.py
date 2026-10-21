@@ -3,9 +3,8 @@ import json
 
 import pytest
 
-from minecraft_mod_ai.host_fabric_callback_abi import callback_interfaces
 from minecraft_mod_ai.first_pass_java_source import compose_first_pass_java
-
+from minecraft_mod_ai.host_fabric_callback_abi import callback_interfaces
 
 OWNER = "net.fabricmc.fabric.api.event.player.UseBlockCallback"
 EVENT = "net.fabricmc.fabric.api.event.Event"
@@ -104,6 +103,30 @@ def test_host_does_not_invent_callback_when_no_real_trigger_matches():
             construction_context={"symbols": INDEX, "authoring_contract": {}},
             behaviors=BEHAVIORS,
         )
+
+
+def test_callback_body_receives_exact_input_and_result_apis_when_text_search_is_empty():
+    index = dict(INDEX)
+    player, level, hand, hit = PARAMETERS
+    result = "net.minecraft.world.InteractionResult"
+    for owner in [player, level, hand, hit, result]:
+        index[owner] = {"kind": "CLASS", "owner": owner,
+                        "name": owner.rsplit(".", 1)[-1], "access": 1}
+    index["player.id"] = {"kind": "METHOD", "owner": player, "name": "getUUID",
+                           "parameters": [], "return_type": "java.util.UUID", "access": 1}
+    index["result.pass"] = {"kind": "FIELD", "owner": result, "name": "PASS",
+                             "return_type": result, "access": 25, "static": True}
+    index["private"] = {"kind": "METHOD", "owner": player, "name": "privateHelper",
+                         "parameters": [], "return_type": "void", "access": 2}
+    router = EventRouter()
+    compose_first_pass_java(router, SPEC, [],
+        construction_context={"symbols": index, "authoring_contract": {}}, behaviors=BEHAVIORS)
+    apis = router.source_tasks[0]["callback_input_api"]
+    by_class = {record["verified_class"]: record for record in apis}
+    assert {player, level, hand, hit, result} <= by_class.keys()
+    assert any(member["name"] == "getUUID" for member in by_class[player]["members"])
+    assert not any(member["name"] == "privateHelper" for member in by_class[player]["members"])
+    assert any(member["name"] == "PASS" for member in by_class[result]["members"])
 
 
 

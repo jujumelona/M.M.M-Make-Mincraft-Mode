@@ -31,6 +31,49 @@ def prompt_symbol_record(row):
     return answer
 
 
+def scoped_body_api_records(evidence):
+    """Keep selected calls and the callable contracts of selected class types.
+
+    A CLASS anchor is not a method named after the class. Filtering its
+    members by (owner, CLASS, name) erased every actual method and all builder
+    dependencies. Follow only inspected type edges within this bounded view.
+    """
+    selected = {(row.get('owner'), row.get('kind'), row.get('name'))
+                for row in evidence.get('target_api', ()) if isinstance(row, dict)}
+    full_owners = {owner for owner, kind, _ in selected if kind == 'CLASS'}
+    records = {row.get('verified_class'): row for row in evidence.get('class_members', ())
+               if isinstance(row, dict) and isinstance(row.get('verified_class'), str)}
+    pending = list({owner for owner, _, _ in selected})
+    answer, seen = [], set()
+    while pending:
+        owner = pending.pop(0)
+        if owner in seen or owner not in records:
+            continue
+        seen.add(owner)
+        entry = records[owner]
+        members = [row for row in entry.get('members', ()) if isinstance(row, dict)
+                   and (owner in full_owners or
+                        (row.get('owner'), row.get('kind'), row.get('name')) in selected)]
+        if not members and owner not in full_owners:
+            continue
+        narrow = {**entry, 'members': members, 'body_context_selects_only_target_api': True}
+        answer.append(narrow)
+        for row in members:
+            types = [row.get('return_type', ''), *row.get('parameters', ()),
+                     row.get('generic_return_type', ''), *row.get('generic_parameters', ())]
+            for type_ in types:
+                for name in re.findall(r'[A-Za-z_$][\w$]*(?:[./][A-Za-z_$][\w$]*)*', str(type_)):
+                    name = canonical_type_name(name)
+                    if name in records and name not in full_owners:
+                        full_owners.add(name)
+                        # A selected method's own return type can require the
+                        # rest of its verified class contract too.
+                        seen.discard(name)
+                        answer = [item for item in answer if item['verified_class'] != name]
+                        pending.append(name)
+    return sorted(answer, key=lambda row: row['verified_class'])
+
+
 class FileAPIEvidence:
     def __init__(self, symbols, *, target_path, owner='', by_owner=None):
         self.symbols = symbols

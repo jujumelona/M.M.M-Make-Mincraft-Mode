@@ -245,27 +245,8 @@ def _scope_host_implementation_messages(
             evidence = payload.get("inspected_target_api")
             if isinstance(evidence, dict):
                 evidence = dict(evidence)
-                selected = {
-                    (row.get("owner"), row.get("kind"), row.get("name"))
-                    for row in evidence.get("target_api", ())
-                    if isinstance(row, dict)
-                }
-                narrowed = []
-                for entry in evidence.get("class_members", ()):
-                    if not isinstance(entry, dict):
-                        continue
-                    members = [
-                        member for member in entry.get("members", ())
-                        if isinstance(member, dict)
-                        and (member.get("owner"), member.get("kind"),
-                             member.get("name")) in selected
-                    ]
-                    if members:
-                        narrow = dict(entry)
-                        narrow["members"] = members
-                        narrow["body_context_selects_only_target_api"] = True
-                        narrowed.append(narrow)
-                evidence["class_members"] = narrowed
+                from .construction_file_api_evidence import scoped_body_api_records
+                evidence["class_members"] = scoped_body_api_records(evidence)
                 payload["inspected_target_api"] = evidence
         order = payload.get("feature_work_order")
         if isinstance(order, dict):
@@ -296,6 +277,7 @@ def compose_first_pass_java(
     package_name, class_name = identity
 
     host_mode = construction_context is not None
+    callback_api_index = None
     task = {
         "package": package_name,
         "class": class_name,
@@ -640,6 +622,7 @@ def compose_first_pass_java(
 
     finished: list[str] = []
     def implement(kind, name, parts, *, owner, action, purpose):
+        nonlocal callback_api_index
         if kind in {"class", "record", "enum"}:
             for index, child in enumerate(parts["fields"], 1):
                 implement("field", child["name"], child, owner=name, action=f"{action}_field_{index}", purpose=purpose)
@@ -721,6 +704,20 @@ def compose_first_pass_java(
             # an invitation to generate another complete compilation unit.
             "previous_complete_members": finished[-3:],
         }
+        if host_mode and unit_event:
+            # Free-text gameplay retrieval can have no target matches. The
+            # selected real callback still provides exact receiver and return
+            # types; their checked callable APIs must reach the body writer.
+            if callback_api_index is None:
+                from .construction_file_api_evidence import FileAPIEvidence
+                callback_api_index = FileAPIEvidence(
+                    construction_context.get("symbols") or {},
+                    target_path=task["target_path"], owner=package_name + "." + class_name,
+                )
+            body_task["callback_input_api"] = callback_api_index.records(
+                [*unit_event.get("parameters", ()), unit_event.get("return_type", "")],
+                intent=purpose,
+            )
         if not host_mode:
             # Without the host's initial evidence payload this is the only
             # transport of prerequisite sources.

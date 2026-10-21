@@ -15,7 +15,6 @@ from minecraft_mod_ai.first_pass_java_source import (
     compose_first_pass_java,
 )
 
-
 SPEC = {
     "language": "java",
     "target_path": "src/main/java/example/client/Gate.java",
@@ -388,7 +387,10 @@ def test_host_body_payload_does_not_duplicate_full_verified_source():
 
 def test_member_body_scope_keeps_verified_api_without_unrelated_behaviors():
     import json
-    from minecraft_mod_ai.first_pass_java_source import _scope_host_implementation_messages
+
+    from minecraft_mod_ai.first_pass_java_source import (
+        _scope_host_implementation_messages,
+    )
     own = {"behavior_id": "ship.build", "intent": "Assemble ship",
            "effects": "Add section", "state_reads": ["sections"],
            "state_writes": ["sections"]}
@@ -427,7 +429,8 @@ def test_java_field_metadata_repeated_host_symbol_is_parsed_as_a_type():
     # { "visibility":"private", "static":false, "final":false,
     #   "type":"int mmmMember1" }.
     from minecraft_mod_ai.first_pass_java_declarations import (
-        canonicalize_field_type_metadata, validate_declaration_metadata,
+        canonicalize_field_type_metadata,
+        validate_declaration_metadata,
     )
     parts = {"visibility": "private", "static": False, "final": False,
              "type": "int mmmMember1"}
@@ -437,9 +440,39 @@ def test_java_field_metadata_repeated_host_symbol_is_parsed_as_a_type():
     validate_declaration_metadata("field", "mmmMember1", parsed, owner="Demo")
 
 
+def test_body_scope_retains_callable_contracts_of_selected_class_anchors():
+    import json
+
+    from minecraft_mod_ai.first_pass_java_source import (
+        _scope_host_implementation_messages,
+    )
+
+    root, nested, unrelated = "proof.Builder", "proof.Key", "unrelated.Builder"
+    records = [
+        {"verified_class": root, "members": [{"owner": root, "kind": "METHOD",
+            "name": "build", "parameters": [nested], "return_type": "proof.Result"}]},
+        {"verified_class": nested, "members": [{"owner": nested, "kind": "CONSTRUCTOR",
+            "name": "<init>", "parameters": [], "return_type": nested}]},
+        {"verified_class": unrelated, "members": [{"owner": unrelated, "kind": "METHOD",
+            "name": "build", "parameters": [], "return_type": "void"}]},
+    ]
+    payload = {"assigned_behaviors": [{"behavior_id": "one"}], "inspected_target_api": {
+        "target_api": [{"owner": root, "kind": "CLASS", "name": "Builder"}],
+        "class_members": records,
+    }}
+    messages = [{"role": "user", "content": json.dumps(payload)}]
+    result = _scope_host_implementation_messages(
+        messages, behavior={"behavior_id": "one"}, purpose="Build a verified value", for_body=True)
+    actual = json.loads(result[0]["content"])["inspected_target_api"]["class_members"]
+    assert {record["verified_class"] for record in actual} == {root, nested}
+    assert next(record for record in actual if record["verified_class"] == root)["members"][0]["name"] == "build"
+    assert payload["inspected_target_api"]["class_members"] == records
+
+
 def test_java_field_metadata_never_guesses_an_unrelated_identifier():
     from minecraft_mod_ai.first_pass_java_declarations import (
-        canonicalize_field_type_metadata, validate_declaration_metadata,
+        canonicalize_field_type_metadata,
+        validate_declaration_metadata,
     )
     parts = {"visibility": "private", "static": False, "final": False,
              "type": "int wrongName"}
@@ -552,7 +585,10 @@ def test_plain_registry_owner_header_cannot_be_model_invented():
 
 def test_body_member_evidence_is_selected_without_repeating_entire_owners():
     import json
-    from minecraft_mod_ai.first_pass_java_source import _scope_host_implementation_messages
+
+    from minecraft_mod_ai.first_pass_java_source import (
+        _scope_host_implementation_messages,
+    )
     behavior = {"behavior_id": "combat.attack", "intent": "Fight aliens"}
     unrelated = [{"kind": "METHOD", "owner": "javax.tools.StandardLocation",
                   "name": "locationFor", "parameters": ["java.lang.String"]}]
