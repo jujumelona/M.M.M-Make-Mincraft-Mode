@@ -63,6 +63,24 @@ def parse_one_java_statement(fragment: str) -> str:
     return fragment.strip()
 
 
+
+def _top_level_terminates_method(fragment: str) -> bool:
+    """Stop after an unconditional, top-level return or throw.
+
+    A return nested in an if/loop is conditional, so the caller may continue.
+    The parser, not text prefix detection, owns the distinction.
+    """
+    _, root = _parse("class MmmStatementFrame { void f() {\n" + fragment + "\n} }")
+    owner = next(n for n in root.named_children if n.type == "class_declaration")
+    method = next(n for n in owner.child_by_field_name("body").named_children
+                  if n.type == "method_declaration")
+    statements = [n for n in method.child_by_field_name("body").named_children
+                  if n.type not in _COMMENT_NODES]
+    return len(statements) == 1 and statements[0].type in {
+        "return_statement", "throw_statement",
+    }
+
+
 def _executable_effect(source: str) -> bool:
     """Prevent an effects handler from being admitted as an empty return stub."""
     _, root = _parse("class MmmEffectFrame { void f() {\n" + source + "\n} }")
@@ -94,7 +112,13 @@ def author_java_callback_statements(
     """
     from .construction_java_context import scoped_java_member_messages
 
-    scoped = scoped_java_member_messages(messages, frame)
+    scoped = list(scoped_java_member_messages(messages, frame))
+    # This protocol does NOT request a free-form "implementation" field.
+    # Drop the previous whole-member system directive, which contradicted the
+    # closed statement schema and biased small models toward no-op returns.
+    scoped = [message for message in scoped
+              if not (message.get("role") == "system"
+                      and '"implementation"' in message.get("content", ""))]
     statements: list[str] = []
     for index in range(_MAX_MEMBER_STATEMENTS):
         last_error = ""
@@ -112,7 +136,13 @@ def author_java_callback_statements(
                     "and event registration are owned by the host. Never output "
                     "method signatures, imports, nested class declarations or "
                     "additional independent statements. Do not invent state "
-                    "accessors or replace one state with another."
+                    "accessors or replace one state with another. "
+                    "For a behavior EFFECT handler, do not return PASS, FAIL, "
+                    "SUCCESS or any other result before implementing the "
+                    "specific effect using verified APIs. A return is not an "
+                    "effect. A top-level return TERMINATES the method: the host "
+                    "will not ask for any further statements after it. "
+                    "Do not repeat a previous statement."
                 )},
                 {"role": "user", "content": json.dumps({
                     "immutable_signature": {
@@ -147,6 +177,17 @@ def author_java_callback_statements(
                     source, frame, frame["prefix"], frame["suffix"])
             try:
                 statement = parse_one_java_statement(candidate)
+                if statement in statements:
+                    raise ValueError(
+                        "JAVA_CALLBACK_NO_SEMANTIC_PROGRESS: duplicate statement; "
+                        "choose a different verified action or finish")
+                terminal = _top_level_terminates_method(statement)
+                if (terminal and require_effect
+                        and not _executable_effect("\n".join(statements))):
+                    raise ValueError(
+                        "JAVA_CALLBACK_RETURN_BEFORE_EFFECT: a callback result "
+                        "does not implement the assigned gameplay effect; author "
+                        "its real world/state mutation before returning")
                 # Reject a raw state accessor mistake before the next generated
                 # statement; never allow it to drift into a different accessor.
                 trial = frame["prefix"] + "\n".join([*statements, statement]) + frame["suffix"]
@@ -165,6 +206,10 @@ def author_java_callback_statements(
                     raise ValueError("JAVA_CALLBACK_ATOMIC_STATEMENT_INVALID: " + last_error) from exc
                 continue
             statements.append(statement)
+            if terminal:
+                source = frame["prefix"] + "\n".join(statements) + frame["suffix"]
+                return validate_generated_java_source(
+                    source, frame, frame["prefix"], frame["suffix"])
             break
     raise ValueError(
         "JAVA_CALLBACK_STATEMENT_PLAN_TOO_LARGE: decompose the assigned "
