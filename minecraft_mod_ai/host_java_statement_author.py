@@ -56,6 +56,7 @@ def parse_one_java_statement(fragment: str) -> str:
     if statement.type in {
         "class_declaration", "interface_declaration", "enum_declaration",
         "record_declaration", "method_declaration",
+        "import_declaration", "package_declaration", "module_declaration",
     }:
         raise ValueError("JAVA_STATEMENT_HOST_DECLARATION_OWNED")
     # The parser's statement starts after the wrapper. Accept whitespace and

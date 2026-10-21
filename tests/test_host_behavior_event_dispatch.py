@@ -46,18 +46,18 @@ class ConditionRouter:
             if data_name == "select_verified_fabric_event_owner":
                 return {"event_owner": TICKS}
             return {"event_binding": TICKS + "#END_SERVER_TICK"}
-        assert "_statement_" in data_name
-        assert set(parameters["properties"]) == {"statement"}
         member = json.loads(messages[1]["content"])
-        index = int(data_name.split("_statement_")[1].split("_")[0])
-        if index == 0:
+        if "_predicate_try_" in data_name or "_operation_0_try_" in data_name:
             self.tasks.append(member)
-        statement = (
-            "return minecraftServer.active;"
-            if member["member_role"] == "test_callback_condition"
-            else "minecraftServer.effects++;"
-        )
-        return {"statement": statement if index == 0 else ""}
+        if "_predicate_try_" in data_name:
+            return {"expression": "minecraftServer.active"}
+        if "_operation_0_try_" in data_name:
+            return {"action": "assign"}
+        if "_operation_0_assign_try_" in data_name:
+            return {"target": "minecraftServer.effects", "operator": "+=", "value": "1"}
+        if "_operation_1_try_" in data_name:
+            return {"action": "complete"}
+        raise AssertionError(data_name)
 
 
 def compose(router, index=None):

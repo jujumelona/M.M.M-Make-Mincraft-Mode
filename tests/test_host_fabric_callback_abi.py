@@ -59,20 +59,22 @@ class EventRouter:
             }
             return {"event_binding": "UNBOUND" if self.selected == "UNBOUND"
                     else self.selected + "#EVENT"}
-        assert data_name.startswith("submit_java_implementation_1_statement_")
-        assert set(parameters["properties"]) == {"statement"}
-        index = int(data_name.split("_statement_")[1].split("_")[0])
+        if data_name.startswith("select_callback_result_"):
+            return {"expression": "net.minecraft.world.InteractionResult.PASS"}
         member = json.loads(messages[1]["content"])
-        if index == 0:
+        if "_predicate_try_" in data_name or "_operation_0_try_" in data_name:
             self.source_tasks.append(member)
             assert "Player player" in member["immutable_signature"]["prefix"]
             assert "Level level" in member["immutable_signature"]["prefix"]
-        statements = [
-            "System.out.println(player);",
-            "return net.minecraft.world.InteractionResult.PASS;",
-            "",
-        ]
-        return {"statement": statements[index]}
+        if "_predicate_try_" in data_name:
+            return {"expression": "player != null"}
+        if "_operation_0_call_try_" in data_name:
+            return {"receiver": "System.out", "method": "println", "arguments": ["player"]}
+        if "_operation_0_try_" in data_name:
+            return {"action": "call"}
+        if "_operation_1_try_" in data_name:
+            return {"action": "complete"}
+        raise AssertionError(data_name)
 
 
 def test_actual_interface_field_and_sam_are_required():
@@ -96,11 +98,17 @@ def test_host_registers_callback_with_method_reference_and_exact_abi():
     assert "private net.minecraft.world.InteractionResult handleBehavior" in source
     assert "Player player" in source
     assert source.count("void onInitialize()") == 1
-    assert len(router.source_tasks) == 1
+    assert len(router.source_tasks) == 2
+    assert "private boolean matchesBehavior" in source
+    assert "private void applyBehavior" in source
     assert router.calls == [
         "select_verified_fabric_event",
-        "submit_java_implementation_1_statement_0_try_0",
-        "submit_java_implementation_1_statement_1_try_0",
+        "submit_java_implementation_1_predicate_try_0",
+        "submit_java_implementation_2_operation_0_try_0",
+        "submit_java_implementation_2_operation_0_call_try_0",
+        "submit_java_implementation_2_operation_1_try_0",
+        "select_callback_result_unhandled",
+        "select_callback_result_handled",
     ]
     assert router.source_tasks[0]["verified_event_callback"]["event_interface"] == OWNER
 

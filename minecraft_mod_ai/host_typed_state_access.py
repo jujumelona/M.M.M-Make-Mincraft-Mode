@@ -107,7 +107,7 @@ def state_work_order_scope(work_order, contracts):
         "contract": (
             "Only declared accessors are callable. An undeclared work-order "
             "state name is not an invitation to invent an accessor or "
-            "overwrite a different state key. Resolve persistent state "
+            "overwrite an unrelated state key. Resolve persistent state "
             "through the canonical state model; use checked event/world "
             "inputs when behavior explicitly permits it."
         ),

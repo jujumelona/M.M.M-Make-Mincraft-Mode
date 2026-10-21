@@ -452,7 +452,7 @@ def compose_first_pass_java(
                 behavior_id.encode("utf-8")).hexdigest()[:20]
             event = bound_events.get(behavior_id)
             dispatch = {}
-            if event and event["return_type"] == "void":
+            if event:
                 condition = "matchesBehavior" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
                 effect = "applyBehavior" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
                 units.extend([
@@ -570,6 +570,7 @@ def compose_first_pass_java(
                 names.append({"type": type_name, "name": name_arg})
             parts = {"visibility": "private", "static": False,
                      "return_type": ("boolean" if unit.get("host_condition_behavior")
+                                     else "void" if unit.get("host_effect_behavior")
                                      else event_callback["return_type"]),
                      "type_parameters": ", ".join(event_callback.get("type_parameters") or []),
                      "parameters": names, "throws": list(event_callback.get("throws") or []),
@@ -653,9 +654,17 @@ def compose_first_pass_java(
             parts["source"] = frame["prefix"] + statement + frame["suffix"]
             return
         if host_mode and host_unit.get("host_condition_method"):
+            from .host_callback_dispatch import (
+                render_callback_dispatch, select_callback_results,
+            )
             arguments = ", ".join(param["name"] for param in parts["parameters"])
-            statement = ("if (this." + host_unit["host_condition_method"] + "(" + arguments + ")) {\n"
-                         + "    this." + host_unit["host_effect_method"] + "(" + arguments + ");\n}")
+            results = select_callback_results(
+                router, unit_event, (construction_context or {}).get("symbols") or {},
+            )
+            statement = render_callback_dispatch(
+                host_unit["host_condition_method"], host_unit["host_effect_method"],
+                arguments, results,
+            )
             parts["source"] = frame["prefix"] + statement + frame["suffix"]
             return
         # The surrounding user message already contains the full inspected API
@@ -762,18 +771,14 @@ def compose_first_pass_java(
             {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
         ]
         if host_mode and unit_event and owned_behavior_id and kind == "method":
-            # Feature callback logic is a sequence of Tree-sitter-validated
-            # statements, not one free-form Java source blob. The host already
-            # owns the method signature, listener registration and lifecycle.
-            # Every source fragment has a closed schema and a durable journal.
-            from .host_java_statement_author import author_java_callback_statements
+            # The small coder chooses semantic operations and expression
+            # values. The host compiles all statement/control-flow syntax;
+            # effects can never emit a callback result or return statement.
+            from .host_callback_body import author_callback_body
 
-            parts["source"] = author_java_callback_statements(
+            parts["source"] = author_callback_body(
                 router, body_messages, data_name=action, frame=frame,
-                require_effect=bool(
-                    selected_host_unit.get("host_effect_behavior")
-                    or selected_host_unit.get("host_handler_behavior")
-                ),
+                predicate=bool(selected_host_unit.get("host_condition_behavior")),
             )
         else:
             parts["source"] = router.generate_java_source("coder", body_messages,
