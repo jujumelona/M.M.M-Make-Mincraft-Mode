@@ -85,6 +85,45 @@ def parse_expression(value: str, *, predicate=False) -> str:
     return value.strip()
 
 
+def parse_initializer(value: str, *, host_local: str) -> str:
+    """Accept an expression or the exact single-local Java declaration form.
+
+    The host has already chosen the local variable identity. A model can
+    sometimes emit a complete typed declaration despite a value-only schema.
+    Parse it structurally to recover its initializer instead of prompting the
+    same model twice with an unworkable source-string correction.
+    """
+    try:
+        return parse_expression(value)
+    except ValueError as expression_error:
+        try:
+            raw, root = _parse("class MmmInitializer { void run() {\n"
+                               + value + "\n} }")
+        except ValueError:
+            raise expression_error
+        owner = next((n for n in root.named_children if n.type == "class_declaration"), None)
+        if owner is None:
+            raise expression_error
+        body = owner.child_by_field_name("body")
+        methods = [n for n in body.named_children if n.type == "method_declaration"]
+        if len(methods) != 1:
+            raise expression_error
+        statements = [n for n in methods[0].child_by_field_name("body").named_children
+                      if n.type not in {"line_comment", "block_comment"}]
+        if len(statements) != 1 or statements[0].type != "local_variable_declaration":
+            raise expression_error
+        variables = [n for n in statements[0].named_children
+                     if n.type == "variable_declarator"]
+        if len(variables) != 1:
+            raise expression_error
+        name = variables[0].child_by_field_name("name")
+        initializer = variables[0].child_by_field_name("value")
+        if (name is None or _text(raw, name) != host_local
+                or initializer is None):
+            raise expression_error
+        return parse_expression(_text(raw, initializer))
+
+
 def _same_compiled_member(candidate, original):
     """Compare Java syntax tokens, not whitespace, for rejected candidates."""
     return class_body_token_identity(candidate) == class_body_token_identity(original)
@@ -293,7 +332,9 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                 value = parse_expression(row["value"])
                 code = f"{target} {row['operator']} {value};"
             else:
-                expression = parse_expression(row["expression"], predicate=action in {"if", "while"})
+                expression = (parse_initializer(row["expression"], host_local=new_local)
+                              if action == "declare" else parse_expression(
+                                  row["expression"], predicate=action in {"if", "while"}))
                 if action == "declare":
                     code = f"var {new_local} = {expression};"
                 elif action == "foreach":
