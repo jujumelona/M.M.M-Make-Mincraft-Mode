@@ -107,7 +107,8 @@ class RuleAuthor:
                 score = sum(word in text for word in words)
                 if not score:
                     continue
-                if kind != "CONSTRUCTOR" and not row.get("static"):
+                if (kind != "CONSTRUCTOR"
+                        and not (row.get("static") or int(row.get("access", 0)) & 8)):
                     if not any(self.p.checker.assignable(value["type"], row["owner"])
                                for key2, value in self.p.values.items() if key2 in self.p.active):
                         continue
