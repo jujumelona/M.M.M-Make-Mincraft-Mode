@@ -356,3 +356,30 @@ def test_callback_abi_retains_baseline_getter_and_return_constant_without_prompt
     assert set(by_owner) == set(api.classes)
     assert [row["name"] for row in by_owner["example.Player"]["members"]] == ["getUUID"]
     assert [row["name"] for row in by_owner["example.Result"]["members"]] == ["PASS"]
+
+
+
+def test_callback_api_cap_does_not_starve_later_input_owner():
+    from minecraft_mod_ai.construction_file_api_evidence import FileAPIEvidence
+    a, b = "example.A", "example.B"
+    api = FileAPIEvidence.__new__(FileAPIEvidence)
+    api.classes = {a: a, b: b}
+    api.symbols = {name: {"kind": "CLASS", "owner": name,
+                          "access": 1, "name": name.rsplit(".", 1)[-1]}
+                   for name in (a, b)}
+    api._accessible = lambda _name: True
+    options = {a: [
+        (str(i), {"kind": "METHOD", "owner": a,
+                  "name": "getItem" + str(i), "access": 1,
+                  "return_type": "int", "parameters": []})
+        for i in range(100)],
+        b: [("unique", {"kind": "METHOD", "owner": b,
+                        "name": "getWorldTime", "access": 1,
+                        "return_type": "long", "parameters": []})],
+    }
+    api._member_options = lambda name: options[name]
+    result = api.callback_member_records([a, b], intent="No matching operation",
+                                         limit=2)
+    assert len(result) == 2
+    assert len(result[0]["members"]) == 1
+    assert [x["name"] for x in result[1]["members"]] == ["getWorldTime"]
