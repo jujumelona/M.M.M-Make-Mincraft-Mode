@@ -188,7 +188,7 @@ def validate_behavior_state_provenance(source: str, contracts, behavior) -> None
             permitted["readState_"].add(name)
 
     owner_names = {str(row["owner"]) for row in contracts}
-    owner_names.update(name.rsplit(".", 1)[-1] for name in owner_names)
+    owner_names.update({name.rsplit(".", 1)[-1] for name in tuple(owner_names)})
     raw, root = _parse("class MmmStateProvenance {\n" + source + "\n}")
     pending = [root]
     while pending:
