@@ -263,7 +263,6 @@ def test_author_can_narrow_a_computed_clock_and_construct_typed_null():
 
 
 def test_rule_author_can_build_new_rhs_while_old_numeric_operand_exists():
-    import json
     from collections import deque
     from minecraft_mod_ai.host_rule_author import RuleAuthor
 
