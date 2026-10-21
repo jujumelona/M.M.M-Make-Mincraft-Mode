@@ -113,12 +113,20 @@ def author_java_callback_statements(
     from .construction_java_context import scoped_java_member_messages
 
     scoped = list(scoped_java_member_messages(messages, frame))
-    # This protocol does NOT request a free-form "implementation" field.
-    # Drop the previous whole-member system directive, which contradicted the
-    # closed statement schema and biased small models toward no-op returns.
-    scoped = [message for message in scoped
-              if not (message.get("role") == "system"
-                      and '"implementation"' in message.get("content", ""))]
+    # The context projector emits the old whole-member directive. Replace
+    # rather than append it: the model must see ONE consistent transport
+    # contract, with system-first chat template order preserved.
+    scoped = [
+        {"role": "system", "content": (
+            "Author exactly ONE Java statement in an existing host-owned "
+            "method; the JSON field is 'statement', NOT 'implementation'. "
+            "Preserve the original assigned behavior, verified callback ABI "
+            "and state ownership. Do not invent methods, imports or classes."
+        )} if (message.get("role") == "system"
+              and '"implementation"' in message.get("content", ""))
+        else message
+        for message in scoped
+    ]
     statements: list[str] = []
     for index in range(_MAX_MEMBER_STATEMENTS):
         last_error = ""
