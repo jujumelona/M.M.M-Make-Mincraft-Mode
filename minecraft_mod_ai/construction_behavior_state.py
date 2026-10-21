@@ -135,18 +135,7 @@ def _declare_missing_scalar(router, name, context, variables):
     return row
 
 
-def _binding(router, name, uses, variables):
-    # The host already resolves exact canonical aliases. A model deciding
-    # scalar vs runtime observation need not see every unrelated state value.
-    context = {"original_state_reference": name, "required_uses": uses}
-    targets = _canonical_targets(name, variables)
-    if len(targets) > 1:
-        raise ValueError("BEHAVIOR_STATE_CANONICAL_IDENTIFIER_AMBIGUOUS: " + name)
-    if targets:
-        # No model-selected aliases between unrelated canonical scalars.
-        return {"original_name": name, "binding": "canonical_state",
-                "state_name": targets[0],
-                "semantic_status": "host_verified_identifier_match"}
+def _resolve_unbound_state(router, name, uses, context, variables):
     if not any(use["access"] == "state_writes" for use in uses):
         # Without a canonical declaration or writer, a read-only reference has
         # no source for a fabricated stored value. Preserve it as an explicit
@@ -167,6 +156,18 @@ def _binding(router, name, uses, variables):
         row = _declare_missing_scalar(router, name, context, variables)
         result.update(state_name=row["name"], variable=row)
     return result
+
+def _binding(router, name, uses, variables):
+    # Exact canonical ownership is decided by the host, not the model.
+    context = {"original_state_reference": name, "required_uses": uses}
+    targets = _canonical_targets(name, variables)
+    if len(targets) > 1:
+        raise ValueError("BEHAVIOR_STATE_CANONICAL_IDENTIFIER_AMBIGUOUS: " + name)
+    if targets:
+        return {"original_name": name, "binding": "canonical_state",
+                "state_name": targets[0],
+                "semantic_status": "host_verified_identifier_match"}
+    return _resolve_unbound_state(router, name, uses, context, variables)
 
 
 def _rebind_state_stores(plan, sections):
