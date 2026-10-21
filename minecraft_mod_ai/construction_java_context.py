@@ -24,6 +24,102 @@ _CURRENT_MEMBER_FIELDS = (
 )
 
 
+
+def _callback_type_api(current: Mapping[str, Any]) -> tuple[list[dict], set[str]]:
+    """Project only exact callable ABI for this member's Fabric callback.
+
+    The symbol index/Gradle compiler remain authoritative. This is a read-only
+    projection, NOT a source-code rewrite or guessing a class from natural
+    language. Discard unrelated nested owner catalogues and method metadata
+    that often prompt small coders to emit Java imports instead of statements.
+    """
+    event = current.get("verified_event_callback")
+    records = current.get("callback_input_api")
+    if not isinstance(event, Mapping) or not isinstance(records, list):
+        return records if isinstance(records, list) else [], set()
+    owners = {str(v) for v in (
+        *event.get("parameters", ()), event.get("return_type", ""),
+    ) if isinstance(v, str) and v}
+    projected = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        name = str(record.get("verified_class") or "")
+        if name not in owners:
+            continue
+        members = []
+        for original in record.get("members", ()):
+            if not isinstance(original, Mapping):
+                continue
+            # Signature fidelity: retain the actual indexed names and types,
+            # including exact overload parameter types, never abbreviated
+            # pseudo-APIs. Metadata unrelated to Java calls is omitted.
+            members.append({key: original[key] for key in (
+                "kind", "owner", "name", "static", "return_type",
+                "parameters", "generic_return_type", "generic_parameters",
+            ) if key in original})
+        projected.append({
+            "verified_class": name,
+            "members": members,
+            "member_count": record.get("member_count"),
+            "members_truncated": record.get("members_truncated", False),
+        })
+    return projected, owners
+
+
+def _relevant_current_api(evidence: Mapping[str, Any], owners: set[str],
+                          current: Mapping[str, Any]) -> dict:
+    """Retain real callable records, excluding search hits unrelated to task.
+
+    Unrelated lookup hits such as javax.tools.StandardLocation.locationFor()
+    appeared in the space-combat task merely because the prompt said
+    'location'. Retaining those full classes displaced relevant event evidence
+    and elicited an 8K-token stream of synthetic import directives.
+    """
+    if not owners:
+        from .construction_file_api_evidence import scoped_body_api_records
+        return {
+            **{k: evidence[k] for k in (
+                "target_api", "typed_input_producers", "selected_target_api",
+            ) if k in evidence},
+            "class_members": scoped_body_api_records(evidence),
+        }
+    behavior = current.get("assigned_behavior") or {}
+    words = set()
+    if isinstance(behavior, Mapping):
+        import re
+        words = {
+            w.casefold() for key in ("intent", "trigger", "effects")
+            for w in re.findall(r"[A-Za-z]{4,}", str(behavior.get(key) or ""))
+        }
+    def relevant(row):
+        if not isinstance(row, Mapping):
+            return False
+        owner = str(row.get("owner") or row.get("verified_class") or "")
+        return (owner in owners or any(
+            word in words for word in
+            __import__("re").findall(r"[A-Z]?[a-z]+", owner.rsplit(".", 1)[-1])
+            if len(word) >= 4
+        ))
+    return {
+        "target_api": [dict(row) for row in evidence.get("target_api", ())
+                       if relevant(row)],
+        "typed_input_producers": [dict(row) for row in evidence.get(
+            "typed_input_producers", ()) if isinstance(row, Mapping)
+            and str(row.get("required_type") or "") in owners],
+        "class_members": [
+            {**dict(row), "members": [
+                {key: member[key] for key in (
+                    "kind", "owner", "name", "static", "return_type",
+                    "parameters", "generic_return_type", "generic_parameters",
+                ) if key in member}
+                for member in row.get("members", ()) if isinstance(member, Mapping)
+            ]}
+            for row in evidence.get("class_members", ())
+            if relevant(row)
+        ],
+    }
+
 def scoped_java_member_messages(
     messages: Sequence[Mapping[str, Any]], frame: Mapping[str, Any],
 ) -> tuple[Mapping[str, str], ...]:
@@ -57,6 +153,9 @@ def scoped_java_member_messages(
         return tuple(dict(m) for m in messages)
 
     task = {key: current[key] for key in _CURRENT_MEMBER_FIELDS if key in current}
+    callback_api, verified_callback_types = _callback_type_api(current)
+    if verified_callback_types:
+        task["callback_input_api"] = callback_api
     # The frame, full project source and completed Java bodies remain host data;
     # repeating them in LLM input duplicates many KB for every method.
     task["immutable_signature"] = {
@@ -68,13 +167,9 @@ def scoped_java_member_messages(
         task["host_state_access"] = frame["host_state_access"]
     if inspected:
         # Keep callable evidence rather than project-wide source inventories.
-        from .construction_file_api_evidence import scoped_body_api_records
-        task["inspected_target_api"] = {
-            key: inspected[key] for key in (
-                "target_api", "typed_input_producers", "selected_target_api",
-            ) if key in inspected
-        }
-        task["inspected_target_api"]["class_members"] = scoped_body_api_records(inspected)
+        task["inspected_target_api"] = _relevant_current_api(
+            inspected, verified_callback_types, current,
+        )
     elif prerequisite is not None:
         # No selected inspected API exists, so the prerequisite declarations
         # are the only source of authoritative types; do not discard them.
@@ -97,7 +192,11 @@ def scoped_java_member_messages(
             "verified APIs and typed state accessors. The host owns package, "
             "imports, class, signature and enclosing braces. Return exactly one "
             'JSON string field named "implementation" containing only its body. '
-            "Do not invent state keys, classes or methods."
+            "Do not invent state keys, classes or methods. NEVER emit "
+            "import statements or package/class declarations in an "
+            "implementation string; those are host-owned. For an event "
+            "handler, use its exact verified callback parameters and return "
+            "type. No invented type catalogue or speculative imports."
         )},
         {"role": "user", "content": json.dumps(
             task, ensure_ascii=False, separators=(",", ":"), default=str,
