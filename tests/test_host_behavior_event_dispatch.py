@@ -40,7 +40,8 @@ class ConditionRouter:
 
     def generate_structured_data(self, role, messages, *, data_name, parameters):
         assert role == "coder"
-        if data_name in {"select_verified_fabric_event_owner",
+        if data_name in {"select_verified_fabric_event_index",
+                         "select_verified_fabric_event_owner",
                          "select_verified_fabric_event"}:
             self.selections.append((data_name, json.loads(messages[-1]["content"])))
             if data_name == "select_verified_fabric_event_owner":
@@ -79,7 +80,7 @@ def test_observation_callback_has_separate_typed_condition_and_effect_members():
     assert source.count(TICKS + ".END_SERVER_TICK.register(this::handleBehavior") == 1
 
 
-def test_candidate_families_are_selected_before_sam_details_are_sent():
+def test_global_event_index_is_selected_before_sam_details_are_sent():
     index = symbols()
     for i in range(12):
         owner = "net.fabricmc.fabric.api.event.player.Example" + str(i)
@@ -91,12 +92,14 @@ def test_candidate_families_are_selected_before_sam_details_are_sent():
     router = ConditionRouter()
     compose(router, index)
     assert [name for name, _ in router.selections] == [
-        "select_verified_fabric_event_owner", "select_verified_fabric_event"]
-    families, selected = [payload for _, payload in router.selections]
-    assert len(families["verified_event_groups"]) == 13
-    assert "verified_listeners" not in families
-    assert len(selected["verified_listeners"]) == 1
-    assert selected["trigger"] == BEHAVIOR["trigger"]
+        "select_verified_fabric_event_index"]
+    candidate_index = router.selections[0][1]
+    assert len(candidate_index["verified_hook_index"]) == 13
+    assert "verified_listeners" not in candidate_index
+    assert "verified_event_groups" not in candidate_index
+    assert all(set(item) == {"event_id", "inputs"}
+               for item in candidate_index["verified_hook_index"])
+    assert candidate_index["trigger"] == BEHAVIOR["trigger"]
 
 
 def test_callback_primitive_parameters_receive_legal_stable_host_names():
