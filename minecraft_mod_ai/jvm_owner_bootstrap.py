@@ -69,9 +69,19 @@ def owner_command(
                 GRADLE_SHA256,
                 lock_timeout_seconds=gradle_budget,
             )
+            # The owner may RUN on Java 25 for a 26.x project, but pinned
+            # Gradle 8.6 cannot bootstrap itself on that JVM. Select its build
+            # JDK explicitly; never inherit the notebook's target JAVA_HOME.
+            from .java_lsp import _resolve_project_java_home
+            build_java_home = _resolve_project_java_home(21, require_compiler=True)
+            build_env = os.environ.copy()
+            build_env['JAVA_HOME'] = str(build_java_home)
+            build_env['PATH'] = str(build_java_home / 'bin') + os.pathsep + build_env.get('PATH', '')
             with tempfile.TemporaryFile(mode='w+b') as log:
-                result = subprocess.run([str(gradle), '--no-daemon', '--console=plain', 'installDist'],
+                result = subprocess.run([str(gradle), '--no-daemon', '--console=plain',
+                                         '-Dorg.gradle.java.home=' + str(build_java_home), 'installDist'],
                                         cwd=target, stdout=log, stderr=subprocess.STDOUT,
+                                        env=build_env,
                                         timeout=remaining_timeout(), check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 if result.returncode:
                     log.seek(max(0, log.tell() - 12000))
