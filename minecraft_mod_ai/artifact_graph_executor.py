@@ -120,7 +120,10 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
         resolved = path.resolve()
         if not resolved.is_relative_to(root):
             raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_OUTSIDE_WORKSPACE")
-        by_path.setdefault(resolved, []).append((job.canonical_leaf, materialization))
+        by_path.setdefault(resolved, []).append((
+            job.canonical_leaf, materialization,
+            str(getattr(job, "template_id", "") or ""),
+        ))
 
     for resolved, contributions in by_path.items():
         # Anchored registries compose several jobs into one compilation unit.
@@ -137,11 +140,11 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
         final_hash = hashlib.sha256(resolved.read_bytes()).hexdigest()
         relative = resolved.relative_to(root).as_posix()
         history = read_java_patch_history(root, relative, final_hash)
-        if not verify_java_patch_chain([row for _, row in contributions] + history, final_hash):
+        if not verify_java_patch_chain([row for _, row, _ in contributions] + history, final_hash):
             raise ArtifactGraphError(
                 "ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED: " + resolved.relative_to(root).as_posix())
-        approved.extend((resolved.relative_to(root).as_posix(), leaf)
-                        for leaf, _ in contributions)
+        approved.extend((resolved.relative_to(root).as_posix(), leaf, template_id)
+                        for leaf, _, template_id in contributions)
     if approved:
         from .host_fabric_initializer_wiring import wire_completed_fabric_java
         wire_completed_fabric_java(root, approved)
