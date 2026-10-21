@@ -235,9 +235,14 @@ class FileAPIEvidence:
         member_name = str(row.get('name', ''))
         factory = (row.get('kind') == 'CONSTRUCTOR' or
                    row.get('static') and canonical_type_name(row.get('return_type', '')) == name)
+        # Actual callable methods must precede incidental FIELD constants.
+        # The prior != FIELD test ranked fields FIRST, so the 16-record cap
+        # offered a combat callback only Player/Entity constants and no
+        # damage/attack methods. This is a generic API-index ordering defect,
+        # independent of the Minecraft prompt or any particular method name.
         return (member_name not in missing, member_name not in used,
                 not factory, member_name != 'build', member_name != 'register',
-                row.get('kind') != 'FIELD', member_name, member_key)
+                row.get('kind') == 'FIELD', member_name, member_key)
 
     def _selected_members(self, name, used, missing):
         # Preserve referenced names and factory/build roles before incidental overloads.
