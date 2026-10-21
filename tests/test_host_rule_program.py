@@ -21,6 +21,8 @@ def symbols():
                   "return_type": "void", "parameters": ["long"], "static": True, "access": 9},
         "write_other": {"kind": "METHOD", "owner": "example.State", "name": "writeState_money",
                         "return_type": "void", "parameters": ["long"], "static": True, "access": 9},
+        "read": {"kind": "METHOD", "owner": "example.State", "name": "readState_phase",
+                 "return_type": "long", "parameters": [], "static": True, "access": 9},
         "take_int": {"kind": "METHOD", "owner": "example.World", "name": "take",
                      "return_type": "void", "parameters": ["int"], "access": 1},
         "take_long": {"kind": "METHOD", "owner": "example.World", "name": "take",
@@ -91,7 +93,7 @@ def test_boolean_composition_preserves_short_circuit_as_expression_tree():
     no = p.value("literal", type="boolean", value=False)
     yes = p.value("literal", type="boolean", value=True)
     condition = p.value("binary", [no, yes], operator="&&")
-    assert p.source(condition) == "(false && true)"
+    assert p.kind(condition) == "boolean" and "(false && true)" in p.declarations()
     with pytest.raises(ValueError, match="BOOLEAN_REQUIRED"):
         number = p.value("literal", type="int", value=1)
         p.value("binary", [number, yes], operator="&&")
@@ -128,7 +130,7 @@ def test_model_authors_clock_formula_by_ids_without_java_or_type_claims():
 
     author = importlib.import_module("minecraft_mod_ai.host_rule_author").RuleAuthor(Router(), p)
     value = author.value("Compute a phase index from the actual clock", expected="long")
-    assert p.kind(value) == "long" and "24000L" in p.source(value)
+    assert p.kind(value) == "long" and "24000L" in p.declarations()
     assert not replies
 
 
@@ -137,4 +139,124 @@ def test_string_equality_uses_value_semantics():
     a = p.value("literal", type="java.lang.String", value="spring")
     b = p.value("literal", type="java.lang.String", value="spring")
     result = p.value("binary", [a, b], operator="==")
-    assert "java.util.Objects.equals" in p.source(result)
+    assert p.kind(result) == "boolean" and "java.util.Objects.equals" in p.declarations()
+
+
+def test_canonical_binding_values_are_host_copied_and_keep_provenance():
+    from collections import deque
+    p = program()
+    replies = deque([
+        ("rule_value_operation", {"operation": "data_value"}),
+        ("rule_data_page", {"data_id": "approved-calendar"}),
+        ("rule_data_value", {"field_id": "d0"}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v1"}),
+    ])
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            expected, reply = replies.popleft()
+            assert data_name == expected
+            return reply
+
+    author = importlib.import_module("minecraft_mod_ai.host_rule_author").RuleAuthor(
+        Router(), p, data_pages={"approved-calendar": [{"period_ticks": 17}]})
+    value = author.value("Use the approved period without inventing a new number", expected="long")
+    assert p.source(value) == "17"
+    assert any(row.get("data_origin", {}).get("pointer") == "/0/period_ticks" for row in p.ir)
+
+
+def test_state_write_authority_also_permits_read_modify_write():
+    p = program()
+    old = p.value("call", [], symbol_ref="read")
+    one = p.value("literal", type="long", value=1)
+    updated = p.value("binary", [old, one], operator="+")
+    p.effect("call", [updated], symbol_ref="write")
+    assert "writeState_phase" in p.render()
+
+
+def test_shared_object_and_observation_values_are_evaluated_once_lazily(tmp_path):
+    import shutil
+    import subprocess
+    assert shutil.which("javac")
+    module = importlib.import_module("minecraft_mod_ai.host_rule_program")
+    box = "example.Box"
+    api = {
+        box: {"kind": "CLASS", "owner": box, "access": 1},
+        "new": {"kind": "CONSTRUCTOR", "owner": box, "name": "<init>",
+                "access": 1, "parameters": [], "return_type": box},
+        "set": {"kind": "METHOD", "owner": box, "name": "setValue", "access": 1,
+                "parameters": ["int"], "return_type": "void"},
+        "get": {"kind": "METHOD", "owner": box, "name": "getValue", "access": 1,
+                "parameters": [], "return_type": "int"},
+        "check": {"kind": "METHOD", "owner": box, "name": "check", "access": 9, "static": True,
+                  "parameters": [box, "int"], "return_type": "void"},
+    }
+    p = module.RuleProgram(api, [], {}, owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    obj = p.value("new", [], symbol_ref="new")
+    one = p.value("literal", type="int", value=1)
+    p.effect("call", [obj, one], symbol_ref="set")
+    observed = p.value("call", [obj], symbol_ref="get")
+    p.effect("call", [obj, observed], symbol_ref="check")
+    two = p.value("literal", type="int", value=2)
+    p.effect("call", [obj, two], symbol_ref="set")
+    p.effect("call", [obj, observed], symbol_ref="check")
+    zero = p.value("literal", type="int", value=0)
+    # A value constructed while planning a short-circuit RHS must not execute
+    # unless that RHS is reached. Division by zero makes eagerness observable.
+    bad = p.value("binary", [one, zero], operator="/")
+    condition = p.value("binary", [bad, zero], operator=">")
+    no = p.value("literal", type="boolean", value=False)
+    guarded = p.value("binary", [no, condition], operator="&&")
+    p.begin_if(guarded)
+    p.effect("call", [obj, bad], symbol_ref="set")
+    p.end()
+    source = "package example; public class Bridge { public boolean run() {\n" + p.render() + "\n} }"
+    folder = tmp_path / "example"
+    folder.mkdir()
+    (folder / "Bridge.java").write_text(source)
+    (folder / "Box.java").write_text('''package example; public class Box {
+        static int created; int value; public Box(){created++;}
+        public void setValue(int v){value=v;} public int getValue(){return value;}
+        public static void check(Box b,int old){if(created!=1 || old!=1 || b.value<1) throw new AssertionError("identity/snapshot");}
+    }''')
+    (folder / "Probe.java").write_text('''package example; public class Probe {
+        public static void main(String[] args){if(!new Bridge().run() || Box.created!=1) throw new AssertionError();}
+    }''')
+    result = subprocess.run(["javac", "-d", str(tmp_path), *map(str, folder.glob("*.java"))], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run(["java", "-cp", str(tmp_path), "example.Probe"], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
+def test_author_can_narrow_a_computed_clock_and_construct_typed_null():
+    from collections import deque
+    p = program()
+    clock = p.value("call", [p.inputs[0]], symbol_ref="clock")
+    replies = deque([
+        ("rule_value_operation", {"operation": "cast"}),
+        ("rule_cast_type", {"type": "int"}),
+        ("rule_operand", {"value_ref": clock}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v2"}),
+    ])
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            expected, reply = replies.popleft()
+            assert data_name == expected
+            return reply
+
+    module = importlib.import_module("minecraft_mod_ai.host_rule_author")
+    author = module.RuleAuthor(Router(), p)
+    value = author.value("Use the computed clock as an int index", expected="int")
+    assert p.kind(value) == "int"
+    replies.extend([
+        ("rule_value_operation", {"operation": "literal"}),
+        ("rule_literal_type", {"type": "example.World"}),
+        ("rule_literal", {"value": None}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v3"}),
+    ])
+    absent = author.value("A typed null to compare a nullable world", expected="example.World")
+    assert p.kind(absent) == "example.World" and p.source(absent) == "null"

@@ -10,7 +10,7 @@ from collections import ChainMap
 import re
 from types import SimpleNamespace
 
-from .java_operation_ir import JavaOperations, identifier, java_literal, parameter_types
+from .java_operation_ir import BOXING, JavaOperations, identifier, java_literal, parameter_types
 
 
 class RuleProgram:
@@ -26,6 +26,8 @@ class RuleProgram:
         task = SimpleNamespace(owner_symbol=method, target_path=target_path)
         self.checker = JavaOperations(task, (), self.symbols, partial=True)
         self.values, self.active, self.statements, self.blocks, self.ir = {}, set(), [], [], []
+        self.scope = 0
+        self.scope_values = {0: []}
         self.effects = 0
         self.written_states = set()
         self.read_states = set()
@@ -38,7 +40,16 @@ class RuleProgram:
                "typed_result": kind, "attributes": attrs}
         self.checker.nodes[key] = row
         self.checker.types[key] = kind
-        self.values[key] = {"source": source, "type": kind, "generic": generic, "purpose": purpose}
+        # Computed values are evaluated lazily once per invocation and scope.
+        # Suppliers keep short-circuit RHS values unevaluated, preserve shared
+        # constructor identity, and avoid expanding a shared DAG exponentially.
+        # Fields/array elements are lvalues; their receivers are cached values.
+        memo = op not in {"parameter", "local", "literal", "field", "array_get"}
+        self.values[key] = {"source": "__mmmValue" + key + ".get()" if memo else source,
+                            "initializer": source, "memo": memo, "type": kind,
+                            "generic": generic, "purpose": purpose}
+        if memo:
+            self.scope_values[self.scope].append(key)
         self.active.add(key)
         self.ir.append(row)
         return key
@@ -60,7 +71,9 @@ class RuleProgram:
         if not name.startswith(prefix):
             raise ValueError("RULE_STATE_AUTHORITY: " + name)
         state = name[len(prefix):]
-        allowed = self.behavior.get("state_writes" if effect else "state_reads", ())
+        allowed = set(self.behavior.get("state_writes", ()))
+        if not effect:
+            allowed.update(self.behavior.get("state_reads", ()))
         if state not in allowed:
             raise ValueError("RULE_STATE_AUTHORITY: " + state)
 
@@ -170,8 +183,9 @@ class RuleProgram:
     def begin_if(self, condition):
         if self.kind(condition) != "boolean":
             raise ValueError("RULE_BOOLEAN_REQUIRED")
-        self.blocks.append(set(self.active))
+        self.blocks.append((set(self.active), self.scope))
         self.statements.append("if (" + self.source(condition) + ") {")
+        self._enter_scope()
         self.ir.append({"control": "if", "value": condition})
 
     def iteration_type(self, iterable):
@@ -189,7 +203,7 @@ class RuleProgram:
     def begin_each(self, iterable):
         element = self.iteration_type(iterable)
         source = self.source(iterable)
-        self.blocks.append(set(self.active))
+        self.blocks.append((set(self.active), self.scope))
         name = "__mmmItem" + str(len(self.values))
         # Cast each erased Iterable element only to its inspected generic type.
         if self.kind(iterable).endswith("[]"):
@@ -197,6 +211,7 @@ class RuleProgram:
         else:
             self.statements.append(f"for (Object {name}Raw : {source}) {{")
             self.statements.append(f"{element} {name} = ({element}) {name}Raw;")
+        self._enter_scope()
         self.ir.append({"control": "foreach", "value": iterable, "element_type": element})
         self.checker.locals[name].add(element)
         return self._store("local", [], {"name": name}, element, name, purpose="Current iteration element")
@@ -204,16 +219,38 @@ class RuleProgram:
     def end(self):
         if not self.blocks:
             raise ValueError("RULE_BLOCK_UNDERFLOW")
-        self.active = self.blocks.pop()
+        self.active, self.scope = self.blocks.pop()
         self.statements.append("}")
         self.ir.append({"control": "end"})
 
-    def render(self):
+    def _enter_scope(self):
+        self.scope = len(self.scope_values)
+        self.scope_values[self.scope] = []
+        self.statements.append("__MMM_RULE_LOCALS_" + str(self.scope) + "__")
+
+    def declarations(self, scope=0):
+        parts = []
+        for key in self.scope_values[scope]:
+            value = self.values[key]
+            kind = BOXING.get(value["type"], value["type"])
+            parts.append("final java.util.function.Supplier<" + kind + "> __mmmValue" + key
+                + " = new java.util.function.Supplier<" + kind + ">() {\n"
+                + "private boolean ready; private " + kind + " value;\n"
+                + "public " + kind + " get() { if (!ready) { value = " + value["initializer"]
+                + "; ready = true; } return value; }\n};")
+        return "\n".join(parts)
+
+    def render(self, *, include_root=True, with_return=True):
         if self.blocks:
             raise ValueError("RULE_UNCLOSED_BLOCK")
         if not self.effects:
             raise ValueError("RULE_EFFECT_REQUIRED")
-        return "boolean __mmmRuleApplied = false;\n" + "\n".join(self.statements) + "\nreturn __mmmRuleApplied;"
+        body = "\n".join(self.statements)
+        for scope in self.scope_values:
+            body = body.replace("__MMM_RULE_LOCALS_" + str(scope) + "__", self.declarations(scope))
+        return ((self.declarations() + "\n" if include_root else "")
+                + "boolean __mmmRuleApplied = false;\n" + body
+                + ("\nreturn __mmmRuleApplied;" if with_return else ""))
 
     def menu(self):
         return [{"id": key, "type": self.values[key]["type"],

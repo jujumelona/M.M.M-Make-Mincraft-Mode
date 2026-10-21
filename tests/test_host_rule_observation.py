@@ -1,6 +1,7 @@
 """A domain transition is lowered through a host observation operator."""
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -82,3 +83,18 @@ def test_router_cannot_inject_an_uninspected_hook():
 
     with pytest.raises(StructuredOutputValidationError):
         bind(Router(), {"behavior_id": "invalid"}, [event(TICKS, "END_LEVEL_TICK")])
+
+
+def test_actual_26_2_tick_abi_from_failed_run_is_lowered_without_model_api_search():
+    capture = json.loads((Path(__file__).parent / "fixtures/host_rule_tick_abi_26_2.json").read_text())
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "rule_observation"
+            return {"observation": "world_state"}
+
+    bound = bind(Router(), {"behavior_id": "captured-boundary",
+                 "trigger": "Game time reaches the start of a season"}, capture["listeners"])
+    assert bound["event"]["event_id"] == TICKS + "#END_LEVEL_TICK"
+    assert bound["event"]["event_interface"] == TICKS + ".EndLevelTick"
+    assert bound["event"]["parameters"] == ["net.minecraft.server.level.ServerLevel"]

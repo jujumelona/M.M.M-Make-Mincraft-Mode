@@ -1,0 +1,58 @@
+{
+  "minecraft_version": "26.2",
+  "capture_sha256": "76fb43e241282bda12460c67763cb98e47a5a7aa14a1cf0c3e723045071a9f31",
+  "listeners": [
+    {
+      "event_id": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents#END_LEVEL_TICK",
+      "event_owner": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents",
+      "event_interface": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.EndLevelTick",
+      "event_field": "END_LEVEL_TICK",
+      "method": "onEndTick",
+      "parameters": [
+        "net.minecraft.server.level.ServerLevel"
+      ],
+      "return_type": "void",
+      "type_parameters": [],
+      "throws": []
+    },
+    {
+      "event_id": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents#END_SERVER_TICK",
+      "event_owner": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents",
+      "event_interface": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.EndTick",
+      "event_field": "END_SERVER_TICK",
+      "method": "onEndTick",
+      "parameters": [
+        "net.minecraft.server.MinecraftServer"
+      ],
+      "return_type": "void",
+      "type_parameters": [],
+      "throws": []
+    },
+    {
+      "event_id": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents#START_LEVEL_TICK",
+      "event_owner": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents",
+      "event_interface": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.StartLevelTick",
+      "event_field": "START_LEVEL_TICK",
+      "method": "onStartTick",
+      "parameters": [
+        "net.minecraft.server.level.ServerLevel"
+      ],
+      "return_type": "void",
+      "type_parameters": [],
+      "throws": []
+    },
+    {
+      "event_id": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents#START_SERVER_TICK",
+      "event_owner": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents",
+      "event_interface": "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.StartTick",
+      "event_field": "START_SERVER_TICK",
+      "method": "onStartTick",
+      "parameters": [
+        "net.minecraft.server.MinecraftServer"
+      ],
+      "return_type": "void",
+      "type_parameters": [],
+      "throws": []
+    }
+  ]
+}

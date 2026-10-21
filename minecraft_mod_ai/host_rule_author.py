@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 
 from .host_rule_observation import PAGE_SIZE, choose_rule_data
-from .java_operation_ir import parameter_types
+from .java_operation_ir import PRIMITIVES, parameter_types
 
 
 _TYPES = ("boolean", "int", "long", "double", "java.lang.String")
@@ -21,9 +23,10 @@ _INSTRUCTION = (
 
 
 class RuleAuthor:
-    def __init__(self, router, program):
+    def __init__(self, router, program, *, data_pages=None):
         self.router, self.p = router, program
         self.decisions = 0
+        self.data_pages = dict(data_pages or {})
 
     def ask(self, name, purpose, properties, **context):
         self.decisions += 1
@@ -33,8 +36,40 @@ class RuleAuthor:
         return choose_rule_data(self.router, name, {
             "behavior": self.p.behavior, "subgoal": purpose,
             "recent_values": menu[-PAGE_SIZE:], "value_count": len(menu),
-            "decision": self.decisions, **context,
+            "decision": self.decisions,
+            "data_catalog": [{"id": key, "meaning": "Authoritative planning/prerequisite data"}
+                             for key in sorted(self.data_pages)], **context,
         }, properties, _INSTRUCTION)
+
+    def data_value(self, purpose):
+        data_id = self.ask("rule_data_page", purpose,
+            {"data_id": {"type": "string", "enum": sorted(self.data_pages)}})["data_id"]
+        pending, scalars = [("", self.data_pages[data_id])], []
+        while pending:
+            path, value = pending.pop()
+            if isinstance(value, dict):
+                pending.extend((path + "/" + str(key).replace("~", "~0").replace("/", "~1"), value[key])
+                               for key in reversed(sorted(value)))
+            elif isinstance(value, (list, tuple)):
+                pending.extend((path + "/" + str(i), value[i]) for i in reversed(range(len(value))))
+            elif type(value) in {bool, int, float, str}:
+                scalars.append((path, value))
+        for offset in range(0, len(scalars), PAGE_SIZE):
+            page = {"d" + str(i): entry for i, entry in enumerate(scalars[offset:offset + PAGE_SIZE])}
+            selected = self.ask("rule_data_value", purpose,
+                {"field_id": {"type": "string", "enum": [*page, "next_page"]}},
+                data_id=data_id, fields=[{"id": key, "pointer": path, "value": value}
+                                        for key, (path, value) in page.items()])["field_id"]
+            if selected == "next_page":
+                continue
+            pointer, value = page[selected]
+            kind = ("boolean" if type(value) is bool else "java.lang.String" if type(value) is str
+                    else "double" if type(value) is float else "int" if -(2**31) <= value < 2**31 else "long")
+            key = self.p.value("literal", type=kind, value=value, purpose=data_id + pointer)
+            self.p.ir.append({"value_ref": key, "data_origin": {"data_id": data_id, "pointer": pointer,
+                "sha256": hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()}})
+            return key
+        raise ValueError("RULE_DATA_VALUE_REQUIRED: " + data_id)
 
     def ref(self, purpose, *, expected=None, candidates=None, depth=0):
         keys = [row["id"] for row in self.p.menu()
@@ -117,16 +152,19 @@ class RuleAuthor:
         return refs
 
     def _literal(self, purpose, expected):
-        options = list(_TYPES)
-        if expected in options:
+        options = list(dict.fromkeys([*_TYPES,
+            *[row["type"] for row in self.p.menu() if row["type"] not in PRIMITIVES]]))
+        if expected and expected != "void":
             options = [expected, *[value for value in options if value != expected]]
         kind = self.ask("rule_literal_type", purpose,
             {"type": {"type": "string", "enum": options}})["type"]
+        bits = {"byte": 8, "short": 16, "int": 32, "long": 64}.get(kind)
         schema = ({"type": "boolean"} if kind == "boolean" else
-                  {"type": "string", "maxLength": 512} if kind == "java.lang.String" else
-                  {"type": "number"} if kind == "double" else
-                  {"type": "integer", "minimum": -(2 ** (31 if kind == "int" else 63)),
-                   "maximum": 2 ** (31 if kind == "int" else 63) - 1})
+                  {"anyOf": [{"type": "string", "maxLength": 512}, {"type": "null"}]} if kind == "java.lang.String" else
+                  {"type": "string", "minLength": 1, "maxLength": 1} if kind == "char" else
+                  {"type": "number"} if kind in {"float", "double"} else
+                  {"type": "integer", "minimum": -(2 ** (bits - 1)), "maximum": 2 ** (bits - 1) - 1}
+                  if bits else {"type": "null"})
         literal = self.ask("rule_literal", purpose, {"value": schema})["value"]
         return self.p.value("literal", type=kind, value=literal, purpose=purpose)
 
@@ -138,7 +176,9 @@ class RuleAuthor:
             usable = [row["id"] for row in self.p.menu()
                       if expected is None or self.p.checker.assignable(row["type"], expected)]
             operations = ["literal", "call", "field", "new", "binary", "unary",
-                          "ternary", "array_get", "array_length"]
+                          "ternary", "array_get", "array_length", "cast"]
+            if self.data_pages:
+                operations.append("data_value")
             if usable:
                 operations.insert(0, "use")
             op = self.ask("rule_value_operation", purpose,
@@ -149,6 +189,18 @@ class RuleAuthor:
                     return self.ref(purpose, expected=expected, candidates=usable, depth=depth)
                 if op == "literal":
                     self._literal(purpose, expected)
+                elif op == "data_value":
+                    self.data_value(purpose)
+                elif op == "cast":
+                    types = sorted({*(_TYPES[:-1]),
+                                    *[row["type"] for row in self.p.menu()],
+                                    *([expected] if expected and expected != "void" else [])})
+                    target = self.ask("rule_cast_type", purpose,
+                        {"type": {"type": "string", "enum": types}})["type"]
+                    valid = [row["id"] for row in self.p.menu()
+                             if self.p.checker.castable(row["type"], target)]
+                    source = self.ref("Value to cast to " + target, candidates=valid, depth=depth)
+                    self.p.value("cast", [source], type_ref=target, purpose=purpose)
                 elif op in {"call", "field", "new"}:
                     reference, row = self.symbol(purpose, {"call": "METHOD", "field": "FIELD", "new": "CONSTRUCTOR"}[op])
                     refs = self.operands(row, purpose, constructor=op == "new", depth=depth)

@@ -6,7 +6,7 @@ model. No request-specific seasonal/space/shop templates are allowed.
 
 ## Evidence and root cause
 
-Run `0dd57e57200e` contains 405 model requests. Its global Fabric event-selection
+Run `0dd57e57200e` contains 404 model requests. Its global Fabric event-selection
 requests contain roughly 8,500 prompt tokens. Both the global menu and a second
 owner menu return UNBOUND for a condition observable from a server/world tick.
 The planner describes an application transition as though it required a native

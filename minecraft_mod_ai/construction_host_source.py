@@ -119,12 +119,28 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             else:
                 return saved["source"]
 
-        contract, requirement, behavior_rows, prompt, state_access = (
-            _build_host_java_prompt(
-                router, spec, context, package=package, name=name,
-                owner=owner, behaviors=behaviors, source_context=source_context,
+        rule_mode = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
+        if rule_mode:
+            # Rule authoring queries the authoritative typed symbol index in
+            # bounded pages. Do not first ask for whole-feature API retrieval
+            # or send the previous Java/body prompt to each small decision.
+            from .host_prerequisite_api import read_prerequisite_apis
+            from .host_typed_state_access import state_access_contract
+            contract = context.get("authoring_contract") or {}
+            requirement = str(spec.get("requirement") or "")
+            behavior_rows = [dict(row) for row in behaviors]
+            prerequisite_api = read_prerequisite_apis(
+                context, target_path=spec["target_path"], source_context=source_context)
+            state_access = state_access_contract(prerequisite_api)
+            prompt = {"materialized_prerequisite_api": prerequisite_api,
+                      "inspected_target_api": {}, "host_state_work_order_scope": {}}
+        else:
+            contract, requirement, behavior_rows, prompt, state_access = (
+                _build_host_java_prompt(
+                    router, spec, context, package=package, name=name,
+                    owner=owner, behaviors=behaviors, source_context=source_context,
+                )
             )
-        )
         instructions = (
             "Implement the specified Fabric/Minecraft task using only inspected "
             "target APIs and materialized project source. The host builds every "
@@ -147,10 +163,16 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 source = pending["source"]
             else:
                 from .host_verified_entity_type import verified_entity_type_source
-                source = verified_entity_type_source(
-                    effective_spec, contract, prompt["inspected_target_api"],
-                    package=package, name=name, behaviors=behavior_rows,
-                )
+                if rule_mode:
+                    from .host_rule_feature import compose_rule_feature
+                    source = compose_rule_feature(
+                        router, effective_spec, context, package=package, name=name,
+                        behaviors=behavior_rows, state_access=state_access)
+                else:
+                    source = verified_entity_type_source(
+                        effective_spec, contract, prompt["inspected_target_api"],
+                        package=package, name=name, behaviors=behavior_rows,
+                    )
                 if source is None:
                     from .host_verified_entity_registry import (
                         verified_entity_registry_source,
@@ -175,6 +197,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             budget = acceptance.get("max_compiler_repair_attempts", 2)
             if type(budget) is not int or budget < 0:
                 raise HostJavaConstructionError("JAVA_HOST_REPAIR_BUDGET_INVALID")
+            if rule_mode:
+                # A compiler defect in host lowering is not a request for the
+                # model to rewrite generated Java and escape the typed IR.
+                # Retain source + diagnostic for host investigation.
+                budget = 0
             from .construction_host_member_repair import repair_compiler_member
             from .construction_journal import JournaledConstructionRouter
             # Parsed declarations are not compiler-verified repairs. Replaying
