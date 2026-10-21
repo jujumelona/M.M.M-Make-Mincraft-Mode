@@ -1,0 +1,9 @@
+# Host-owned callback compiler
+
+The user requests structural repair of repeated small-model generation failures, with all deterministic work performed by the host, and commits pushed to main. The attached run at 741992f fails before javac: two non-void callback writers repeatedly emit `return PASS`; required state names are absent from the canonical state API.
+
+The host will own declarations, callback ABI, registration, predicates' return syntax, control-flow delimiters, effect statements, callback result branches and final returns. The coder supplies bounded expression values and semantic operation choices. An effects body cannot select a return, a method declaration, or arbitrary Java statements. All callbacks have a separate boolean predicate and a void effects helper, including callbacks returning InteractionResult. Callback result choices come from the inspected ABI; they never count as gameplay effects.
+
+Behavior state references will be reconciled before state code and feature jobs are frozen. Existing scalar state keeps its exact name/type/default. An undeclared reference must be explicitly resolved to a newly authored canonical scalar, an existing canonical state, or an event/world observation. Observations retain their original identity and read/write obligations separately. The host never guesses a type, substitutes another state implicitly, or stores a collection as an encoded scalar. Production state access remains typed and provenance checked.
+
+Verification uses captured failure shapes, real Tree-sitter parsing, generated-source javac/java probes proving guard/result/effect ordering, production-boundary tests, and the project suite. Compilation and structural tests do not certify the external 9B model or the full Minecraft runtime. No game-prompt-specific templates, new branches, or automatic legacy fallback.
