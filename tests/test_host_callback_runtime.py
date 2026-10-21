@@ -7,7 +7,9 @@ import pytest
 from minecraft_mod_ai.first_pass_java_source import compose_first_pass_java
 
 
-def test_nonvoid_callback_executes_effect_only_between_predicate_and_success(tmp_path):
+@pytest.mark.parametrize("allow_effect", [False, True])
+@pytest.mark.parametrize("effect_container", ["if", "foreach"])
+def test_nonvoid_callback_executes_effect_only_between_predicate_and_success(tmp_path, allow_effect, effect_container):
     javac, java = shutil.which("javac"), shutil.which("java")
     if not javac or not java:
         pytest.skip("JDK required for compiled callback behavior probe")
@@ -37,11 +39,17 @@ def test_nonvoid_callback_executes_effect_only_between_predicate_and_success(tmp
                 return {"event_binding": hook + "#EVENT"}
             if "_predicate_" in data_name:
                 return {"expression": "target.active"}
-            if "_operation_0_assign_" in data_name:
+            if "_operation_0_if_" in data_name or "_operation_0_foreach_" in data_name:
+                return {"expression": "target.allowEffect" if effect_container == "if" else "target.entries"}
+            if "_operation_1_assign_" in data_name:
                 return {"target": "target.effects", "operator": "+=", "value": "1"}
             if "_operation_0_" in data_name:
-                return {"action": "assign"}
+                return {"action": effect_container}
             if "_operation_1_" in data_name:
+                return {"action": "assign"}
+            if "_operation_2_" in data_name:
+                return {"action": "end"}
+            if "_operation_3_" in data_name:
                 return {"action": "complete"}
             if data_name.startswith("select_callback_result_"):
                 return {"expression": "example.Result." + (
@@ -56,7 +64,7 @@ def test_nonvoid_callback_executes_effect_only_between_predicate_and_success(tmp
         "trigger": "target is active", "effects": "Increment target effects once"}])
     files = {
         "example/Bridge.java": source,
-        "example/Target.java": "package example; public class Target { public boolean active; public int effects; }",
+        "example/Target.java": "package example; public class Target { public boolean active; public boolean allowEffect; public int effects; public int[] entries; }",
         "example/Result.java": "package example; public interface Result { Result PASS=new Result(){}; Success SUCCESS=new Success(); }",
         "example/Success.java": "package example; public final class Success implements Result {}",
         "net/fabricmc/api/ModInitializer.java": "package net.fabricmc.api; public interface ModInitializer { void onInitialize(); }",
@@ -71,9 +79,12 @@ def test_nonvoid_callback_executes_effect_only_between_predicate_and_success(tmp
             "package example; import net.fabricmc.fabric.api.event.player.TestHook; "
             "public class Probe { public static void main(String[] args) { "
             "new Bridge().onInitialize(); Target t=new Target(); "
+            f"t.allowEffect={str(allow_effect).lower()}; "
+            f"t.entries=new int[]{{{'1' if allow_effect else ''}}}; "
             "if(TestHook.EVENT.listener.run(t)!=Result.PASS || t.effects!=0) throw new AssertionError(); "
-            "t.active=true; if(TestHook.EVENT.listener.run(t)!=Result.SUCCESS || t.effects!=1) throw new AssertionError(); "
-            "t.active=false; if(TestHook.EVENT.listener.run(t)!=Result.PASS || t.effects!=1) throw new AssertionError(); }}"),
+            f"t.active=true; if(TestHook.EVENT.listener.run(t)!=Result.{'SUCCESS' if allow_effect else 'PASS'} "
+            f"|| t.effects!={int(allow_effect)}) throw new AssertionError(); "
+            f"t.active=false; if(TestHook.EVENT.listener.run(t)!=Result.PASS || t.effects!={int(allow_effect)}) throw new AssertionError(); }}}}"),
     }
     paths = []
     for relative, content in files.items():

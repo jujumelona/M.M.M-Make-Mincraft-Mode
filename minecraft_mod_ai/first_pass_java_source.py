@@ -570,7 +570,7 @@ def compose_first_pass_java(
                 names.append({"type": type_name, "name": name_arg})
             parts = {"visibility": "private", "static": False,
                      "return_type": ("boolean" if unit.get("host_condition_behavior")
-                                     else "void" if unit.get("host_effect_behavior")
+                                     else "boolean" if unit.get("host_effect_behavior")
                                      else event_callback["return_type"]),
                      "type_parameters": ", ".join(event_callback.get("type_parameters") or []),
                      "parameters": names, "throws": list(event_callback.get("throws") or []),
@@ -787,6 +787,7 @@ def compose_first_pass_java(
             parts["source"] = author_callback_body(
                 router, body_messages, data_name=action, frame=frame,
                 predicate=bool(selected_host_unit.get("host_condition_behavior")),
+                effect_receipt=bool(selected_host_unit.get("host_effect_behavior")),
             )
         else:
             parts["source"] = router.generate_java_source("coder", body_messages,

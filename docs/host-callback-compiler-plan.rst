@@ -11,3 +11,21 @@ Global constraints: preserve original behavior requirements; inspected Fabric AB
 3. Run project checks, inspect the exact production completion payloads against the new compiler boundary, and independently review the implementation. Fix verified regressions with tests, record external-model/runtime limits, commit and push remaining verified fixes.
 
 Review focus: conditional no-op callbacks; result fields whose concrete type is a subtype; returns hidden in lambdas; state aliases that change ownership; state reconciliation repeated after checkpoint restore.
+
+Completed validation
+--------------------
+
+Task 1: complete. New operation/value compiler replaces Java statement generation on verified callbacks. Real javac/java probes exercise void and non-void dispatch.
+Task 2: complete. State bindings resolve before host state/code jobs; canonical declarations, world observations, provenance and per-concept checkpoints are covered.
+Task 3: complete. Compiler repair keeps callback ownership. Independent review found and reproduced three Important defects: statement-bearing switch expressions, discarded prerequisite API declarations, and handled results on empty effect execution paths. Regression tests failed before fixes; expressions now reject hidden statements, prerequisites coexist with classpath APIs, and host execution receipts cover false branches and empty loops. Local value assignments cannot satisfy an effect obligation or overwrite the receipt.
+
+The external legacy statement-author changes made concurrently on main were preserved. Callback production now uses the new compiler. No extra branches were created.
+
+External-model/Minecraft-runtime certification is not claimed. The broad pytest run encountered Gradle/JDT dependency-download failures under restricted networking; the deterministic full-pipeline tests fail before model/gameplay work for that reason. Related host/compiler/state tests and compiled runtime probes run locally without that dependency bootstrap.
+
+Final focused verification: 135 tests passed across the callback compiler, real javac/java probes, compiler repair, state binding/checkpoints, planning, state runtime, first-pass source generation and feature job compilation. Ruff passed for all new modules and regression tests.
+
+Known blocked tests (isolated replay, before model/gameplay work):
+- tests/test_deterministic_debug_full_pipeline_e2e.py::test_debug_fixture_runs_real_build_and_packaging_without_live_model
+- tests/test_deterministic_debug_full_pipeline_e2e.py::test_debug_fixture_releases_when_only_jdt_infrastructure_is_unavailable
+Both encounter unavailable Maven/Gradle dependencies in the JDT bootstrap under restricted networking. The broader run was not green. tests/test_external_mcp_role_scope.py passed when replayed independently.

@@ -37,7 +37,8 @@ _SCHEMAS = {
     "foreach": _EXPRESSION_SCHEMA,
 }
 _FORBIDDEN = frozenset({"lambda_expression", "class_body", "class_declaration",
-                        "method_declaration", "assignment_expression", "update_expression"})
+                        "method_declaration", "assignment_expression", "update_expression",
+                        "switch_expression", "block", "return_statement", "yield_statement"})
 
 
 def parse_expression(value: str, *, predicate=False) -> str:
@@ -65,6 +66,8 @@ def parse_expression(value: str, *, predicate=False) -> str:
         node = pending.pop()
         if node.type in _FORBIDDEN:
             raise ValueError("CALLBACK_EXPRESSION_SIDE_EFFECT_OR_DECLARATION")
+        if node.type == "identifier" and _text(raw, node).startswith("__mmmHostEffectApplied"):
+            raise ValueError("CALLBACK_EXPRESSION_HOST_OWNED_RECEIPT")
         if predicate and node.type == "method_invocation":
             name = _text(raw, node.child_by_field_name("name"))
             if name.startswith("writeState_") or name == "setState":
@@ -81,6 +84,26 @@ def _validate_state(source, frame):
     contracts = frame.get("host_state_access", ())
     validate_host_state_access(source, contracts)
     validate_behavior_state_provenance(source, contracts, frame.get("host_behavior_contract"))
+
+
+def _effect_operation(action, code):
+    """Local value bookkeeping cannot satisfy a world/state effect obligation.
+
+    Invoking an API is an effect attempt, not proof of its gameplay meaning;
+    javac and external behavior verification remain separate authorities.
+    """
+    if action == "call":
+        return True
+    _, root = _parse("class MmmEffect { void run() {\n" + code + "\n} }")
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if action == "assign" and node.type == "assignment_expression":
+            return node.child_by_field_name("left").type in {"field_access", "array_access"}
+        if action == "declare" and node.type == "method_invocation":
+            return True
+        pending.extend(node.named_children)
+    return False
 
 
 def _ask(router, messages, *, name, schema, context, lower):
@@ -105,7 +128,8 @@ def _ask(router, messages, *, name, schema, context, lower):
     raise AssertionError("unreachable")
 
 
-def author_callback_body(router, messages, *, data_name, frame, predicate=False) -> str:
+def author_callback_body(router, messages, *, data_name, frame, predicate=False,
+                         effect_receipt=False) -> str:
     """Author expressions and operation parameters, never Java statements."""
     from .construction_java_context import scoped_java_member_messages
     scoped = list(scoped_java_member_messages(messages, frame))
@@ -141,6 +165,11 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False)
                     lower=lower_predicate)
 
     statements, blocks, locals_ = [], [], []
+    receipt_name = "__mmmHostEffectApplied"
+    while receipt_name in frame["prefix"]:
+        receipt_name += "_"
+    if effect_receipt:
+        statements.append(f"boolean {receipt_name} = false;")
     effects = 0
     for index in range(64):
         choices = ["call", "assign", "declare", "if", "while", "foreach"]
@@ -158,7 +187,10 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False)
                       schema=_object({"action": {"type": "string", "enum": choices}}),
                       context=context, lower=lambda row: row["action"])
         if action == "complete":
-            source = frame["prefix"] + "\n".join(statements) + frame["suffix"]
+            completed = [*statements]
+            if effect_receipt:
+                completed.append(f"return {receipt_name};")
+            source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         new_local = f"mmmValue{len(locals_)}"
 
@@ -194,7 +226,10 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False)
                             "host_local_name": new_local if action in {"declare", "foreach"} else None},
                         lower=lower_operation)
             statements.append(code)
-            effects += int(action in {"call", "assign"})
+            effect_attempted = action in {"call", "assign", "declare"} and _effect_operation(action, code)
+            effects += int(effect_attempted)
+            if effect_receipt and effect_attempted:
+                statements.append(f"{receipt_name} = true;")
             if action in {"declare", "foreach"}:
                 locals_.append(new_local)
             if action in {"if", "while", "foreach"}:

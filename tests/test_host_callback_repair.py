@@ -33,7 +33,7 @@ class RepairRouter:
 
 
 @pytest.mark.parametrize("role,return_type,original,expected", [
-    ("applyBehavior", "void", "target.missing = 1;", "target.effects += 1;"),
+    ("applyBehavior", "boolean", "target.missing = 1;", "target.effects += 1;"),
     ("matchesBehavior", "boolean", "return target.missing;", "return target.active;"),
 ])
 def test_failing_callback_member_is_repaired_as_operations_with_original_behavior(

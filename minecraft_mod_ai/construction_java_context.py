@@ -172,9 +172,10 @@ def scoped_java_member_messages(
         task["inspected_target_api"] = _relevant_current_api(
             inspected, verified_callback_types, current,
         )
-    elif prerequisite is not None:
-        # No selected inspected API exists, so the prerequisite declarations
-        # are the only source of authoritative types; do not discard them.
+    if prerequisite is not None:
+        # Generated content (registries, item constants, helper classes) is
+        # absent from the target classpath inventory. Its actual declarations
+        # must coexist with inspected Minecraft/Fabric API evidence.
         task["materialized_prerequisite_api"] = prerequisite
     repair_api = current.get("api_evidence")
     if isinstance(repair_api, Mapping):

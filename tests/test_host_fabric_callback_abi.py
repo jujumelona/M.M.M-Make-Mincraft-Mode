@@ -100,7 +100,7 @@ def test_host_registers_callback_with_method_reference_and_exact_abi():
     assert source.count("void onInitialize()") == 1
     assert len(router.source_tasks) == 2
     assert "private boolean matchesBehavior" in source
-    assert "private void applyBehavior" in source
+    assert "private boolean applyBehavior" in source
     assert router.calls == [
         "select_verified_fabric_event",
         "submit_java_implementation_1_predicate_try_0",

@@ -14,6 +14,19 @@ def test_runtime_state_observation_bindings_reach_the_current_callback():
     assert json.loads(projected[-1]["content"])["runtime_state_observations"] == observations
 
 
+def test_materialized_content_apis_survive_alongside_inspected_classpath_api():
+    frame = {"kind": "method", "prefix": "private void apply(Target target) {\n", "suffix": "\n}"}
+    prerequisite = [{"path": "ModItems.java", "types": [{"owner": "example.ModItems",
+        "members": ["public static final example.Item ION_RELAY;"]}]}]
+    payload = {"response_source_frame": frame,
+               "inspected_target_api": {"target_api": [{"owner": "example.Target", "name": "equip"}]},
+               "materialized_prerequisite_api": prerequisite}
+    projected = scoped_java_member_messages([{"role": "user", "content": json.dumps(payload)}], frame)
+    task = json.loads(projected[-1]["content"])
+    assert task["materialized_prerequisite_api"] == prerequisite
+    assert "equip" in json.dumps(task["inspected_target_api"])
+
+
 
 def _record(name, count=16):
     return {

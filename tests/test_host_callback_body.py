@@ -24,6 +24,7 @@ def frame(return_type="void"):
 @pytest.mark.parametrize("bad", [
     "return true;", "true; target.mutate();", "true; } void rogue() {",
     "() -> { return true; }", "new Object() { void rogue() {} }",
+    "switch (0) { default -> { target.mutate(); yield true; } }",
 ])
 def test_expression_slot_cannot_contain_statements_or_hidden_members(bad):
     with pytest.raises(ValueError):
@@ -88,3 +89,29 @@ def test_predicate_cannot_mutate_canonical_state():
     ])
     with pytest.raises(ValueError, match="PREDICATE_STATE_WRITE"):
         author_callback_body(router, [], data_name="predicate", frame=frame("boolean"), predicate=True)
+
+
+def test_host_receipt_marks_only_executed_effects_and_is_not_model_writable():
+    router = OperationRouter([
+        {"action": "if"}, {"expression": "false"},
+        {"action": "assign"}, {"target": "target.value", "operator": "=", "value": "1"},
+        {"action": "end"}, {"action": "complete"},
+    ])
+    result = author_callback_body(router, [], data_name="receipt", frame=frame("boolean"),
+                                  effect_receipt=True)
+    assert "boolean __mmmHostEffectApplied = false;" in result
+    assert "target.value = 1;\n__mmmHostEffectApplied = true;\n}" in result
+    assert "return __mmmHostEffectApplied;" in result
+    with pytest.raises(ValueError, match="HOST_OWNED"):
+        parse_expression("__mmmHostEffectApplied")
+
+
+def test_only_assigning_a_local_value_cannot_complete_a_gameplay_effect():
+    router = OperationRouter([
+        {"action": "declare"}, {"expression": "0"},
+        {"action": "assign"}, {"target": "mmmValue0", "operator": "=", "value": "1"},
+        {"action": "complete"}, {"action": "complete"},
+    ])
+    with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
+        author_callback_body(router, [], data_name="local_only", frame=frame("boolean"),
+                             effect_receipt=True)

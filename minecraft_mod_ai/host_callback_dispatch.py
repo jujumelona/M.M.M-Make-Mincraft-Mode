@@ -77,4 +77,5 @@ def render_callback_dispatch(condition, effect, arguments, results):
                 f"    this.{effect}({arguments});\n}}")
     return (f"if (!this.{condition}({arguments})) {{\n"
             f"    return {results['unhandled']};\n}}\n"
-            f"this.{effect}({arguments});\nreturn {results['handled']};")
+            f"if (!this.{effect}({arguments})) {{\n"
+            f"    return {results['unhandled']};\n}}\nreturn {results['handled']};")

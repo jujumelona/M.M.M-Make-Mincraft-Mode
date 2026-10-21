@@ -51,7 +51,8 @@ def test_nonvoid_dispatch_checks_condition_before_effect_and_handled_result():
     body = render_callback_dispatch("matches", "apply", "target", {
         "unhandled": "example.Result.PASS", "handled": "example.Result.SUCCESS"})
     assert body.index("if (!this.matches(target))") < body.index("return example.Result.PASS;")
-    assert body.index("this.apply(target);") < body.index("return example.Result.SUCCESS;")
+    assert body.index("this.apply(target)") < body.index("return example.Result.SUCCESS;")
+    assert "if (!this.apply(target))" in body
 
 
 def test_predicate_and_effect_return_values_are_not_confused():

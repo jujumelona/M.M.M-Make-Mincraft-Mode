@@ -70,7 +70,7 @@ def test_observation_callback_has_separate_typed_condition_and_effect_members():
     router = ConditionRouter()
     source = compose(router)
     assert "private boolean matchesBehavior" in source
-    assert "private void applyBehavior" in source
+    assert "private boolean applyBehavior" in source
     assert "if (this.matchesBehavior" in source
     assert len(router.tasks) == 2
     assert {t["member_role"] for t in router.tasks} == {
