@@ -180,9 +180,14 @@ def test_saved_control_plane_owner_cannot_be_reused():
 
 def test_final_state_validation_uses_inner_specification_not_wrapper():
     from minecraft_mod_ai.authored_structured_design import normalize_structured_sections
-    section = {"state_model": {"specification": {
-        "variables": [{**variable(name="capacity", kind="int"),
-                       "default": "not_a_number"}],
-    }}}
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+    specification = {concern: [] for concern in DETAIL_RECORDS["state_model"]}
+    specification["variables"] = [
+        {**variable(name="capacity", kind="int"), "default": "not_a_number"}
+    ]
+    specification["inapplicable_concerns"] = []
+    section = {"state_model": {
+        "specification": specification, "constraint_evidence_refs": [],
+    }}
     with pytest.raises(ValueError, match="STRUCTURED_STATE_VARIABLE_DEFAULT"):
         normalize_structured_sections(section)
