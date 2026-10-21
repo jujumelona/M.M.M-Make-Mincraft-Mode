@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import os
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -135,3 +137,54 @@ def test_adoptium_architecture_aliases(monkeypatch, machine: str, expected: str)
     monkeypatch.setattr(jdtls_bootstrap.platform, "machine", lambda: machine)
 
     assert jdtls_bootstrap._adoptium_architecture() == expected
+
+
+
+def _fake_jdtls_archive(path: Path) -> bytes:
+    with tarfile.open(path, mode="w:gz") as archive:
+        content = b"#!/bin/sh\nexit 0\n"
+        entry = tarfile.TarInfo("bin/jdtls")
+        entry.size = len(content)
+        entry.mode = 0o755
+        archive.addfile(entry, io.BytesIO(content))
+    return path.read_bytes()
+
+
+def test_install_jdtls_does_not_download_checksum_sidecar(monkeypatch, tmp_path):
+    source = tmp_path / "verified.tar.gz"
+    package = _fake_jdtls_archive(source)
+    digest = hashlib.sha256(package).hexdigest()
+    monkeypatch.setattr(jdtls_bootstrap, "JDTLS_ARCHIVE_SHA256", digest)
+    downloads = []
+
+    def fetch(url, destination, *, max_bytes):
+        downloads.append(url)
+        assert url.endswith(jdtls_bootstrap.JDTLS_ARCHIVE)
+        assert ".sha256" not in url
+        assert max_bytes == jdtls_bootstrap._MAX_ARCHIVE_BYTES
+        shutil.copyfile(source, destination)
+
+    monkeypatch.setattr(jdtls_bootstrap, "_download", fetch)
+    root = tmp_path / "cached" / "jdtls"
+    launcher = jdtls_bootstrap._install_jdtls(root)
+    assert launcher == root / "bin" / "jdtls"
+    assert os.access(launcher, os.X_OK)
+    assert len(downloads) == 1
+    receipt = (root / ".mmm-install.json").read_text(encoding="utf-8")
+    assert digest in receipt
+
+
+def test_install_jdtls_checks_pinned_hash_before_extracting(monkeypatch, tmp_path):
+    source = tmp_path / "bad-release.tar.gz"
+    _fake_jdtls_archive(source)
+    monkeypatch.setattr(jdtls_bootstrap, "JDTLS_ARCHIVE_SHA256", "0" * 64)
+
+    def fetch(url, destination, *, max_bytes):
+        assert url.endswith(jdtls_bootstrap.JDTLS_ARCHIVE)
+        shutil.copyfile(source, destination)
+
+    monkeypatch.setattr(jdtls_bootstrap, "_download", fetch)
+    root = tmp_path / "cached" / "jdtls"
+    with pytest.raises(jdtls_bootstrap.JDTLSBootstrapError, match="checksum mismatch"):
+        jdtls_bootstrap._install_jdtls(root)
+    assert not root.exists()
