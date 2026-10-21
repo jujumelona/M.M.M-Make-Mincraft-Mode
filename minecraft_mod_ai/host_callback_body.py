@@ -12,7 +12,7 @@ import json
 from .construction_source_repair import validate_generated_java_source
 from .fixed_template_generation import _validate_native_arguments
 from .java_operation_ir import identifier
-from .java_region_parser import _parse, _text
+from .java_region_parser import _parse, _text, class_body_token_identity
 from .structured_output import StructuredOutputValidationError
 
 
@@ -82,6 +82,11 @@ def parse_expression(value: str, *, predicate=False) -> str:
                 raise ValueError("CALLBACK_PREDICATE_STATE_WRITE")
         pending.extend(node.named_children)
     return value.strip()
+
+
+def _same_compiled_member(candidate, original):
+    """Compare Java syntax tokens, not whitespace, for rejected candidates."""
+    return class_body_token_identity(candidate) == class_body_token_identity(original)
 
 
 def _validate_state(source, frame):
@@ -172,7 +177,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         def lower_predicate(response):
             expression = parse_expression(response["expression"], predicate=True)
             source = frame["prefix"] + "return " + expression + ";" + frame["suffix"]
-            if rejected_compiler_member is not None and source.strip() == rejected_compiler_member.strip():
+            if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
                 raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
             _validate_state(source, frame)
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
@@ -208,7 +213,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             if effect_receipt:
                 completed.append(f"return {receipt_name};")
             source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
-            if rejected_compiler_member is not None and source.strip() == rejected_compiler_member.strip():
+            if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
                 raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         new_local = f"mmmValue{len(locals_)}"
