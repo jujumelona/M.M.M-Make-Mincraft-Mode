@@ -83,6 +83,13 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         data_pages["implementation_requirements"] = [implementation]
     runtime_bindings = json.loads(spec.get("bindings", {}).get("runtime_state_bindings_json") or "{}")
     candidates = callback_interfaces(context.get("symbols") or {}, side=str(spec.get("side") or "COMMON"))
+    from .host_typed_state_access import verified_state_accessor_symbols
+    # Generated prerequisites are not yet present in the original target
+    # classpath inventory. Integrate *only* their parsed, actual Java methods,
+    # never model-invented state names or signatures.
+    rule_symbols = dict(context["symbols"])
+    for reference, entry in verified_state_accessor_symbols(state_access).items():
+        rule_symbols.setdefault(reference, entry)
     if not candidates:
         raise ValueError("RULE_CHECKED_EVENT_ABI_REQUIRED")
     interface, lifecycle = (("net.fabricmc.api.ClientModInitializer", "onInitializeClient")
@@ -108,7 +115,7 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             if key in runtime_bindings}
         if relevant_runtime:
             rule_behavior["runtime_state_observations"] = relevant_runtime
-        program = RuleProgram(context["symbols"], params, rule_behavior, owner=owner,
+        program = RuleProgram(rule_symbols, params, rule_behavior, owner=owner,
             target_path=spec["target_path"], state_owners=[row["owner"] for row in state_access])
         author = RuleAuthor(router, program, data_pages=data_pages)
         mode = author.ask("rule_activation", "Choose execution semantics: level=every matching observation, rising=false-to-true condition, changed=changed observed value",
