@@ -87,7 +87,7 @@ def test_identifier_equivalent_alias_is_bound_by_host_without_model():
 def test_unrelated_reference_cannot_select_existing_canonical_state():
     router = BindingRouter([{"binding": "canonical_state"}])
     with pytest.raises(Exception):
-        reconcile_behavior_state(router, plan(reads=["wallet"]))
+        reconcile_behavior_state(router, plan(reads=["wallet"], writes=["wallet"]))
     assert router.calls[0][1]["properties"]["binding"]["enum"] == [
         "new_scalar_state", "world_state",
     ]
@@ -145,18 +145,19 @@ def test_reject_control_plane_label_as_new_scalar_owner():
     router = BindingRouter([
         {"binding": "new_scalar_state"},
         {"owner": "new_scalar_state"},
-        {"owner": "world_state"},
-        {"owner": "canonical_state"},
     ])
-    with pytest.raises(ValueError, match="BEHAVIOR_STATE_OWNER_CONTROL_LABEL"):
+    with pytest.raises(Exception):
         reconcile_behavior_state(router, plan(writes=["charge"]))
-    assert len(router.calls) == 4
+    assert len(router.calls) == 2
+    choices = router.calls[1][1]["properties"]["owner"]["enum"]
+    assert "new_scalar_state" not in choices
+    assert "world_state" not in choices
+    assert {"server", "player", "world", "entity"}.issubset(choices)
 
 
-def test_bad_owner_repaired_without_changing_state_concept():
+def test_scalar_owner_uses_constrained_schema_and_keeps_reference():
     router = BindingRouter([
         {"binding": "new_scalar_state"},
-        {"owner": "new_scalar_state"},
         {"owner": "player"},
         {"type": "int"}, {"unit": "charge"}, {"default": "0"},
         {"domain": "charge"},
@@ -165,7 +166,28 @@ def test_bad_owner_repaired_without_changing_state_concept():
     variable_row = result.structured_sections["state_model"]["specification"]["variables"][-1]
     assert variable_row["owner"] == "player"
     assert variable_row["name"] == "charge"
+    assert len(router.calls) == 6
     assert result.request_scope["behavior_requirements"][0]["state_writes"] == ["charge"]
+
+
+def test_missing_read_only_state_cannot_be_invented_as_stored_value():
+    router = BindingRouter()
+    result = reconcile_behavior_state(router, plan(reads=["items in nearby containers"]))
+    assert router.calls == []
+    assert result.structured_sections == plan(reads=["items in nearby containers"]).structured_sections
+    behavior = result.request_scope["behavior_requirements"][0]
+    assert behavior["state_reads"] == []
+    assert behavior["runtime_state_reads"] == ["items in nearby containers"]
+    record = result.request_scope["behavior_state_bindings"]["items in nearby containers"]
+    assert record["binding"] == "world_state"
+    assert record["semantic_status"] == "host_classified_unbound_read"
+
+
+def test_write_only_state_still_declares_real_scalar():
+    router = BindingRouter(new_state_decisions())
+    result = reconcile_behavior_state(router, plan(writes=["charge"]))
+    assert result.request_scope["behavior_requirements"][0]["state_writes"] == ["charge"]
+    assert result.structured_sections["state_model"]["specification"]["variables"][-1]["name"] == "charge"
 
 
 def test_saved_control_plane_owner_cannot_be_reused():
