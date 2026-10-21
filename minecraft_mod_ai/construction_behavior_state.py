@@ -51,11 +51,14 @@ _BINDING_KINDS = frozenset({"canonical_state", "new_scalar_state", "world_state"
 
 
 def _valid_state_owner(owner):
-    """Binding kinds name planning decisions, not runtime storage owners."""
+    """Only named runtime identities may own a scalar, not planner/UI prose."""
     return (
         isinstance(owner, str)
-        and bool(owner.strip())
-        and owner.strip().casefold() not in _BINDING_KINDS
+        and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:[.:][A-Za-z_][A-Za-z0-9_]*)*",
+            owner,
+        ) is not None
+        and owner.casefold() not in _BINDING_KINDS
     )
 
 
