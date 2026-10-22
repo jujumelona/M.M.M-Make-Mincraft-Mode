@@ -112,7 +112,24 @@ def select_behavior_callback(router, behavior, candidates):
                 "select_verified_fabric_event_owner" if attempt == 0
                 else f"select_verified_fabric_event_owner_alternative_{attempt}")
             owner = selection.get("event_owner")
-            if owner not in remaining:
+            if owner == "UNBOUND":
+                # Declining a *search group* cannot prove there is no valid
+                # callback inside the indexed signatures. Inspect a bounded
+                # real owner deterministically; accept only a subsequently
+                # selected exact event_id. This avoids falsely treating a
+                # planner's first UNBOUND owner choice as a platform absence.
+                def owner_rank(name):
+                    rows = remaining[name]
+                    general_context = (
+                        "MinecraftServer", "ServerLevel", "ServerWorld",
+                        "ServerPlayer", "PlayerEntity", "ServerPlayerEntity",
+                    )
+                    return (-sum(
+                        any(str(kind).endswith(tag) for tag in general_context)
+                        for row in rows for kind in row.get("parameters", ())
+                    ), name)
+                owner = min(remaining, key=owner_rank)
+            elif owner not in remaining:
                 raise HostEventBindingError(behavior, {
                     "owner_selection": selection, "rejected": rejected,
                 })
