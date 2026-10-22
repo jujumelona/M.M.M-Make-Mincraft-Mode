@@ -261,3 +261,48 @@ def test_client_mixin_uses_client_source_set_and_scoped_manifest(tmp_path):
     assert mixins == [existing, {
         "config": created["mixin_config"], "environment": "client",
     }]
+
+
+
+def test_materialized_custom_event_requires_real_byte_verified_registration(tmp_path):
+    import hashlib
+    from minecraft_mod_ai.feature_registration_proof import validate_registered_event_sources
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    installed = materialize_verified_custom_event(
+        project_root=tmp_path, symbols=SYMBOLS,
+        source_site_ref="opaqueMethod", behavior_id="buy_module",
+        package="example.generated",
+    )
+    receipts = read_verified_custom_event_receipts(
+        project_root=tmp_path, symbols=SYMBOLS,
+        behavior_ids=["buy_module"], package="example.generated",
+    )
+    assert len(receipts) == 1
+    assert receipts[0] == installed["callback"]
+    suffix = hashlib.sha256(b"buy_module").hexdigest()[:20]
+    event_owner = receipts[0]["event_owner"]
+    java = (f"public class Bridge {{\n"
+            f"private void handleBehavior{suffix}(example.Transaction tx, String name, int count) {{ }}\n"
+            f"private void registerBehavior{suffix}() {{"
+            f"{event_owner}.EVENT.register(this::handleBehavior{suffix}); }}\n"
+            "}")
+    validate_registered_event_sources(
+        java, [{"behavior_id": "buy_module"}], [],
+        materialized_events=receipts,
+    )
+    with pytest.raises(ValueError, match="INSPECTED_HOOK_NOT_REGISTERED"):
+        validate_registered_event_sources(
+            java, [{"behavior_id": "buy_module"}], [],
+        )
+    producer = next(tmp_path / path for path in installed["files"]
+                    if path.endswith(".java") and "/mixin/" in path)
+    producer.write_text("tampered mixin source")
+    with pytest.raises(ValueError, match="MATERIALIZED_FILE_MISMATCH"):
+        read_verified_custom_event_receipts(
+            project_root=tmp_path, symbols=SYMBOLS,
+            behavior_ids=["buy_module"], package="example.generated",
+        )
