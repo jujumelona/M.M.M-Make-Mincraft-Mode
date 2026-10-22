@@ -84,8 +84,18 @@ class RuleProgram:
                 or row["owner"] == "net.fabricmc.fabric.api.event.Event"):
             raise ValueError("RULE_EVENT_DISPATCH_FORBIDDEN")
         if row.get("kind") == "METHOD" and not effect:
-            if not str(row.get("name", "")).startswith(("get", "is", "has", "can", "should", "read", "peek")):
-                raise ValueError("RULE_OBSERVATION_CALL_REQUIRED: " + str(row.get("name")))
+            name = str(row.get("name", ""))
+            # Collection and value queries often carry parameters and do not
+            # use JavaBean getter names. They are observation APIs, not
+            # gameplay mutations; type/arity/access are still checked by IR.
+            pure_queries = {
+                "size", "contains", "containsKey", "containsValue", "count",
+                "length", "indexOf", "lastIndexOf", "equals", "matches",
+                "startsWith", "endsWith", "isEmpty",
+            }
+            if not (name.startswith(("get", "is", "has", "can", "should", "read", "peek"))
+                    or name in pure_queries):
+                raise ValueError("RULE_OBSERVATION_CALL_REQUIRED: " + name)
         if constructor and row.get("kind") != "CONSTRUCTOR":
             raise ValueError("RULE_CONSTRUCTOR_REQUIRED")
         if any(self.checker.checked_exception(kind) for kind in row.get("throws", ())):
