@@ -411,7 +411,14 @@ def compose_first_pass_java(
     # method-reference registration are host-authored, not guessed locals.
     bound_events = {}
     event_candidates = []
-    if host_mode and bindings.get("request_feature_entrypoint"):
+    # Source-owned features must supply their own real execution producer.
+    # The restricted rule path above is allowed to bind only inspected hooks
+    # whose observation contract is already proven. Reusing the same hook
+    # picker here produced JAVA_HOST_BEHAVIOR_EVENT_UNBOUND even after the
+    # feature was deliberately routed away from it.
+    source_owned = bool(host_mode and (construction_context or {}).get("host_source_owned"))
+    if (host_mode and bindings.get("request_feature_entrypoint")
+            and not (construction_context or {}).get("host_source_owned")):
         from .host_fabric_callback_abi import callback_interfaces
         symbol_index = (construction_context or {}).get("symbols") or {}
         event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
