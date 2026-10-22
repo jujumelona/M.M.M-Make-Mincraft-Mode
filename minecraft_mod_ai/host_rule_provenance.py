@@ -191,6 +191,22 @@ def runtime_source_expression_proof(program, root, semantic_name):
         return False
     for ref in graph:
         node = nodes[ref]
+        if node.get("op") != "entity_presence":
+            continue
+        entity = node.get("attributes", {}).get("entity_owner")
+        if not isinstance(entity, str):
+            continue
+        candidate = program.symbols.get(entity, {})
+        if (candidate.get("kind") != "CLASS"
+                or candidate.get("provenance") != "materialized_prerequisite_declaration"):
+            continue
+        match_terms = tokens - {"presence", "present", "exists", "existing",
+                                "entity", "entities", "mob", "mobs"}
+        if match_terms and match_terms <= set(_canonical_words(
+                entity.rsplit(".", 1)[-1])) and derived_from_event(ref):
+            return True
+    for ref in graph:
+        node = nodes[ref]
         if node.get("op") not in {"call", "field"}:
             continue
         symbol_ref = node.get("attributes", {}).get("symbol_ref")
