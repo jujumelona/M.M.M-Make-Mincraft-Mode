@@ -451,6 +451,9 @@ def compose_first_pass_java(
                 else:
                     bound_events[str(behavior["behavior_id"])] = select_behavior_callback(
                         router, behavior, event_candidates)
+    if source_work_graph is not None:
+        from .feature_source_work_graph import bind_selected_hooks
+        source_work_graph = bind_selected_hooks(source_work_graph, bound_events)
     units = []
     for index, item in enumerate(plan["units"], 1):
         unit = dict(item)
