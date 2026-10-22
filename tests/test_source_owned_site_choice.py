@@ -2,6 +2,7 @@
 import pytest
 
 from minecraft_mod_ai.source_owned_hook import SourceHookUnavailable
+from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 from minecraft_mod_ai.source_owned_site_choice import (
     shortlist_verified_sites, choose_verified_source_site,
 )
@@ -71,7 +72,7 @@ def test_unsupported_site_remains_explicit_unimplemented_producer():
 
 def test_model_cannot_add_an_uninspected_site_to_the_candidate_set():
     behavior = {"behavior_id": "trade", "trigger": "Purchase a station module"}
-    with pytest.raises(ValueError):
+    with pytest.raises(StructuredOutputValidationError):
         choose_verified_source_site(Picker("invented#EVENT"), behavior, SYMBOLS)
     with pytest.raises(SourceHookUnavailable, match="custom_source_site_not_resolved"):
         choose_verified_source_site(Picker("SOURCE_REQUIRED"), behavior, SYMBOLS)
