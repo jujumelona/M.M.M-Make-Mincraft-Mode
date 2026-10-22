@@ -492,3 +492,31 @@ def test_rule_api_search_rejects_incidental_short_substring_matches():
     with pytest.raises(ValueError, match="RULE_CHECKED_CAPABILITY_REQUIRED"):
         author.symbol("Fight aliens in space", "METHOD")
     assert calls == ["rule_api_query"] * 3
+
+
+
+def test_typed_inventory_membership_observation_is_not_mistaken_for_mutation():
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+    from minecraft_mod_ai.host_rule_provenance import runtime_source_expression_proof
+    world, inventory = "example.World", "example.Inventory"
+    symbols = {
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        inventory: {"kind": "CLASS", "owner": inventory, "access": 1},
+        "inventory": {"kind": "METHOD", "owner": world, "name": "getInventory",
+                      "access": 1, "parameters": [], "return_type": inventory},
+        "contains": {"kind": "METHOD", "owner": inventory, "name": "contains",
+                     "access": 1, "parameters": ["java.lang.String"],
+                     "return_type": "boolean"},
+        "delete": {"kind": "METHOD", "owner": inventory, "name": "clear",
+                   "access": 1, "parameters": [], "return_type": "void"},
+    }
+    p = RuleProgram(symbols, [{"type": world, "name": "arg0"}],
+        {"behavior_id": "generic-rule", "state_reads": [], "state_writes": []},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    holder = p.value("call", [p.inputs[0]], symbol_ref="inventory")
+    needle = p.value("literal", type="java.lang.String", value="a")
+    present = p.value("call", [holder, needle], symbol_ref="contains")
+    assert p.kind(present) == "boolean"
+    assert runtime_source_expression_proof(p, present, "Weapon inventory")
+    with pytest.raises(ValueError, match="RULE_OBSERVATION_CALL_REQUIRED"):
+        p.value("call", [holder], symbol_ref="delete")
