@@ -99,15 +99,28 @@ class RuleAuthor:
             query = self.ask("rule_api_query", purpose, {
                 "query": {"type": "string", "minLength": 1, "maxLength": 120}},
                 instruction="Describe the required API operation/type in a few search words.")["query"]
-            words = re.findall(r"[\w]+", query.casefold())
+            # Match whole semantic tokens in callable member names, not
+            # arbitrary substrings of package prefixes. Previously a query
+            # containing "in" matched unrelated "minecraft" and "inventory"
+            # APIs, which made a valid but meaningless call look relevant.
+            def tokens(value):
+                split = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
+                return set(re.findall(r"[a-z]{3,}", split.lower()))
+            words = tokens(query)
+            if not words:
+                continue
             pool = []
             for key, row in self.p.symbols.items():
                 if row.get("kind") != kind:
                     continue
-                text = (str(row.get("owner", "")) + "." + str(row.get("name", ""))).casefold()
-                score = sum(word in text for word in words)
-                if not score:
+                name_words = tokens(row.get("name", ""))
+                owner_words = tokens(row.get("owner", ""))
+                overlap = len(name_words & words)
+                if kind == "CONSTRUCTOR":
+                    overlap += len(owner_words & words)
+                if not overlap:
                     continue
+                score = overlap
                 if (kind != "CONSTRUCTOR"
                         and not (row.get("static") or int(row.get("access", 0)) & 8)):
                     if not any(self.p.checker.assignable(value["type"], row["owner"])
