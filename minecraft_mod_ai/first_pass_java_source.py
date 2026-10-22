@@ -475,6 +475,7 @@ def compose_first_pass_java(
                     source_site_ref=str(source_ref), behavior_id=behavior_id,
                     package=package_name,
                     at=str(behavior.get("source_injection_point") or "HEAD"),
+                    side=str(spec.get("side") or "COMMON").upper(),
                 )
                 bound_events[behavior_id] = produced["callback"]
                 if source_work_graph is not None:
