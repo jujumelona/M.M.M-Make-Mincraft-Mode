@@ -40,6 +40,7 @@ def validate_registered_event_sources(
     source: str,
     behaviors: Sequence[Mapping],
     inspected_events: Sequence[Mapping],
+    *, materialized_events: Sequence[Mapping] = (),
 ) -> None:
     """Admit only registration of real, inspected Fabric Event fields.
 
@@ -52,6 +53,14 @@ def validate_registered_event_sources(
     masked = _lexical_code(source)
     compact = re.sub(r"\s+", "", masked)
     available = {str(row.get("event_id") or ""): row for row in inspected_events}
+    for row in materialized_events:
+        if (row.get("provenance") != "verified_source_site_mixin"
+                or not row.get("event_id") or not row.get("event_owner")
+                or row.get("event_field") != "EVENT"):
+            raise ValueError("FEATURE_PROOF_CUSTOM_EVENT_RECEIPT_INVALID")
+        if row["event_id"] in available:
+            raise ValueError("FEATURE_PROOF_DUPLICATE_EVENT_ID")
+        available[row["event_id"]] = row
     for behavior in behaviors:
         identity = str(behavior.get("behavior_id") or "")
         if not identity:
