@@ -1,66 +1,42 @@
-"""Source-owned execution never re-enters the unsuccessful hook-selection model."""
+"""A feature without an inspected occurrence cannot be 'implemented' by no-arg code."""
 from __future__ import annotations
 
-import hashlib
-import json
+import pytest
 
 from minecraft_mod_ai.first_pass_java_source import compose_first_pass_java
+from minecraft_mod_ai.source_owned_hook import SourceHookUnavailable
 
 
-def test_source_owned_feature_authors_bounded_registrar_without_model_event_picker(monkeypatch):
-    calls = []
-    def no_hook_search(*args, **kwargs):
-        raise AssertionError("source ownership cannot return to the failed native event pager")
+def test_source_owned_feature_requires_inspected_runtime_occurrence(monkeypatch):
     monkeypatch.setattr(
         "minecraft_mod_ai.host_fabric_callback_abi.callback_interfaces",
-        no_hook_search,
-    )
-    monkeypatch.setattr(
-        "minecraft_mod_ai.host_java_imports.host_add_verified_imports",
-        lambda source, **kwargs: source,
+        lambda symbols, side: [],
     )
 
-    class Coder:
-        def generate_structured_data(self, role, messages, *, data_name, parameters):
-            calls.append(data_name)
-            if data_name.startswith("submit_java_declaration_"):
-                return {
-                    "visibility": "private", "static": False,
-                    "return_type": "void", "type_parameters": "",
-                    "parameters": [], "throws": [], "annotations": [],
-                }
-            raise AssertionError(data_name)
+    class NoUnsafeCoder:
+        def generate_structured_data(self, *args, **kwargs):
+            raise AssertionError("do not generate an arbitrary callback/registrar")
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
-            task = json.loads(messages[-1]["content"])
-            calls.append((data_name, task["member_role"]))
-            if task["member_role"] == "register_callback":
-                # Real source implementation is separately javac-validated.
-                body = "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(s -> {});"
-            else:
-                body = "System.out.println(\"implemented\");"
-            return source_frame["prefix"] + body + source_frame["suffix"]
+        def generate_java_source(self, *args, **kwargs):
+            raise AssertionError("no unchecked Java source must be authored")
 
-    behavior = {
-        "behavior_id": "behavior_generic", "intent": "Perform real world interaction",
-        "source_quote": "Perform real world interaction",
-        "trigger": "", "effects": "World interaction",
-    }
     spec = {
         "target_path": "src/main/java/example/Callback.java", "language": "java",
-        "requirement": "Perform real world interaction",
-        "bindings": {"package_name": "example", "class_name": "Callback",
-                     "request_feature_entrypoint": True},
-    }
-    output = compose_first_pass_java(
-        Coder(), spec, [], behaviors=[behavior],
-        construction_context={
-            "symbols": {}, "authoring_contract": {},
-            "host_source_owned": True,
+        "requirement": "Perform world interaction",
+        "bindings": {
+            "package_name": "example", "class_name": "Callback",
+            "request_feature_entrypoint": True,
         },
-    )
-    registrar = "registerBehavior" + hashlib.sha256(b"behavior_generic").hexdigest()[:20]
-    assert "implements net.fabricmc.api.ModInitializer" in output
-    assert registrar + "()" in output
-    assert "END_SERVER_TICK.register(" in output
-    assert ("submit_java_implementation_2", "register_callback") in calls
+    }
+    behaviors = [{
+        "behavior_id": "generic", "intent": "Interact with world",
+        "source_quote": "Interact with world", "effects": "Real world interaction",
+    }]
+    with pytest.raises((SourceHookUnavailable, ValueError), match=(
+            "SOURCE_HOOK_PRODUCER_REQUIRED|JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")):
+        compose_first_pass_java(
+            NoUnsafeCoder(), spec, [], behaviors=behaviors,
+            construction_context={
+                "symbols": {}, "authoring_contract": {},
+                "host_source_owned": True,
+            })
