@@ -124,8 +124,9 @@ def compile_run(tmp_path, source, probe, *, callback_return="void"):
             "public class ServerTickEvents { public interface EndTick { " + callback_return + " onEndTick(net.minecraft.server.level.ServerLevel w); } "
             "public static final Event<EndTick> END_LEVEL_TICK=new Event<>(); }",
         "net/minecraft/server/level/ServerLevel.java": "package net.minecraft.server.level; public class ServerLevel { "
-            "public boolean ready=true; public long time; public int effects; "
-            "public long getGameTime() { return time; } public boolean isReady() { return ready; } }",
+            "public boolean ready=true; public long time; public int effects; public int weaponInventory; "
+            "public long getGameTime() { return time; } public boolean isReady() { return ready; } " +
+            "public int getInventory(){return weaponInventory;} }",
         "example/Probe.java": "package example; import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents; "
             "import net.minecraft.server.level.ServerLevel; public class Probe { "
             "static void tick(ServerLevel w,long t) { w.time=t; ServerTickEvents.END_LEVEL_TICK.listener.onEndTick(w); } "
@@ -260,3 +261,94 @@ def test_nonvoid_callback_returns_handled_only_after_matching_effects(tmp_path):
         check(!ServerTickEvents.END_LEVEL_TICK.listener.onEndTick(w)); check(w.effects==0);
         w.ready=true; check(ServerTickEvents.END_LEVEL_TICK.listener.onEndTick(w)); check(w.effects==1);
     """, callback_return="boolean")
+
+
+
+def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
+    """A missing read-only planner label becomes inspected executable Java.
+
+    Its getter is getInventory, not getWeaponInventory or the exact logical
+    label. The host must compile an actual expression and require that value
+    in the gate instead of accepting an unrelated world flag.
+    """
+    import json
+    from minecraft_mod_ai.host_rule_feature import compose_rule_feature
+    symbols = index()
+    symbols["inventory"] = {
+        "kind": "METHOD", "owner": LEVEL, "name": "getInventory",
+        "access": 1, "parameters": [], "return_type": "int",
+    }
+    replies = deque([
+        ("rule_observation", {"observation": "world_state"}),
+        ("rule_value_operation", {"operation": "call"}),
+        ("rule_api_query", {"query": "getInventory"}),
+        ("rule_api_page", {"symbol": "s0"}),
+        ("rule_operand", {"value_ref": "v0"}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v1"}),
+        ("rule_activation", {"mode": "level"}),
+        ("rule_value_operation", {"operation": "binary"}),
+        ("rule_binary_operator", {"operator": ">"}),
+        ("rule_operand", {"value_ref": "v1"}),
+        ("rule_operand", {"value_ref": "build"}),
+        ("rule_value_operation", {"operation": "literal"}),
+        ("rule_literal_type", {"type": "int"}),
+        ("rule_literal", {"value": 0}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v2"}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v3"}),
+        ("rule_effect_operation", {"operation": "assign"}),
+        ("rule_value_operation", {"operation": "field"}),
+        ("rule_api_query", {"query": "effects"}),
+        ("rule_api_page", {"symbol": "s0"}),
+        ("rule_operand", {"value_ref": "v0"}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v4"}),
+        ("rule_operand", {"value_ref": "build"}),
+        ("rule_value_operation", {"operation": "literal"}),
+        ("rule_literal_type", {"type": "int"}),
+        ("rule_literal", {"value": 1}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v5"}),
+        ("rule_assignment_operator", {"operator": "+="}),
+        ("rule_effect_operation", {"operation": "complete"}),
+    ])
+
+    class Replay:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert replies, f"Unexpected extra inference for {data_name}"
+            expected, value = replies.popleft()
+            assert data_name == expected, (data_name, expected)
+            return value
+
+        def generate_java_source(self, *args, **kwargs):
+            raise AssertionError("Host must own Java syntax")
+
+    source = compose_rule_feature(Replay(), {
+        "language": "java", "side": "COMMON",
+        "target_path": "src/main/java/example/Bridge.java",
+        "bindings": {
+            "runtime_state_bindings_json": json.dumps({
+                "Weapon inventory": {
+                    "binding": "world_state",
+                    "original_name": "Weapon inventory",
+                    "observation": "Weapon inventory",
+                    "semantic_status": "host_classified_unbound_read",
+                }
+            })
+        }
+    }, {"symbols": symbols, "project_root": str(tmp_path)},
+        package="example", name="Bridge", behaviors=[{
+            "behavior_id": "inventory-effect", "intent": "React to live inventory",
+            "trigger": "Inventory is nonempty", "effects": "Increment effects",
+            "state_reads": [], "state_writes": [],
+            "runtime_state_reads": ["Weapon inventory"],
+        }], state_access=[])
+    assert not replies
+    assert ".getInventory()" in source
+    compile_run(tmp_path, source,
+                "ServerLevel w=new ServerLevel(); "
+                "tick(w,0); check(w.effects==0); "
+                "w.weaponInventory=3; tick(w,1); check(w.effects==1); "
+                "w.weaponInventory=0; tick(w,2); check(w.effects==1);")
