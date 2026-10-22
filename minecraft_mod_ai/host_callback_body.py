@@ -213,6 +213,7 @@ def _choose_verified_expression(router, scoped, *, name, choices, context, frame
     def lower(row):
         expression = by_id[row["verified_call_id"]]
         if context.get("predicate"):
+            validate_runtime_observation_predicate(scoped, expression)
             source = frame["prefix"] + "return " + expression + ";" + frame["suffix"]
         else:
             source = frame["prefix"] + expression + ";" + frame["suffix"]
@@ -226,6 +227,55 @@ def _choose_verified_expression(router, scoped, *, name, choices, context, frame
         context={**context, "verified_candidates": choices}, lower=lower)
 
 
+def validate_runtime_observation_predicate(scoped, expression):
+    """Require a live callback receiver when a source producer is still pending.
+
+    A constant predicate cannot certify an undefined world/UI observation. This
+    check is only necessary grounding, not a semantic equivalence proof:
+    real gameplay still requires integration tests.
+    """
+    pending = []
+    parameters = []
+    for message in reversed(scoped):
+        if message.get("role") != "user":
+            continue
+        try:
+            task = json.loads(message.get("content") or "")
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(task, dict):
+            continue
+        work = task.get("source_owned_work")
+        if isinstance(work, dict):
+            pending = [row for row in work.get("source_tasks", ())
+                       if row.get("kind") == "runtime_producer"
+                       and row.get("status") != "verified"]
+            metadata = task.get("declaration_metadata") or {}
+            parameters = [row.get("name") for row in metadata.get("parameters", ())
+                          if isinstance(row, dict) and isinstance(row.get("name"), str)]
+            break
+    if not pending:
+        return
+    # Access to a real event/world receiver is the minimum prerequisite for
+    # producing a runtime value. Strings, constants and undeclared state keys
+    # do not count, even if such Java syntax compiles.
+    expression = parse_expression(expression, predicate=True)
+    raw, root = _parse("class MmmObservation { boolean check() { return "
+                       + expression + "; } }")
+    found = False
+    visit = [root]
+    while visit:
+        node = visit.pop()
+        if node.type == "identifier" and _text(raw, node) in parameters:
+            found = True
+        visit.extend(node.named_children)
+    if not found:
+        names = sorted({str(row.get("name") or row.get("task_id") or "")
+                        for row in pending})
+        raise ValueError("SOURCE_RUNTIME_OBSERVATION_NOT_GROUNDED: "
+                         + json.dumps(names, ensure_ascii=False))
+
+
 def _author_predicate(router, scoped, name, frame, correction, verified, rejected):
     if verified:
         return _choose_verified_expression(
@@ -235,6 +285,7 @@ def _author_predicate(router, scoped, name, frame, correction, verified, rejecte
 
     def lower(row):
         expression = parse_expression(row["expression"], predicate=True)
+        validate_runtime_observation_predicate(scoped, expression)
         source = frame["prefix"] + "return " + expression + ";" + frame["suffix"]
         if rejected is not None and _same_compiled_member(source, rejected):
             raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
