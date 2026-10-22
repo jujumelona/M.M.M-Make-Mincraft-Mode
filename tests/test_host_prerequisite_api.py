@@ -126,3 +126,45 @@ public class Demo {
     assert api["types"][0]["owner"] == "example.generated.Demo"
     assert any("void visible()" in member for member in api["types"][0]["members"])
     assert "hidden" not in json.dumps(api)
+
+
+
+def test_materialized_dependency_symbols_are_actual_public_source_declarations():
+    from minecraft_mod_ai.host_prerequisite_api import (
+        java_api_declarations, inspected_prerequisite_symbols)
+    java = """package example;
+import net.minecraft.world.entity.Entity;
+public class AlienEntity extends Entity {
+    public static final String LABEL = "alien";
+    public int getThreatLevel() { return 2; }
+    public static boolean isAlienPresent() { return true; }
+    private boolean isSecretPresent() { return false; }
+}
+"""
+    api = java_api_declarations(java, path="src/main/java/example/AlienEntity.java")
+    symbols = inspected_prerequisite_symbols([api])
+    assert symbols["example.AlienEntity"]["superclass"] == "net.minecraft.world.entity.Entity"
+    assert symbols["materialized:example.AlienEntity#LABEL"]["return_type"] == "java.lang.String"
+    threat = symbols["materialized:example.AlienEntity#getThreatLevel()"]
+    assert threat["kind"] == "METHOD" and threat["return_type"] == "int"
+    assert threat["static"] is False
+    observed = symbols["materialized:example.AlienEntity#isAlienPresent()"]
+    assert observed["static"] is True
+    assert not any("isSecretPresent" in key for key in symbols)
+    assert all(row["provenance"] == "materialized_prerequisite_declaration"
+               for row in symbols.values())
+
+
+def test_unresolved_generated_type_is_not_fabricated_as_java_abi():
+    from minecraft_mod_ai.host_prerequisite_api import (
+        java_api_declarations, inspected_prerequisite_symbols)
+    source = """package example;
+public class GeneratedOwner {
+    public MissingEntity getMissing() { return null; }
+    public long getTick() { return 1L; }
+}
+"""
+    symbols = inspected_prerequisite_symbols([java_api_declarations(
+        source, path="src/main/java/example/GeneratedOwner.java")])
+    assert "materialized:example.GeneratedOwner#getTick()" in symbols
+    assert "materialized:example.GeneratedOwner#getMissing()" not in symbols
