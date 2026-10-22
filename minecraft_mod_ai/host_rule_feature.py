@@ -105,10 +105,20 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             behavior, runtime_bindings, rule_symbols,
             input_types=tuple(dict.fromkeys(
                 kind for hook in candidates for kind in hook.get("parameters", ()))))
-        # Missing producers are a dependency-graph problem, not a failed
-        # Java expression. Reject before event selection, ABI paging, and
-        # dozens of meaningless model calls.
-        binding = bind_rule_observation(router, behavior, candidates)
+        # A candidate event must provide the exact typed receiver needed
+        # by the checked observer; choose among compatible hooks *before*
+        # handing the menu to the small model.
+        from .host_rule_provenance import (
+            RuleMissingRuntimeProducer, compatible_events_for_runtime_producers)
+        options = compatible_events_for_runtime_producers(
+            candidates, verified_sources, rule_symbols)
+        if not options:
+            raise RuleMissingRuntimeProducer(behavior_id, [{
+                "name": key,
+                "reason": "no_inspected_event_provides_runtime_observer_receiver",
+                "verified_symbol_ref": ref}
+                for key, ref in verified_sources.items()])
+        binding = bind_rule_observation(router, behavior, options)
         event = binding["event"]
         if event.get("type_parameters"):
             raise ValueError("RULE_GENERIC_CALLBACK_REQUIRES_ADAPTER")
