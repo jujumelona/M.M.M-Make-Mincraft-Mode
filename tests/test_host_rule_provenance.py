@@ -55,7 +55,7 @@ def test_unbound_world_observations_fail_before_model_java_requests(tmp_path):
                         "state_reads": [], "state_writes": []}],
             state_access=[])
     assert {row["name"] for row in caught.value.missing} == set(required)
-    assert all(row["reason"] == "planning_only_world_state" for row in caught.value.missing)
+    assert all(row["reason"] == "no_inspected_semantic_source" for row in caught.value.missing)
     assert "RULE_RUNTIME_PRODUCER_REQUIRED" in str(caught.value)
 
 
