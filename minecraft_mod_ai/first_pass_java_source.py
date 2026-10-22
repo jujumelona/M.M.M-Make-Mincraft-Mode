@@ -431,26 +431,65 @@ def compose_first_pass_java(
         from .host_fabric_callback_abi import callback_interfaces
         symbol_index = (construction_context or {}).get("symbols") or {}
         event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
-        if (symbol_index or source_owned) and not event_candidates:
-            # Even an empty/missing symbol index cannot authorize the
-            # no-argument, fake registration path. The original occurrence
-            # needs an inspected callback or a separately compiled custom
-            # source hook before a feature handler can be emitted.
+        site_bindings = (construction_context or {}).get("source_site_bindings") or {}
+        if not isinstance(site_bindings, Mapping):
+            raise ValueError("JAVA_SOURCE_SITE_BINDINGS_INVALID")
+        if (symbol_index or source_owned) and not event_candidates and not (
+                source_owned and all(
+                    behavior.get("source_site_ref") or
+                    site_bindings.get(str(behavior.get("behavior_id")))
+                    for behavior in behaviors)):
+            # Neither a guessed default callback nor an uninspected source
+            # location can implement an unknown gameplay occurrence.
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
-        if event_candidates:
+        if event_candidates or source_owned:
             from .host_behavior_event_binding import select_behavior_callback
             for behavior in behaviors:
-                if source_owned:
-                    # Split the unknown runtime observation into a small
-                    # independent hook choice before Java authoring. The
-                    # model cannot invent an event ID, and the host owns
-                    # every selected listener signature and registration.
-                    from .source_owned_hook import choose_source_hook
-                    bound_events[str(behavior["behavior_id"])] = choose_source_hook(
+                behavior_id = str(behavior["behavior_id"])
+                if not source_owned:
+                    bound_events[behavior_id] = select_behavior_callback(
                         router, behavior, event_candidates)
-                else:
-                    bound_events[str(behavior["behavior_id"])] = select_behavior_callback(
-                        router, behavior, event_candidates)
+                    continue
+                from .source_owned_hook import choose_source_hook, SourceHookUnavailable
+                if event_candidates:
+                    try:
+                        bound_events[behavior_id] = choose_source_hook(
+                            router, behavior, event_candidates)
+                        continue
+                    except SourceHookUnavailable:
+                        # SOURCE_REQUIRED is not a second opportunity to
+                        # substitute a player_join or server_tick callback.
+                        pass
+                source_ref = (behavior.get("source_site_ref")
+                              or site_bindings.get(behavior_id))
+                if not source_ref:
+                    raise SourceHookUnavailable(
+                        behavior_id, reason="verified_source_site_required",
+                        inspected=len(event_candidates))
+                root = (construction_context or {}).get("project_root")
+                if not root:
+                    raise ValueError("JAVA_CUSTOM_SOURCE_PROJECT_ROOT_REQUIRED")
+                from .source_owned_custom_event import materialize_verified_custom_event
+                produced = materialize_verified_custom_event(
+                    project_root=root, symbols=symbol_index,
+                    source_site_ref=str(source_ref), behavior_id=behavior_id,
+                    package=package_name,
+                    at=str(behavior.get("source_injection_point") or "HEAD"),
+                )
+                bound_events[behavior_id] = produced["callback"]
+                if source_work_graph is not None:
+                    # Keep newly materialized events separate from the
+                    # pre-existing Fabric callback inventory.
+                    from copy import deepcopy
+                    source_work_graph = deepcopy(source_work_graph)
+                    for row in source_work_graph["tasks"]:
+                        if (row.get("kind") == "occurrence_hook"
+                                and row.get("behavior_id") == behavior_id):
+                            row["evidence"].setdefault(
+                                "materialized_custom_event_ids", []
+                            ).append(produced["callback"]["event_id"])
+                            row["evidence"]["source_site_ref"] = str(source_ref)
+                            break
     if source_work_graph is not None:
         from .feature_source_work_graph import bind_selected_hooks
         source_work_graph = bind_selected_hooks(source_work_graph, bound_events)
