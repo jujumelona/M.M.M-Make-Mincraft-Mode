@@ -80,19 +80,19 @@ def validate_runtime_read_producers(behavior, runtime_bindings, symbols, *, inpu
         if not isinstance(binding, dict) or binding.get("binding") != "world_state":
             missing.append({"name": name, "reason": "missing_world_observer_binding"})
             continue
-        ref = binding.get("verified_symbol_ref")
-        derived = []
-        if ref is None and input_types:
-            derived = _actual_observer_candidates(name, symbols, input_types)
-            if len(derived) == 1:
-                ref = derived[0]
+        # A model-authored 'host_verified_observer' label is not proof.
+        # Reconstruct the exact reachable public accessor inventory from
+        # authoritative JVM facts even for an explicitly supplied symbol ID.
+        declared = binding.get("verified_symbol_ref")
+        derived = _actual_observer_candidates(name, symbols, input_types)
+        ref = declared if isinstance(declared, str) else (
+            derived[0] if len(derived) == 1 else None)
         evidence = symbols.get(ref) if isinstance(ref, str) else None
         if (not isinstance(evidence, dict)
                 or evidence.get("kind") not in {"METHOD", "FIELD"}
                 or evidence.get("return_type") in {None, "void"}
                 or (evidence.get("kind") == "METHOD" and evidence.get("parameters"))
-                or (binding.get("semantic_status") != "host_verified_observer"
-                    and not (len(derived) == 1 and derived[0] == ref))):
+                or len(derived) != 1 or derived[0] != ref):
             missing.append({
                 "name": name,
                 "reason": ("ambiguous_runtime_observer" if len(derived) > 1
