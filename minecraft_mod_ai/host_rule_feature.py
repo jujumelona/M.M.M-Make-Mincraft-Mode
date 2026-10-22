@@ -100,14 +100,30 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         if not behavior_id or behavior_id in seen:
             raise ValueError("RULE_BEHAVIOR_IDENTITY")
         seen.add(behavior_id)
-        from .host_rule_provenance import validate_runtime_read_producers
-        verified_sources = validate_runtime_read_producers(
-            behavior, runtime_bindings, rule_symbols,
-            input_types=tuple(dict.fromkeys(
-                kind for hook in candidates for kind in hook.get("parameters", ()))))
+        from .host_rule_provenance import (
+            RuleMissingRuntimeProducer, validate_runtime_read_producers)
+        input_types = tuple(dict.fromkeys(
+            kind for hook in candidates for kind in hook.get("parameters", ())))
+        # A single named JVM accessor is a fast path, not the sole way to
+        # observe live game state. Complex reads are authored as typed
+        # callback-derived expressions later, using the selected hook.
+        pending_runtime_reads = []
+        try:
+            verified_sources = validate_runtime_read_producers(
+                behavior, runtime_bindings, rule_symbols, input_types=input_types)
+        except RuleMissingRuntimeProducer as error:
+            if any(row.get("reason") != "planning_only_world_state"
+                   for row in error.missing):
+                raise
+            pending_runtime_reads = [row["name"] for row in error.missing]
+            verified_sources = validate_runtime_read_producers(
+                {**behavior, "runtime_state_reads": [
+                    name for name in behavior.get("runtime_state_reads", ())
+                    if name not in pending_runtime_reads]},
+                runtime_bindings, rule_symbols, input_types=input_types)
         # A candidate event must provide the exact typed receiver needed
-        # by the checked observer; choose among compatible hooks *before*
-        # handing the menu to the small model.
+        # by a directly checked observer. For synthesized observations the
+        # host validates the entire typed expression after authoring.
         from .host_rule_provenance import (
             RuleMissingRuntimeProducer, compatible_events_for_runtime_producers)
         options = compatible_events_for_runtime_producers(
@@ -152,10 +168,66 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             if unreachable:
                 raise RuleMissingRuntimeProducer(behavior_id, unreachable)
         author = RuleAuthor(router, program, data_pages=data_pages)
+        from .host_rule_provenance import (
+            expression_dependencies, runtime_source_expression_proof)
+        runtime_sources = {}
+        # Materialize each bound observer as an actual typed IR value, rather
+        # than merely trusting the planning label or a matching method name.
+        for state_name, reference in verified_sources.items():
+            symbol = rule_symbols[reference]
+            if symbol.get("static") or int(symbol.get("access", 0)) & 8:
+                operands = []
+            else:
+                matching = [key for key in program.inputs
+                            if program.checker.assignable(
+                                program.kind(key), symbol["owner"])]
+                if not matching:
+                    raise RuleMissingRuntimeProducer(behavior_id, [{
+                        "name": state_name, "reason": "observer_receiver_not_in_event",
+                        "verified_symbol_ref": reference}])
+                operands = [matching[0]]
+            runtime_sources[state_name] = program.value(
+                "call" if symbol["kind"] == "METHOD" else "field",
+                operands, symbol_ref=reference, purpose="Runtime read: " + state_name)
+        for state_name in pending_runtime_reads:
+            # A complex observer is a bounded typed expression built with
+            # inspected target symbols, not an invented Java getter. Do not
+            # allow another concept's exact getter to certify this read.
+            required = program.behavior.get("verified_runtime_observers", {})
+            program.behavior["verified_runtime_observers"] = {}
+            try:
+                try:
+                    result_ref = author.value(
+                        "Implement a LIVE runtime producer for '" + state_name
+                        + "' using the actual selected callback and inspected APIs. "
+                        "The value must represent this exact game concept, not "
+                        "an unrelated world flag or an arbitrary constant.",
+                        require_grounded=True)
+                except ValueError as error:
+                    raise RuleMissingRuntimeProducer(behavior_id, [{
+                        "name": state_name, "reason": "runtime_producer_authoring_failed",
+                        "diagnostic": str(error)[:400]}]) from error
+            finally:
+                program.behavior["verified_runtime_observers"] = required
+            if not runtime_source_expression_proof(program, result_ref, state_name):
+                raise RuleMissingRuntimeProducer(behavior_id, [{
+                    "name": state_name,
+                    "reason": "producer_has_no_callback_derived_semantic_api",
+                    "typed_value": result_ref}])
+            runtime_sources[state_name] = result_ref
         mode = author.ask("rule_activation", "Choose execution semantics: level=every matching observation, rising=false-to-true condition, changed=changed observed value",
             {"mode": {"type": "string", "enum": ["level", "rising", "changed"]}})["mode"]
-        gate = author.value("Original trigger and preconditions, including every branch",
+        gate = author.value("Original trigger and preconditions, including every branch. "
+                            "Use EVERY required runtime observation value already "
+                            "materialized in the available value IDs.",
                             expected="boolean", require_grounded=True)
+        dependencies = expression_dependencies(program, gate)
+        omitted = [state_name for state_name, ref in runtime_sources.items()
+                   if ref not in dependencies]
+        if omitted:
+            raise RuleMissingRuntimeProducer(behavior_id, [
+                {"name": state_name, "reason": "runtime_read_not_consumed_by_trigger"}
+                for state_name in omitted])
         history, setup, condition, tracking = _tracking(author, program, gate, mode)
         history = history.replace("HISTORY", "history" + suffix)
         setup = setup.replace("HISTORY", "history" + suffix)
@@ -185,6 +257,7 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         registrations.append("this." + registrar + "();")
         records.append({"behavior": behavior, "observation": binding, "activation": mode,
                         "gate": gate, "tracking": tracking, "operations": program.ir,
+                        "runtime_source_expressions": runtime_sources,
                         "semantic_status": "model_authored_unverified"})
     source = ("package " + package + ";\n\npublic final class " + name + " implements " + interface + " {\n"
               + "public " + name + "() {}\n@Override public void " + lifecycle + "() {\n"
