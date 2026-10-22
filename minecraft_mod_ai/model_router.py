@@ -493,7 +493,7 @@ class ModelRouter:
         )
         from .construction_source_repair import (
             assemble_java_implementation, focused_java_correction_messages,
-            repeated_invalid_java_implementation,
+            reject_repeated_invalid_java_implementation,
         )
         from dataclasses import replace
         from .construction_java_context import ensure_live_java_source_capacity
@@ -513,18 +513,9 @@ class ModelRouter:
             try:
                 return assemble_java_implementation(result, source_frame)
             except ValueError as error:
-                if rejected_source is not None and repeated_invalid_java_implementation(
-                        rejected_source, result):
-                    # Repeated syntax failure remains a syntax failure: do not
-                    # disguise the parser's typed scope/category as a generic
-                    # transport/configuration error. Preserve original bytes
-                    # and mark the duplicate so the outer owner cannot retry
-                    # the same candidate as a different implementation.
-                    error.failed_response = result
-                    error.repeated_invalid_response = True
-                    print("CONSTRUCTION_JAVA_REPEATED_REJECTED_BODY: "
-                          + str(error)[:1000], flush=True)
-                    raise
+                if rejected_source is not None:
+                    reject_repeated_invalid_java_implementation(
+                        rejected_source, result, error)
                 if attempt:
                     raise
                 rejected_source = result
