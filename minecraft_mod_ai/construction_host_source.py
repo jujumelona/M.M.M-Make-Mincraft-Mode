@@ -120,6 +120,30 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 return saved["source"]
 
         rule_mode = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
+        feature_route = None
+        if rule_mode:
+            # Route by *executable* source evidence before any model decisions.
+            # A planner-only world_state label is not an installed producer,
+            # and an unnamed occurrence is not an authorized Fabric event.
+            from .feature_execution_route import select_feature_execution_route
+            from .host_fabric_callback_abi import callback_interfaces
+
+            runtime_bindings = json.loads(spec.get("bindings", {}).get(
+                "runtime_state_bindings_json") or "{}")
+            available_callbacks = callback_interfaces(
+                context.get("symbols") or {}, side=str(spec.get("side") or "COMMON"))
+            feature_route = select_feature_execution_route(
+                behaviors, runtime_bindings, context.get("symbols") or {},
+                available_callbacks)
+            if feature_route["route"] == "source_owned_java":
+                rule_mode = False
+            print("FEATURE_EXECUTION_ROUTE: " + json.dumps({
+                "owner": owner,
+                "route": feature_route["route"],
+                "producer_obligations": feature_route["producer_obligations"],
+                "verified_behavior_ids": feature_route["verified_behavior_ids"],
+                "target_compilation_verified": False, "runtime_verified": False,
+            }, ensure_ascii=False), flush=True)
         if rule_mode:
             # Rule authoring queries the authoritative typed symbol index in
             # bounded pages. Do not first ask for whole-feature API retrieval
@@ -141,6 +165,22 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     owner=owner, behaviors=behaviors, source_context=source_context,
                 )
             )
+            if feature_route is not None:
+                bindings = spec.get("bindings", {})
+                prompt["source_owned_producer_obligations"] = feature_route[
+                    "producer_obligations"]
+                prompt["runtime_state_bindings"] = {
+                    key: value for key, value in runtime_bindings.items()
+                    if any(key in row.get("runtime_state_reads", ())
+                           for row in behavior_rows)
+                }
+                prompt["retained_typed_behavior"] = json.loads(
+                    bindings.get("retained_typed_behavior_json") or "{}")
+                prompt["owned_runtime_records"] = json.loads(
+                    bindings.get("owned_runtime_records_json") or "[]")
+                # These obligations are implementation work, NOT proof that
+                # any state getter/hook already exists. The ordinary target
+                # compiler/coverage contract remains mandatory.
         instructions = (
             "Implement the specified Fabric/Minecraft task using only inspected "
             "target APIs and materialized project source. The host builds every "
