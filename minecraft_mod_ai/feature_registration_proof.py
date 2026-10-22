@@ -1,0 +1,66 @@
+"""Require the generated feature registration to bind an inspected callback.
+
+Compilation proves Java types, not activation. A no-argument registrar which
+merely calls a handler directly from onInitialize can compile yet never respond
+to any gameplay event. Check the already-indexed target ABI before accepting
+such generated source as a feature implementation.
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from collections.abc import Mapping, Sequence
+
+
+def validate_registered_event_sources(
+    source: str,
+    behaviors: Sequence[Mapping],
+    inspected_events: Sequence[Mapping],
+) -> None:
+    """Admit only registration of real, inspected Fabric Event fields.
+
+    This is a necessary wiring check, NOT a playtest or proof of semantic
+    correctness. Custom Mixin-created hooks require a separate materialized
+    source owner and cannot be passed off as one of the inspected Fabric hooks.
+    """
+    from .construction_file_author import _lexical_code, _method_body
+
+    masked = _lexical_code(source)
+    compact = re.sub(r"\s+", "", masked)
+    available = {str(row.get("event_id") or ""): row for row in inspected_events}
+    for behavior in behaviors:
+        identity = str(behavior.get("behavior_id") or "")
+        if not identity:
+            raise ValueError("FEATURE_PROOF_BEHAVIOR_ID_REQUIRED")
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+        registrar = "registerBehavior" + digest
+        handler = "handleBehavior" + digest
+        body = _method_body(masked, registrar)
+        if body is None:
+            raise ValueError("FEATURE_PROOF_REGISTRAR_MISSING: " + identity)
+        if not re.search(r"\b" + re.escape(handler) + r"\b", body):
+            raise ValueError("FEATURE_PROOF_HANDLER_NOT_CONNECTED: " + identity)
+        explicit = str(behavior.get("event_binding") or "")
+        eligible = ([available[explicit]] if explicit in available else
+                    [] if explicit else list(available.values()))
+        found = False
+        compact_body = re.sub(r"\s+", "", body)
+        for event in eligible:
+            owner = str(event.get("event_owner") or "")
+            field = str(event.get("event_field") or "")
+            if not owner or not field:
+                continue
+            reference = owner + "." + field + ".register("
+            simple = owner.rsplit(".", 1)[-1] + "." + field + ".register("
+            if reference in compact_body:
+                found = True
+                break
+            if simple in compact_body and "import" + owner + ";" in compact:
+                found = True
+                break
+            if (field + ".register(" in compact_body
+                    and "importstatic" + owner + "." + field + ";" in compact):
+                found = True
+                break
+        if not found:
+            raise ValueError("FEATURE_PROOF_INSPECTED_HOOK_NOT_REGISTERED: " + identity)
