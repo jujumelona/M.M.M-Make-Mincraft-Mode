@@ -153,6 +153,92 @@ class RuleAuthor:
                                  expected=kind, depth=depth))
         return refs
 
+    def _checked_observation_candidates(self, purpose):
+        """Find callable runtime observations from actual callback input types.
+
+        Searching the whole classpath for model-authored prose (e.g. an alien
+        encounter) cannot reliably recover getGameTime/isReady. Build a short
+        typed menu from methods/fields on callback receiver owners and their
+        inspected superclasses; the model selects an existing symbol ID.
+        """
+        receivers = [(key, self.p.values[key]["type"])
+                     for key in self.p.active
+                     if self.p.values[key]["type"] not in PRIMITIVES]
+        available_owners = set()
+        for _ref, kind in receivers:
+            pending = [kind]
+            while pending:
+                current = pending.pop()
+                if current in available_owners:
+                    continue
+                available_owners.add(current)
+                record = self.p.symbols.get(current, {})
+                pending.extend(item for item in (
+                    record.get("superclass"), *(record.get("interfaces") or ())
+                ) if item)
+        wanted = set(re.findall(r"[a-z]{3,}", re.sub(
+            r"(?<=[a-z0-9])(?=[A-Z])", " ", purpose).lower()))
+        pool = []
+        for key, row in self.p.symbols.items():
+            kind = row.get("kind")
+            if kind not in {"METHOD", "FIELD"}:
+                continue
+            owner = row.get("owner", "")
+            name = str(row.get("name") or "")
+            static = bool(row.get("static") or int(row.get("access", 0)) & 8)
+            state_read = static and name.startswith("readState_") and owner in self.p.state_owners
+            if not state_read and (static or owner not in available_owners):
+                continue
+            if kind == "METHOD":
+                if parameter_types(row) or not name.startswith((
+                    "get", "is", "has", "can", "should", "read", "peek"
+                )):
+                    continue
+            result = row.get("return_type")
+            if result not in {"boolean", "int", "long", "float", "double",
+                              "java.lang.String"}:
+                continue
+            try:
+                self.p._symbol(key)
+            except ValueError:
+                continue
+            receiver = None
+            if not static:
+                receiver = next((ref for ref, value_type in receivers
+                                 if self.p.checker.assignable(value_type, owner)), None)
+                if receiver is None:
+                    continue
+            label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name).lower()
+            score = len(set(re.findall(r"[a-z]{3,}", label)) & wanted)
+            pool.append((-score, 0 if result == "boolean" else 1,
+                         name, str(key), receiver, kind, result, owner))
+        pool.sort()
+        return [{"symbol_ref": reference, "receiver": receiver,
+                 "op": "call" if kind == "METHOD" else "field",
+                 "name": name, "owner": owner, "return_type": result}
+                for _score, _preferred, name, reference, receiver, kind, result, owner
+                in pool[:PAGE_SIZE * 8]]
+
+    def _observe(self, purpose):
+        options = self._checked_observation_candidates(purpose)
+        if not options:
+            raise ValueError("RULE_CHECKED_OBSERVATION_UNAVAILABLE: " + purpose)
+        for offset in range(0, len(options), PAGE_SIZE):
+            page = options[offset:offset + PAGE_SIZE]
+            entries = {"o" + str(i): row for i, row in enumerate(page)}
+            selected = self.ask("rule_checked_observation", purpose, {
+                "observation_id": {"type": "string",
+                    "enum": [*entries, *(
+                        ["next_page"] if offset + PAGE_SIZE < len(options) else [])]}
+            }, candidates=[{"id": key, **row} for key, row in entries.items()],
+                remaining=len(options) - offset - len(page))["observation_id"]
+            if selected != "next_page":
+                item = entries[selected]
+                refs = [] if item["receiver"] is None else [item["receiver"]]
+                return self.p.value(item["op"], refs,
+                    symbol_ref=item["symbol_ref"], purpose=item["name"])
+        raise ValueError("RULE_CHECKED_OBSERVATION_UNAVAILABLE: " + purpose)
+
     def _runtime_grounded(self, key):
         """Require a checked runtime observation in the completed trigger DAG.
 
@@ -216,7 +302,7 @@ class RuleAuthor:
             usable = [row["id"] for row in self.p.menu()
                       if (expected is None or self.p.checker.assignable(row["type"], expected))
                       and (not require_grounded or self._runtime_grounded(row["id"]))]
-            operations = ["call", "field", "binary", "unary", "ternary",
+            operations = ["observe", "call", "field", "binary", "unary", "ternary",
                           "array_get", "array_length", "cast"]
             if not require_grounded:
                 operations = ["literal", *operations[:2], "new", *operations[2:]]
@@ -230,7 +316,9 @@ class RuleAuthor:
             try:
                 if op == "use":
                     return self.ref(purpose, expected=expected, candidates=usable, depth=depth)
-                if op == "literal":
+                if op == "observe":
+                    self._observe(purpose)
+                elif op == "literal":
                     self._literal(purpose, expected)
                 elif op == "data_value":
                     self.data_value(purpose)
