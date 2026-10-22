@@ -53,13 +53,20 @@ def select_feature_execution_route(
             obligations.append({"behavior_id": behavior_id,
                                 "reason": "explicit_event_cannot_supply_runtime_reads",
                                 "required_action": "implement a producer on the actual event owner"})
-        elif not explicit:
-            # An observed getter is not proof of which Fabric occurrence
-            # owns this behavior. Avoid an unbounded native-hook pager.
+        elif not explicit and not str(behavior.get("trigger") or "").strip():
+            # No original observable occurrence: do not manufacture a hook.
             obligations.append({"behavior_id": behavior_id,
                                 "reason": "occurrence_hook_not_owned",
                                 "required_action": "bind a checked event or implement an owned hook"})
+        elif not eligible:
+            obligations.append({"behavior_id": behavior_id,
+                                "reason": "no_compatible_runtime_occurrence",
+                                "required_action": "materialize a callback with real receiver inputs"})
         else:
+            # This is eligibility to AUTHOR and verify a rule, not proof the
+            # rule has implemented the mechanic. RuleProgram still composes a
+            # typed predicate/effect using a checked event and rejects an
+            # unusable semantic runtime source. No source Java fallback.
             grounded.append(behavior_id)
     return {
         "route": "source_owned_java" if obligations else "typed_rule",
