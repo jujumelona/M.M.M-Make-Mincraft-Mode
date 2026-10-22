@@ -179,7 +179,7 @@ def _member_prerequisites(records: Any, names: set[str],
             kind = dict(declared)
             if str(kind.get("owner") or "") in state_owners:
                 def relevant(header):
-                    found = re.search(r"\\b(?:readState_|writeState_)[A-Za-z0-9_$]+\\s*\\(", str(header))
+                    found = re.search(r"\b(?:readState_|writeState_)[A-Za-z0-9_$]+\s*\(", str(header))
                     if not found:
                         return True
                     member = re.search(r"(readState_|writeState_)[A-Za-z0-9_$]+", found.group())
