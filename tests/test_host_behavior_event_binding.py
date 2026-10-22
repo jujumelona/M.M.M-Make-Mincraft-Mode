@@ -97,3 +97,34 @@ def test_global_index_recovers_time_tick_without_wrong_owner_selection():
     }, [_event("test.LifecycleEvents", "AFTER_SAVE"), tick])
     assert result is tick
     assert len(router.calls) == 1
+
+
+def test_unbound_owner_is_search_uncertainty_not_absence_of_all_hooks():
+    class DecliningOwner:
+        def __init__(self):
+            self.calls = []
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            self.calls.append(data_name)
+            if data_name == "select_verified_fabric_event_index":
+                return {"event_binding": "UNBOUND"}
+            if data_name == "select_verified_fabric_event_owner":
+                return {"event_owner": "UNBOUND"}
+            if data_name == "select_verified_fabric_event":
+                # A real owner was chosen from inspected callback inputs.
+                return {"event_binding": "test.TickEvents#END_LEVEL_TICK"}
+            raise AssertionError(data_name)
+
+    router = DecliningOwner()
+    usable = _event("test.TickEvents", "END_LEVEL_TICK")
+    result = select_behavior_callback(
+        router, {"behavior_id": "arbitrary-world-trigger",
+                 "trigger": "World condition reaches threshold"},
+        [_event("test.LifecycleEvents", "AFTER_SAVE"), usable],
+    )
+    assert result is usable
+    assert router.calls == [
+        "select_verified_fabric_event_index",
+        "select_verified_fabric_event_owner",
+        "select_verified_fabric_event",
+    ]
