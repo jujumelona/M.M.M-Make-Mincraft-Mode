@@ -156,3 +156,80 @@ public class Harness {{
     run = subprocess.run([java, "-cp", str(tmp_path), "example.generated.Harness"],
                          capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def test_source_required_materializes_mixin_and_binds_real_generated_event(tmp_path, monkeypatch):
+    from minecraft_mod_ai.feature_source_work_graph import build_source_work_graph
+    from minecraft_mod_ai.first_pass_java_source import compose_first_pass_java
+
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    observed_callback = {
+        "event_id": "fabric#existing", "event_owner": "fabric",
+        "event_field": "EXISTING", "event_interface": "fabric.Listener",
+        "method": "observe", "parameters": ["example.Transaction"],
+        "return_type": "void", "type_parameters": [], "throws": [],
+    }
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_fabric_callback_abi.callback_interfaces",
+        lambda *_args, **_kwargs: [observed_callback],
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_java_imports.host_add_verified_imports",
+        lambda source, **_kw: source,
+    )
+    implemented = []
+    def fake_body(_router, _messages, *, data_name, frame, predicate,
+                  effect_receipt=False):
+        implemented.append((data_name, predicate, effect_receipt))
+        body = "return true;" if predicate or effect_receipt else ""
+        return frame["prefix"] + body + frame["suffix"]
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_callback_body.author_callback_body",
+        fake_body,
+    )
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "select_source_owned_observation_hook"
+            assert role == "planner"
+            return {"event_id": "SOURCE_REQUIRED"}
+        def generate_java_source(self, *_args, **_kwargs):
+            raise AssertionError("host must own source and Java callback envelope")
+
+    behavior = {
+        "behavior_id": "buy_module", "intent": "Apply an inventory purchase",
+        "trigger": "Observed successful transaction method invocation",
+        "effects": "Apply purchased module to player state",
+        "source_site_ref": "opaqueMethod",
+    }
+    graph = build_source_work_graph(
+        [behavior], producer_obligations=[
+            {"behavior_id": "buy_module", "reason": "occurrence_hook_not_owned"},
+        ],
+        inspected_hooks=[observed_callback],
+    )
+    spec = {
+        "language": "java", "target_path": "src/main/java/example/generated/Bridge.java",
+        "requirement": "Execute the original transaction feature",
+        "bindings": {
+            "package_name": "example.generated", "class_name": "Bridge",
+            "request_feature_entrypoint": True,
+        },
+    }
+    source = compose_first_pass_java(
+        Router(), spec, [], behaviors=[behavior],
+        construction_context={
+            "symbols": SYMBOLS, "host_source_owned": True,
+            "source_owned_work_graph": graph, "project_root": str(tmp_path),
+            "authoring_contract": {},
+        },
+    )
+    manifest_json = json.loads(manifest.read_text())
+    assert len(manifest_json["mixins"]) == 1
+    assert ".EVENT.register(this::handleBehavior" in source
+    assert "fabric.EXISTING" not in source
+    assert "example.generated.MmmEvent" in source
+    assert "private boolean matchesBehavior" in source
+    assert len(implemented) == 2
