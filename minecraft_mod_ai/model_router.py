@@ -515,12 +515,16 @@ class ModelRouter:
             except ValueError as error:
                 if rejected_source is not None and repeated_invalid_java_implementation(
                         rejected_source, result):
-                    failure = ModelConfigurationError(
-                        "CONSTRUCTION_JAVA_REPEATED_REJECTED_BODY: "
-                        "second candidate repeated the same invalid Java member; "
-                        + str(error))
-                    failure.failed_response = result
-                    raise failure from error
+                    # Repeated syntax failure remains a syntax failure: do not
+                    # disguise the parser's typed scope/category as a generic
+                    # transport/configuration error. Preserve original bytes
+                    # and mark the duplicate so the outer owner cannot retry
+                    # the same candidate as a different implementation.
+                    error.failed_response = result
+                    error.repeated_invalid_response = True
+                    print("CONSTRUCTION_JAVA_REPEATED_REJECTED_BODY: "
+                          + str(error)[:1000], flush=True)
+                    raise
                 if attempt:
                     raise
                 rejected_source = result
