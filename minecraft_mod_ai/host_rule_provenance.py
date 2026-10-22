@@ -25,7 +25,7 @@ def _canonical_words(value):
     # Only exact vocabulary correspondence is deterministic. Similar-looking
     # words, substrings and AI-inferred synonyms are not evidence of a getter.
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
-    return tuple(re.findall(r"[^\\W_]+", text.casefold()))
+    return tuple(re.findall(r"[^\W_]+", text.casefold()))
 
 
 def _actual_observer_candidates(name, symbols, input_types):
