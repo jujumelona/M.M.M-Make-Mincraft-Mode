@@ -260,6 +260,7 @@ class RuleAuthor:
         a primitive callback input grounds an expression; derived arithmetic
         inherits that provenance, even through a comparison.
         """
+        verified = set(self.p.behavior.get("verified_runtime_observers", {}).values())
         seen = set()
 
         def walk(ref):
@@ -269,14 +270,17 @@ class RuleAuthor:
             node = self.p.checker.nodes[ref]
             operation = node["op"]
             if operation == "parameter":
-                return self.p.kind(ref) in PRIMITIVES
+                return not verified and self.p.kind(ref) in PRIMITIVES
             if operation in {"call", "field", "array_get"}:
                 signature = node.get("attributes", {}).get("symbol_ref")
                 if signature is not None:
                     api = self.p.checker.symbol(signature)
                     if api.get("kind") in {"METHOD", "FIELD"}:
                         static = bool(api.get("static") or int(api.get("access", 0)) & 8)
-                        if not static or api.get("name", "").startswith("readState_"):
+                        if verified:
+                            if signature in verified:
+                                return True
+                        elif not static or api.get("name", "").startswith("readState_"):
                             return True
                 if operation == "array_get":
                     return any(walk(child) for child in node.get("input_refs", ()))
