@@ -374,6 +374,9 @@ def test_rule_literal_type_menu_respects_required_boolean():
 
     class Router:
         def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "rule_literal":
+                assert parameters["properties"]["value"]["type"] == "boolean"
+                return {"value": False}
             assert data_name == "rule_literal_type"
             allowed = parameters["properties"]["type"]["enum"]
             assert allowed == ["boolean"], allowed
