@@ -221,6 +221,7 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             # allow another concept's exact getter to certify this read.
             required = program.behavior.get("verified_runtime_observers", {})
             program.behavior["verified_runtime_observers"] = {}
+            program.behavior["required_runtime_observation_name"] = state_name
             try:
                 try:
                     result_ref = author.value(
@@ -235,6 +236,7 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
                         "diagnostic": str(error)[:400]}]) from error
             finally:
                 program.behavior["verified_runtime_observers"] = required
+                program.behavior.pop("required_runtime_observation_name", None)
             if not runtime_source_expression_proof(program, result_ref, state_name):
                 raise RuleMissingRuntimeProducer(behavior_id, [{
                     "name": state_name,
