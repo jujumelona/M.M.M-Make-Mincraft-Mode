@@ -121,6 +121,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
 
         rule_mode = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
         feature_route = None
+        source_work = None
         if rule_mode:
             # Route by *executable* source evidence before any model decisions.
             # A planner-only world_state label is not an installed producer,
@@ -270,7 +271,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             "host_state_work_order_scope": prompt["host_state_work_order_scope"],
                             "host_source_owned": bool(
                                 feature_route and feature_route["route"] == "source_owned_java"),
-                            "source_owned_work_graph": locals().get("source_work"),
+                            "source_owned_work_graph": source_work,
                         },
                         behaviors=behavior_rows,
                     )
