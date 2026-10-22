@@ -169,9 +169,12 @@ def bind_selected_hooks(
         if not isinstance(selected_id, str) or not selected_id:
             raise ValueError("FEATURE_WORK_SELECTED_EVENT_ID_REQUIRED")
         offered = set(row.get("evidence", {}).get("available_inspected_event_ids") or ())
-        if selected_id not in offered:
+        materialized = set(row.get("evidence", {}).get("materialized_custom_event_ids") or ())
+        if selected_id not in offered and selected_id not in materialized:
             raise ValueError("FEATURE_WORK_SELECTED_HOOK_NOT_INSPECTED: " + selected_id)
         row["evidence"]["event_binding"] = selected_id
+        if selected_id in materialized:
+            row["evidence"]["source_kind"] = "materialized_custom_mixin"
         if row.get("status") != "verified":
             row["status"] = "source_selected"
         registered.add(owner)
