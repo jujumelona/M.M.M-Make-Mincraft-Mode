@@ -421,3 +421,47 @@ def test_checked_runtime_observation_can_ground_computed_boolean_gate():
     assert p.kind(gate) == "boolean"
     assert author._runtime_grounded(gate)
     assert not author._runtime_grounded(pure)
+
+
+
+def test_rule_author_uses_checked_callback_observation_to_build_boolean_gate():
+    # No natural-language API string search is necessary for getTime: the
+    # host exposes an inspected callback-receiver operation and owns its Java.
+    from collections import deque
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    responses = deque([
+        ("rule_value_operation", {"operation": "observe"}),
+        ("rule_checked_observation", {"observation_id": "o0"}),
+        ("rule_value_operation", {"operation": "binary"}),
+        ("rule_binary_operator", {"operator": ">="}),
+        ("rule_operand", {"value_ref": "v1"}),
+        ("rule_operand", {"value_ref": "build"}),
+        ("rule_value_operation", {"operation": "literal"}),
+        ("rule_literal_type", {"type": "long"}),
+        ("rule_literal", {"value": 100}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v2"}),
+        ("rule_value_operation", {"operation": "use"}),
+        ("rule_operand", {"value_ref": "v3"}),
+    ])
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            expected, reply = responses.popleft()
+            assert data_name == expected
+            if data_name == "rule_checked_observation":
+                import json
+                actual = json.loads(messages[-1]["content"])["candidates"]
+                chosen = next(row for row in actual if row["id"] == reply["observation_id"])
+                assert chosen["name"] == "getTime"
+                assert chosen["symbol_ref"] == "clock"
+            return reply
+
+    p = program()
+    author = RuleAuthor(Router(), p)
+    gate = author.value("World time >= 100", expected="boolean", require_grounded=True)
+    assert p.kind(gate) == "boolean"
+    assert author._runtime_grounded(gate)
+    assert "getTime()" in p.declarations()
+    assert not responses
