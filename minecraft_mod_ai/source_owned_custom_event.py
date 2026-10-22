@@ -84,6 +84,7 @@ def _verified_method(symbols: Mapping, site_ref: str) -> dict:
 def plan_verified_custom_event(
     *, symbols: Mapping, source_site_ref: str, behavior_id: str,
     package: str, mod_id: str, at: str = "HEAD", side: str = "COMMON",
+    java_version: int = 25,
 ) -> dict:
     """Return exact source files and an ABI; this function does not write."""
     if not behavior_id or not isinstance(behavior_id, str):
@@ -96,6 +97,8 @@ def plan_verified_custom_event(
         raise ValueError("SOURCE_SITE_INJECTION_POINT_INVALID")
     if side not in {"COMMON", "CLIENT"}:
         raise ValueError("SOURCE_SITE_SIDE_INVALID")
+    if type(java_version) is not int or java_version not in {17, 21, 25}:
+        raise ValueError("SOURCE_SITE_JAVA_COMPATIBILITY_INVALID")
     site = _verified_method(symbols, source_site_ref)
     digest = hashlib.sha256(
         (behavior_id + "\0" + source_site_ref + "\0" + at).encode()
@@ -152,7 +155,7 @@ public abstract class {mixin_name} {{
 """
     config = {
         "required": True, "package": package + ".mixin",
-        "compatibilityLevel": "JAVA_21",
+        "compatibilityLevel": "JAVA_" + str(java_version),
         ("client" if side == "CLIENT" else "mixins"): [mixin_name],
         "injectors": {"defaultRequire": 1},
     }
@@ -185,6 +188,7 @@ public abstract class {mixin_name} {{
 def materialize_verified_custom_event(
     *, project_root: str | Path, symbols: Mapping, source_site_ref: str,
     behavior_id: str, package: str, at: str = "HEAD", side: str = "COMMON",
+    java_version: int = 25,
 ) -> dict:
     """Install event, Mixin and manifest atomically per process, idempotently.
 
@@ -204,12 +208,16 @@ def materialize_verified_custom_event(
         if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
             raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_INVALID")
         mixins = metadata.get("mixins", [])
-        if not isinstance(mixins, list) or not all(isinstance(x, str) for x in mixins):
+        if not isinstance(mixins, list) or any(not (
+                isinstance(x, str) or
+                (isinstance(x, dict) and isinstance(x.get("config"), str)
+                 and x.get("environment") in {"client", "server", "*"})
+        ) for x in mixins):
             raise ValueError("SOURCE_SITE_FABRIC_MIXINS_INVALID")
         result = plan_verified_custom_event(
             symbols=symbols, source_site_ref=source_site_ref,
             behavior_id=behavior_id, package=package, mod_id=metadata["id"],
-            at=at, side=side,
+            at=at, side=side, java_version=java_version,
         )
         for relative, contents in result["files"].items():
             path = (root / relative).resolve()
@@ -221,8 +229,11 @@ def materialize_verified_custom_event(
             path = root / relative
             if not path.exists():
                 _atomic_write(path, contents)
-        if result["mixin_config"] not in mixins:
-            metadata["mixins"] = [*mixins, result["mixin_config"]]
+        manifest_entry = ({"config": result["mixin_config"], "environment": "client"}
+                          if side == "CLIENT" else result["mixin_config"])
+        if not any((x if isinstance(x, str) else x.get("config"))
+                   == result["mixin_config"] for x in mixins):
+            metadata["mixins"] = [*mixins, manifest_entry]
             _atomic_write(
                 manifest, json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
             )
