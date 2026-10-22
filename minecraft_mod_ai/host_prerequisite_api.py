@@ -204,6 +204,8 @@ def inspected_prerequisite_symbols(declarations: list[dict]) -> dict:
             symbols[owner] = {
                 "kind": "CLASS", "owner": owner, "access": 1,
                 "provenance": "materialized_prerequisite_declaration",
+                "source_path": page.get("path"),
+                "source_hash": page.get("source_sha256"),
                 **({"superclass": superclass} if superclass else {}),
             }
             for header in declaration.get("members", ()):

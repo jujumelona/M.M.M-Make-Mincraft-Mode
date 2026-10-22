@@ -9,6 +9,25 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import PurePosixPath
+
+
+def materialized_type_evidence(record):
+    """Consume the source identity admitted by construction, not a second label.
+
+    prepare_construction_context hash-checks the source before indexing it.
+    Its canonical records intentionally win over the declaration-only fallback.
+    Both carry the same path/hash evidence; neither a name nor provenance text
+    alone is enough to authorize generated-type operations.
+    """
+    if record.get("kind") != "CLASS" or record.get("provenance") not in {
+            "materialized_source", "materialized_prerequisite_declaration"}:
+        return False
+    path, digest = record.get("source_path"), record.get("source_hash")
+    return (isinstance(path, str)
+            and path.startswith(("src/main/java/", "src/client/java/"))
+            and path.endswith(".java") and ".." not in PurePosixPath(path).parts
+            and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) is not None)
 
 
 class RuleMissingRuntimeProducer(ValueError):
@@ -26,6 +45,14 @@ def _canonical_words(value):
     # words, substrings and AI-inferred synonyms are not evidence of a getter.
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
     return tuple(re.findall(r"[^\W_]+", text.casefold()))
+
+
+def observation_words(value):
+    """Identifier words; never treat a partial overlap as a source contract."""
+    return set(_canonical_words(value)) - {
+        "state", "runtime", "value", "current", "actual", "has", "get",
+        "is", "can", "read", "peek", "the", "of", "a", "an", "and",
+    }
 
 
 def _actual_observer_candidates(name, symbols, input_types):
@@ -197,32 +224,35 @@ def runtime_source_expression_proof(program, root, semantic_name):
         if not isinstance(entity, str):
             continue
         candidate = program.symbols.get(entity, {})
-        if (candidate.get("kind") != "CLASS"
-                or candidate.get("provenance") != "materialized_prerequisite_declaration"):
+        if not materialized_type_evidence(candidate):
             continue
         match_terms = tokens - {"presence", "present", "exists", "existing",
                                 "entity", "entities", "mob", "mobs"}
         if match_terms and match_terms <= set(_canonical_words(
                 entity.rsplit(".", 1)[-1])) and derived_from_event(ref):
             return True
-    for ref in graph:
+    def receiver_paths(ref, visiting=frozenset()):
+        if ref in visiting:
+            return []
+        visiting = visiting | {ref}
         node = nodes[ref]
-        if node.get("op") not in {"call", "field"}:
-            continue
-        symbol_ref = node.get("attributes", {}).get("symbol_ref")
-        symbol = program.symbols.get(symbol_ref)
-        if not isinstance(symbol, dict) or symbol.get("kind") not in {"METHOD", "FIELD"}:
-            continue
-        # Only a live receiver or a callback-derived API argument grounds this
-        # observation. A newly constructed helper and a constant do not.
-        if not any(derived_from_event(child) for child in node.get("input_refs", ())):
-            continue
-        member_name = str(symbol.get("name") or "")
-        # Names are evidence hints, not proofs of game effects. Require a
-        # relevant inspected member in the *actual expression DAG*.
-        if tokens & set(_canonical_words(member_name)):
-            return True
-    return False
+        children = node.get("input_refs", ())
+        if node["op"] == "parameter":
+            return [observation_words(program.kind(ref).rsplit(".", 1)[-1])]
+        if node["op"] in {"call", "field"}:
+            symbol = program.symbols.get(node.get("attributes", {}).get("symbol_ref"), {})
+            if (not children or symbol.get("static") or int(symbol.get("access", 0)) & 8):
+                return []
+            terms = observation_words(symbol.get("name")) | observation_words(
+                str(symbol.get("return_type", "")).rsplit(".", 1)[-1])
+            return [path | terms for path in receiver_paths(children[0], visiting)]
+        return [path for child in children for path in receiver_paths(child, visiting)]
+
+    # All identifying words must occur along one live receiver path. A word
+    # shared by getMaxSectionY and selected_section does not prove selection;
+    # neither can disconnected sibling expressions supply each other's words.
+    return any(tokens <= path for path in receiver_paths(root))
+
 
 
 
@@ -347,7 +377,7 @@ def resolve_materialized_entity_presence(name, symbols, input_types):
     for owner, row in symbols.items():
         if not isinstance(row, dict) or row.get("kind") != "CLASS":
             continue
-        if row.get("provenance") != "materialized_prerequisite_declaration":
+        if not materialized_type_evidence(row):
             continue
         if "net.minecraft.world.entity.Entity" not in ancestors(owner):
             continue

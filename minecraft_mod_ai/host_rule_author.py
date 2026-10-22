@@ -26,6 +26,7 @@ class RuleAuthor:
     def __init__(self, router, program, *, data_pages=None):
         self.router, self.p = router, program
         self.decisions = 0
+        self.phase = "predicate"
         self.data_pages = dict(data_pages or {})
         # The symbol table can contain 870k+ entries. Resolve each bound
         # semantic receiver menu once, not on every model decision.
@@ -39,6 +40,8 @@ class RuleAuthor:
         return choose_rule_data(self.router, name, {
             "behavior": self.p.behavior, "subgoal": purpose,
             "recent_values": menu[-PAGE_SIZE:], "value_count": len(menu),
+            "runtime_sources": [{"name": key, "id": ref, "type": self.p.kind(ref)}
+                                for key, ref in self.p.behavior.get("runtime_source_values", {}).items()],
             "decision": self.decisions,
             "data_catalog": [{"id": key, "meaning": "Authoritative planning/prerequisite data"}
                              for key in sorted(self.data_pages)], **context,
@@ -123,6 +126,8 @@ class RuleAuthor:
                     overlap += len(owner_words & words)
                 if not overlap:
                     continue
+                if not self._source_query_allowed(row):
+                    continue
                 score = overlap
                 if (kind != "CONSTRUCTOR"
                         and not (row.get("static") or int(row.get("access", 0)) & 8)):
@@ -159,6 +164,23 @@ class RuleAuthor:
             if not retry:
                 break
         raise ValueError("RULE_CHECKED_CAPABILITY_REQUIRED: " + purpose)
+
+    def _source_query_allowed(self, row):
+        """Inspect a pinned source object without reopening callback discovery."""
+        if self.phase != "predicate" or not self.p.behavior.get("runtime_source_values"):
+            return True
+        if (row.get("owner") in self.p.state_owners
+                and str(row.get("name", "")).startswith("readState_")):
+            return True
+        if (row.get("kind") not in {"METHOD", "FIELD"}
+                or row.get("static") or int(row.get("access", 0)) & 8
+                or row.get("name") == "getClass"
+                or str(row.get("owner", "")).startswith((
+                    "java.lang.Class", "java.lang.reflect.", "java.lang.invoke."))):
+            return False
+        return any(self._runtime_grounded(ref)
+                   and self.p.checker.assignable(self.p.kind(ref), row["owner"])
+                   for ref in self.p.active if self.p.kind(ref) not in PRIMITIVES)
 
     def operands(self, row, purpose, *, constructor=False, depth=0):
         refs = []
@@ -214,7 +236,9 @@ class RuleAuthor:
             semantic_choices = self._semantic_runtime_cache[pending_name]
         pool = []
         for key, row in self.p.symbols.items():
-            if required and key not in required:
+            if not self._source_query_allowed(row):
+                continue
+            if required and not self.p.behavior.get("runtime_source_values") and key not in required:
                 continue
             if semantic_choices is not None and key not in semantic_choices:
                 continue
@@ -288,6 +312,10 @@ class RuleAuthor:
         a primitive callback input grounds an expression; derived arithmetic
         inherits that provenance, even through a comparison.
         """
+        bound = self.p.behavior.get("runtime_source_values")
+        if bound:
+            from .host_rule_provenance import expression_dependencies
+            return bool(set(bound.values()) & expression_dependencies(self.p, key))
         verified = set(self.p.behavior.get("verified_runtime_observers", {}).values())
         seen = set()
 
@@ -350,8 +378,14 @@ class RuleAuthor:
                       and (not require_grounded or self._runtime_grounded(row["id"]))]
             operations = ["call", "field", "binary", "unary", "ternary",
                           "array_get", "array_length", "cast"]
+            if require_grounded and self.p.behavior.get("runtime_source_values"):
+                operations = ["binary", "unary", "ternary", "array_get", "array_length", "cast"]
+                if any(self.p.kind(ref) not in PRIMITIVES for ref in
+                       self.p.behavior["runtime_source_values"].values()):
+                    operations = ["call", "field", *operations]
             if require_grounded:
-                operations.insert(0, "observe")
+                if not self.p.behavior.get("runtime_source_values"):
+                    operations.insert(0, "observe")
             else:
                 operations = ["literal", *operations[:2], "new", *operations[2:]]
                 if self.data_pages:
@@ -431,6 +465,7 @@ class RuleAuthor:
         raise ValueError("RULE_VALUE_UNFINISHED: " + purpose + "; " + diagnostic)
 
     def effects(self):
+        self.phase = "effects"
         diagnostic = ""
         for _step in range(96):
             options = ["call", "assign", "if", "foreach"]

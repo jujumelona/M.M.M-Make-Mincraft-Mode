@@ -92,102 +92,30 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
     from .host_prerequisite_api import inspected_prerequisite_symbols
     for reference, entry in inspected_prerequisite_symbols(
             list(prerequisite_apis)).items():
-        rule_symbols.setdefault(reference, entry)
+        # Canonical, hash-checked source symbols already include every member.
+        # The declaration fallback must not introduce a second alias/signature
+        # inventory for the same production owner.
+        if rule_symbols.get(entry.get("owner"), {}).get("provenance") != "materialized_source":
+            rule_symbols.setdefault(reference, entry)
     for reference, entry in verified_state_accessor_symbols(state_access).items():
         rule_symbols.setdefault(reference, entry)
     if not candidates:
         raise ValueError("RULE_CHECKED_EVENT_ABI_REQUIRED")
     interface, lifecycle = (("net.fabricmc.api.ClientModInitializer", "onInitializeClient")
         if str(spec.get("side") or "").upper() == "CLIENT" else ("net.fabricmc.api.ModInitializer", "onInitialize"))
+    from .host_rule_source_plan import (
+        RuntimeSourcePlanner, bind_runtime_sources, materialize_runtime_sources)
+    source_planner = RuntimeSourcePlanner(rule_symbols)
     members, registrations, records, seen = [], [], [], set()
     for behavior in behaviors:
         behavior_id = str(behavior.get("behavior_id") or "")
         if not behavior_id or behavior_id in seen:
             raise ValueError("RULE_BEHAVIOR_IDENTITY")
         seen.add(behavior_id)
-        from .host_rule_provenance import (
-            RuleMissingRuntimeProducer, validate_runtime_read_producers)
-        input_types = tuple(dict.fromkeys(
-            kind for hook in candidates for kind in hook.get("parameters", ())))
-        # A single named JVM accessor is a fast path, not the sole way to
-        # observe live game state. Complex reads are authored as typed
-        # callback-derived expressions later, using the selected hook.
-        pending_runtime_reads = []
-        try:
-            verified_sources = validate_runtime_read_producers(
-                behavior, runtime_bindings, rule_symbols, input_types=input_types)
-        except RuleMissingRuntimeProducer as error:
-            if any(row.get("reason") != "planning_only_world_state"
-                   for row in error.missing):
-                raise
-            pending_runtime_reads = [row["name"] for row in error.missing]
-            verified_sources = validate_runtime_read_producers(
-                {**behavior, "runtime_state_reads": [
-                    name for name in behavior.get("runtime_state_reads", ())
-                    if name not in pending_runtime_reads]},
-                runtime_bindings, rule_symbols, input_types=input_types)
-        from .host_rule_provenance import (
-            unavailable_semantic_runtime_sources, resolve_materialized_entity_presence)
-        # A content prerequisite can supply a real Entity class while a
-        # verified ServerLevel getter supplies the live collection. Treat
-        # that checked pair as an executable producer, not an arbitrary
-        # model guess or a matching class name alone.
-        derived_entity_observers = {
-            state_name: evidence
-            for state_name in pending_runtime_reads
-            if (evidence := resolve_materialized_entity_presence(
-                state_name, rule_symbols, input_types)) is not None
-        }
-        if pending_runtime_reads:
-            unavailable = unavailable_semantic_runtime_sources(
-                [item for item in pending_runtime_reads
-                 if item not in derived_entity_observers],
-                rule_symbols, input_types=input_types)
-            if unavailable:
-                raise RuleMissingRuntimeProducer(behavior_id, [{
-                    "name": state_name,
-                    "reason": "no_inspected_semantic_source",
-                    "required_action": "implement the source module and its runtime observer"}
-                    for state_name in unavailable])
-        # A candidate event must provide the exact typed receiver needed
-        # by a directly checked observer. For synthesized observations the
-        # host validates the entire typed expression after authoring.
-        from .host_rule_provenance import (
-            RuleMissingRuntimeProducer, compatible_events_for_runtime_producers)
-        options = compatible_events_for_runtime_producers(
-            candidates, verified_sources, rule_symbols)
-        if not options:
-            raise RuleMissingRuntimeProducer(behavior_id, [{
-                "name": key,
-                "reason": "no_inspected_event_provides_runtime_observer_receiver",
-                "verified_symbol_ref": ref}
-                for key, ref in verified_sources.items()])
+        options, event_source_plans = bind_runtime_sources(
+            behavior, runtime_bindings, source_planner, candidates)
         binding = bind_rule_observation(router, behavior, options)
         event = binding["event"]
-        if pending_runtime_reads:
-            from .host_rule_provenance import (
-                semantic_runtime_candidates, RuleMissingRuntimeProducer)
-            # Binding an actual tick hook narrows the set of observable
-            # receivers. A method on a completely unrelated callback type
-            # cannot certify a runtime state.
-            concrete = semantic_runtime_candidates(
-                pending_runtime_reads, rule_symbols, event.get("parameters", ()))
-            for state_name in list(derived_entity_observers):
-                evidence = resolve_materialized_entity_presence(
-                    state_name, rule_symbols, event.get("parameters", ()))
-                if evidence is None:
-                    del derived_entity_observers[state_name]
-                else:
-                    derived_entity_observers[state_name] = evidence
-            unavailable = [state_name for state_name in pending_runtime_reads
-                           if state_name not in derived_entity_observers
-                           and not concrete[state_name]]
-            if unavailable:
-                raise RuleMissingRuntimeProducer(behavior_id, [{
-                    "name": name, "reason": "selected_event_cannot_observe_state",
-                    "event_id": event["event_id"],
-                    "required_action": "bind the producing event or materialize a prerequisite observer"}
-                    for name in unavailable])
         if event.get("type_parameters"):
             raise ValueError("RULE_GENERIC_CALLBACK_REQUIRES_ADAPTER")
         suffix = hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
@@ -196,8 +124,6 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         params = [{"type": kind, "name": "arg" + str(i)} for i, kind in enumerate(event["parameters"])]
         signature = ", ".join(row["type"] + " " + row["name"] for row in params)
         rule_behavior = {**behavior}
-        if verified_sources:
-            rule_behavior["verified_runtime_observers"] = verified_sources
         relevant_runtime = {key: runtime_bindings[key] for key in (
             *behavior.get("runtime_state_reads", ()), *behavior.get("runtime_state_writes", ()))
             if key in runtime_bindings}
@@ -205,95 +131,12 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             rule_behavior["runtime_state_observations"] = relevant_runtime
         program = RuleProgram(rule_symbols, params, rule_behavior, owner=owner,
             target_path=spec["target_path"], state_owners=[row["owner"] for row in state_access])
-        if verified_sources:
-            from .host_rule_provenance import RuleMissingRuntimeProducer
-            unreachable = []
-            for name, reference in verified_sources.items():
-                symbol = rule_symbols[reference]
-                if (not symbol.get("static") and not int(symbol.get("access", 0)) & 8
-                        and not any(program.checker.assignable(row["type"], symbol["owner"])
-                                    for row in params)):
-                    unreachable.append({
-                        "name": name, "reason": "producer_not_reachable_from_selected_event",
-                        "verified_symbol_ref": reference,
-                        "event_id": event["event_id"]})
-            if unreachable:
-                raise RuleMissingRuntimeProducer(behavior_id, unreachable)
+        runtime_sources, selected_sources = materialize_runtime_sources(
+            router, program, event_source_plans[event["event_id"]])
+        program.behavior["runtime_source_symbols"] = sorted({
+            ref for source in selected_sources.values() for ref in source["symbol_refs"]})
         author = RuleAuthor(router, program, data_pages=data_pages)
-        from .host_rule_provenance import (
-            expression_dependencies, runtime_source_expression_proof)
-        runtime_sources = {}
-        # Materialize each bound observer as an actual typed IR value, rather
-        # than merely trusting the planning label or a matching method name.
-        for state_name, reference in verified_sources.items():
-            symbol = rule_symbols[reference]
-            if symbol.get("static") or int(symbol.get("access", 0)) & 8:
-                operands = []
-            else:
-                matching = [key for key in program.inputs
-                            if program.checker.assignable(
-                                program.kind(key), symbol["owner"])]
-                if not matching:
-                    raise RuleMissingRuntimeProducer(behavior_id, [{
-                        "name": state_name, "reason": "observer_receiver_not_in_event",
-                        "verified_symbol_ref": reference}])
-                operands = [matching[0]]
-            runtime_sources[state_name] = program.value(
-                "call" if symbol["kind"] == "METHOD" else "field",
-                operands, symbol_ref=reference, purpose="Runtime read: " + state_name)
-        for state_name in pending_runtime_reads:
-            if state_name in derived_entity_observers:
-                evidence = derived_entity_observers[state_name]
-                observer = rule_symbols[evidence["observer_ref"]]
-                candidate_inputs = [ref for ref in program.inputs if
-                                    program.checker.assignable(
-                                        program.kind(ref), observer["owner"])]
-                if len(candidate_inputs) != 1:
-                    raise RuleMissingRuntimeProducer(behavior_id, [{
-                        "name": state_name,
-                        "reason": "world_enumeration_receiver_ambiguous_or_unreachable"}])
-                observed = program.value(
-                    "call", [candidate_inputs[0]],
-                    symbol_ref=evidence["observer_ref"],
-                    purpose="Live world entity enumeration")
-                result_ref = program.value(
-                    "entity_presence", [observed],
-                    entity_owner=evidence["entity_owner"],
-                    purpose="Live generated entity existence")
-                if not runtime_source_expression_proof(
-                        program, result_ref, state_name):
-                    raise RuleMissingRuntimeProducer(behavior_id, [{
-                        "name": state_name,
-                        "reason": "materialized_entity_presence_provenance_failed"}])
-                runtime_sources[state_name] = result_ref
-                continue
-            # A complex observer is a bounded typed expression built with
-            # inspected target symbols, not an invented Java getter. Do not
-            # allow another concept's exact getter to certify this read.
-            required = program.behavior.get("verified_runtime_observers", {})
-            program.behavior["verified_runtime_observers"] = {}
-            program.behavior["required_runtime_observation_name"] = state_name
-            try:
-                try:
-                    result_ref = author.value(
-                        "Implement a LIVE runtime producer for '" + state_name
-                        + "' using the actual selected callback and inspected APIs. "
-                        "The value must represent this exact game concept, not "
-                        "an unrelated world flag or an arbitrary constant.",
-                        require_grounded=True)
-                except ValueError as error:
-                    raise RuleMissingRuntimeProducer(behavior_id, [{
-                        "name": state_name, "reason": "runtime_producer_authoring_failed",
-                        "diagnostic": str(error)[:400]}]) from error
-            finally:
-                program.behavior["verified_runtime_observers"] = required
-                program.behavior.pop("required_runtime_observation_name", None)
-            if not runtime_source_expression_proof(program, result_ref, state_name):
-                raise RuleMissingRuntimeProducer(behavior_id, [{
-                    "name": state_name,
-                    "reason": "producer_has_no_callback_derived_semantic_api",
-                    "typed_value": result_ref}])
-            runtime_sources[state_name] = result_ref
+        from .host_rule_provenance import expression_dependencies, RuleMissingRuntimeProducer
         mode = author.ask("rule_activation", "Choose execution semantics: level=every matching observation, rising=false-to-true condition, changed=changed observed value",
             {"mode": {"type": "string", "enum": ["level", "rising", "changed"]}})["mode"]
         gate = author.value("Original trigger and preconditions, including every branch. "
@@ -317,7 +160,10 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         results = _results(router, event, context["symbols"])
         unhandled = "return " + results["unhandled"] + ";" if results else "return;"
         setup = setup.replace("__MMM_UNHANDLED__", unhandled)
-        dispatch = (program.declarations() + "\n" + setup
+        guard_values = program.behavior.get("runtime_source_guards", ())
+        guards = ("if (!(" + " && ".join(program.source(ref) for ref in guard_values)
+                  + ")) { " + unhandled + " }\n" if guard_values else "")
+        dispatch = (program.declarations() + "\n" + guards + setup
                     + "if (!(" + condition + ")) { " + unhandled + " }\n" + body + "\n")
         if results:
             dispatch += "return __mmmRuleApplied ? " + results["handled"] + " : " + results["unhandled"] + ";"
@@ -337,6 +183,7 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         records.append({"behavior": behavior, "observation": binding, "activation": mode,
                         "gate": gate, "tracking": tracking, "operations": program.ir,
                         "runtime_source_expressions": runtime_sources,
+                        "runtime_source_plans": selected_sources,
                         "semantic_status": "model_authored_unverified"})
     source = ("package " + package + ";\n\npublic final class " + name + " implements " + interface + " {\n"
               + "public " + name + "() {}\n@Override public void " + lifecycle + "() {\n"

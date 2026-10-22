@@ -150,8 +150,8 @@ class RuleProgram:
                 raise ValueError("RULE_ENTITY_PRESENCE_FIELDS")
             entity = attrs["entity_owner"]
             record = self.symbols.get(entity, {})
-            if (record.get("kind") != "CLASS"
-                    or record.get("provenance") != "materialized_prerequisite_declaration"
+            from .host_rule_provenance import materialized_type_evidence
+            if (not materialized_type_evidence(record)
                     or not self.checker.subtype(entity, "net.minecraft.world.entity.Entity")
                     or self.kind(refs[0]) != "java.lang.Iterable"):
                 raise ValueError("RULE_ENTITY_PRESENCE_TYPE_UNVERIFIED")

@@ -113,7 +113,7 @@ def compose(tmp_path, mode="changed", first="baseline"):
     return source
 
 
-def compile_run(tmp_path, source, probe, *, callback_return="void"):
+def compile_run(tmp_path, source, probe, *, callback_return="void", extra_sources=None):
     assert shutil.which("javac"), "JDK is required; do not skip execution proof"
     files = {
         "example/Bridge.java": source,
@@ -133,6 +133,7 @@ def compile_run(tmp_path, source, probe, *, callback_return="void"):
             "static void check(boolean b) { if(!b) throw new AssertionError(); } "
             "public static void main(String[] args) { new Bridge().onInitialize(); " + probe + " } }",
     }
+    files.update(extra_sources or {})
     paths = []
     for name, content in files.items():
         p = tmp_path / name
@@ -267,9 +268,8 @@ def test_nonvoid_callback_returns_handled_only_after_matching_effects(tmp_path):
 def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
     """A missing read-only planner label becomes inspected executable Java.
 
-    Its getter is getInventory, not getWeaponInventory or the exact logical
-    label. The host must compile an actual expression and require that value
-    in the gate instead of accepting an unrelated world flag.
+    A complete inspected source is emitted by the host and must be consumed
+    by the gate. A generic inventory cannot certify a weapon-only inventory.
     """
     import json
     from minecraft_mod_ai.host_rule_feature import compose_rule_feature
@@ -280,12 +280,6 @@ def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
     }
     replies = deque([
         ("rule_observation", {"observation": "world_state"}),
-        ("rule_value_operation", {"operation": "call"}),
-        ("rule_api_query", {"query": "getInventory"}),
-        ("rule_api_page", {"symbol": "s0"}),
-        ("rule_operand", {"value_ref": "v0"}),
-        ("rule_value_operation", {"operation": "use"}),
-        ("rule_operand", {"value_ref": "v1"}),
         ("rule_activation", {"mode": "level"}),
         ("rule_value_operation", {"operation": "binary"}),
         ("rule_binary_operator", {"operator": ">"}),
@@ -330,10 +324,10 @@ def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
         "target_path": "src/main/java/example/Bridge.java",
         "bindings": {
             "runtime_state_bindings_json": json.dumps({
-                "Weapon inventory": {
+                "inventory": {
                     "binding": "world_state",
-                    "original_name": "Weapon inventory",
-                    "observation": "Weapon inventory",
+                    "original_name": "inventory",
+                    "observation": "inventory",
                     "semantic_status": "host_classified_unbound_read",
                 }
             })
@@ -343,7 +337,7 @@ def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
             "behavior_id": "inventory-effect", "intent": "React to live inventory",
             "trigger": "Inventory is nonempty", "effects": "Increment effects",
             "state_reads": [], "state_writes": [],
-            "runtime_state_reads": ["Weapon inventory"],
+            "runtime_state_reads": ["inventory"],
         }], state_access=[])
     assert not replies
     assert ".getInventory()" in source

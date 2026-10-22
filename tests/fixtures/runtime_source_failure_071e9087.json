@@ -1,0 +1,55 @@
+{
+  "source_commit": "071e908724439b747c9350df3260531404f5efc7",
+  "source_archive": "production-logs (17)(2).zip",
+  "completion_journals": 829,
+  "coder_journals": 238,
+  "behavior": {
+    "behavior_id": "behavior_51f3c309cd7a8361f7a8",
+    "requirement_id": "request_a7c0a3171320b4dc",
+    "intent": "Modular spacecraft section-by-section construction",
+    "source_quote": "우주선을  부위마다 만들어서 만들수있고",
+    "trigger": "Player selects a spacecraft section and places it in the build area",
+    "effects": "Adds the selected section to the spacecraft, allowing further sections to be added",
+    "state_reads": [
+      "spacecraft_sections",
+      "build_area_contents"
+    ],
+    "state_writes": [
+      "spacecraft_sections",
+      "build_area_contents"
+    ],
+    "source_status": "grounded",
+    "runtime_state_reads": [
+      "selected_section"
+    ],
+    "runtime_state_observations": {
+      "selected_section": {
+        "original_name": "selected_section",
+        "binding": "world_state",
+        "observation": "selected_section",
+        "semantic_status": "host_classified_unbound_read"
+      }
+    },
+    "verified_runtime_observers": {},
+    "required_runtime_observation_name": "selected_section"
+  },
+  "wrong_observation": {
+    "id": "v20",
+    "type": "int",
+    "purpose": "getMaxSectionY",
+    "inspected_api": {
+      "id": "o0",
+      "symbol_ref": "net.minecraft.world.level.LevelHeightAccessor#getMaxSectionY()I",
+      "receiver": "v0",
+      "op": "call",
+      "name": "getMaxSectionY",
+      "owner": "net.minecraft.world.level.LevelHeightAccessor",
+      "return_type": "int"
+    }
+  },
+  "selected_value_response": {
+    "value_ref": "v20"
+  },
+  "production_source_provenance": "materialized_source",
+  "legacy_rule_source_provenance": "materialized_prerequisite_declaration"
+}

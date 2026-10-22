@@ -254,7 +254,8 @@ def test_computed_runtime_source_uses_live_checked_api_not_exact_getter():
     baseline = program.value("literal", type="int", value=0)
     has_inventory = program.value("binary", [live_inventory, baseline], operator=">")
     unrelated = program.value("call", [world], symbol_ref="pvp")
-    assert runtime_source_expression_proof(program, has_inventory, "Weapon inventory")
+    assert runtime_source_expression_proof(program, has_inventory, "inventory")
+    assert not runtime_source_expression_proof(program, has_inventory, "Weapon inventory")
     assert not runtime_source_expression_proof(program, unrelated, "Weapon inventory")
     assert not runtime_source_expression_proof(program, has_inventory, "selected_section")
     assert {world, live_inventory, baseline, has_inventory} <= expression_dependencies(
@@ -350,6 +351,7 @@ def test_generated_entity_presence_is_lowered_to_live_world_enumeration(tmp_path
         entity: {"kind": "CLASS", "owner": entity, "access": 1},
         alien: {"kind": "CLASS", "owner": alien, "access": 1,
                 "superclass": entity,
+                "source_path": "src/main/java/example/AlienEntity.java", "source_hash": "a" * 64,
                 "provenance": "materialized_prerequisite_declaration"},
         "java.lang.Iterable": {"kind": "CLASS", "owner": "java.lang.Iterable",
                                "access": 1537},
@@ -412,6 +414,7 @@ def test_entity_presence_requires_real_materialized_java_type_not_name_only():
         world: {"kind": "CLASS", "owner": world, "access": 1},
         entity: {"kind": "CLASS", "owner": entity, "access": 1},
         alien: {"kind": "CLASS", "owner": alien, "access": 1,
+                "source_path": "src/main/java/example/AlienEntity.java", "source_hash": "a" * 64,
                 "superclass": entity, "provenance": "model_authored_unverified"},
         "enumerate": {"kind": "METHOD", "owner": world,
                       "name": "getAllEntities", "access": 1,

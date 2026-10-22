@@ -304,7 +304,7 @@ def test_rule_api_query_accepts_static_access_bit_without_static_metadata():
     method = {"kind": "METHOD", "owner": "example.Utility",
               "name": "readSeason", "access": 9,
               "parameters": [], "return_type": "int"}
-    stub = SimpleNamespace(symbols={"readSeason": method}, values={}, active=set(),
+    stub = SimpleNamespace(symbols={"readSeason": method}, values={}, active=set(), behavior={},
                            checker=SimpleNamespace(assignable=lambda *_: False))
     stub._symbol = lambda key, **kwargs: method
     author = RuleAuthor(None, stub)
@@ -479,7 +479,7 @@ def test_rule_api_search_rejects_incidental_short_substring_matches():
                  "name": "getContents", "access": 9,
                  "parameters": [], "return_type": "int"}
     stub = SimpleNamespace(
-        symbols={"unrelated": unrelated}, values={}, active=set(),
+        symbols={"unrelated": unrelated}, values={}, active=set(), behavior={},
         checker=SimpleNamespace(assignable=lambda *_: False))
     stub._symbol = lambda key, **kw: unrelated
     author = RuleAuthor(None, stub)
@@ -518,7 +518,8 @@ def test_typed_inventory_membership_observation_is_not_mistaken_for_mutation():
     needle = p.value("literal", type="java.lang.String", value="a")
     present = p.value("call", [holder, needle], symbol_ref="contains")
     assert p.kind(present) == "boolean"
-    assert runtime_source_expression_proof(p, present, "Weapon inventory")
+    assert runtime_source_expression_proof(p, present, "inventory")
+    assert not runtime_source_expression_proof(p, present, "Weapon inventory")
     with pytest.raises(ValueError, match="RULE_OBSERVATION_CALL_REQUIRED"):
         p.value("call", [holder], symbol_ref="delete")
 
