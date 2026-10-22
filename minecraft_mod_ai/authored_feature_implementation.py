@@ -44,7 +44,7 @@ def compile_request_feature_jobs(
     )
     if not execution_features:
         return (), ()
-    from .construction_planner import plan_construction_tasks
+    from .construction_planner import author_behavior_requirements, plan_construction_tasks
     ids = {feature["requirement_id"] for feature in execution_features}
     scoped = {**plan.request_scope, "requirements": execution_features}
     if "behavior_requirements" in scoped:
@@ -52,6 +52,14 @@ def compile_request_feature_jobs(
             row for row in scoped["behavior_requirements"]
             if row.get("requirement_id") in ids
         ]
+    # Canonicalize the same source-grounded behavior ledger for both the
+    # task graph AND artifact generator bindings. Previously only the task
+    # view could be corrected while stale, model-invented triggers survived in
+    # construction_behaviors_json and re-entered Fabric callback selection.
+    admitted_behaviors = {
+        behavior.behavior_id: behavior.to_dict()
+        for behavior in author_behavior_requirements(scoped, router=None)
+    }
     construction_tasks = plan_construction_tasks(
         scoped, (), {}, router=None)
     if not construction_tasks:
@@ -83,8 +91,11 @@ def compile_request_feature_jobs(
         fqcn = bindings["package_name"] + "." + bindings["class_name"]
         bindings["request_feature_entrypoint"] = fqcn
         bindings["parent_requirement_id"] = rid
-        behavior_rows = [row for row in plan.request_scope.get("behavior_requirements", ())
-                         if row.get("requirement_id") == rid]
+        behavior_rows = [
+            admitted_behaviors[row["behavior_id"]]
+            for row in plan.request_scope.get("behavior_requirements", ())
+            if row.get("requirement_id") == rid
+        ]
         if not behavior_rows:
             raise ValueError("CONSTRUCTION_BEHAVIOR_COVERAGE_MISSING: " + rid)
         bindings["construction_behaviors_json"] = json.dumps(
