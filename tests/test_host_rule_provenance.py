@@ -207,3 +207,28 @@ def test_ambiguous_exact_name_sources_require_explicit_provenance():
            symbols, input_types=[owner])
     assert caught.value.missing[0]["reason"] == "ambiguous_runtime_observer"
     assert caught.value.missing[0]["matching_candidate_count"] == 2
+
+
+
+def test_runtime_observer_filters_incompatible_event_input_types():
+    from minecraft_mod_ai.host_rule_provenance import (
+        compatible_events_for_runtime_producers,
+    )
+    symbols = {
+        "example.Level": {"kind": "CLASS", "owner": "example.Level", "access": 1},
+        "example.Player": {"kind": "CLASS", "owner": "example.Player", "access": 1},
+        "example.ServerPlayer": {"kind": "CLASS", "owner": "example.ServerPlayer",
+                                 "superclass": "example.Player", "access": 1},
+        "selected": {"kind": "METHOD", "owner": "example.Player", "access": 1,
+                     "name": "getSelectedSection", "parameters": [],
+                     "return_type": "java.lang.String"},
+    }
+    events = [
+        {"event_id": "tick", "parameters": ["example.Level"]},
+        {"event_id": "player", "parameters": ["example.ServerPlayer"]},
+    ]
+    sources = {"selected_section": "selected"}
+    assert compatible_events_for_runtime_producers(events, sources, symbols) == [
+        events[1],
+    ]
+    assert compatible_events_for_runtime_producers(events, {}, symbols) == events
