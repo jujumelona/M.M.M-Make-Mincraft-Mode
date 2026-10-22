@@ -315,51 +315,44 @@ def scoped_java_member_messages(
 def ensure_live_java_source_capacity(adapter: Any, config: Any, request: Any,
                                      original_messages: Sequence[Mapping[str, Any]],
                                      source_frame: Mapping[str, Any]):
-    """Use llama.cpp's EXACT chat-template token count before Java generation.
+    """Project one complete member FIRST, then count exact live llama tokens.
 
-    A bytes/characters estimate cannot prove the request will fit. The server
-    endpoint is authoritative, including its actual runtime slot. Never send an
-    impossible request or silently truncate the current feature's behavior.
+    State/API source stays in the host compiler. The 9B coder sees only ABI
+    signatures belonging to its behavior. A 46K-token prompt cannot be
+    repaired by increasing its token limit after dispatch.
     """
     if str(getattr(config, "adapter", "")).casefold() != "llama_cpp":
         return request
     counter = getattr(adapter, "input_context_accounting", None)
     if not callable(counter):
         return request
-    accounting = counter(request)
-    # Give the body writer real output capacity, not a 1-token decode.
-    required = max(512, min(2048, int(accounting.context_tokens) // 16))
-    if accounting.remaining_tokens >= required:
-        return request
 
     from dataclasses import replace
     from .model_context_budget import fit_messages_to_context
     from .model_adapters.base import ModelConfigurationError
 
+    before = counter(request)
     scoped = scoped_java_member_messages(original_messages, source_frame)
-    if scoped == tuple(original_messages):
+    if scoped != tuple(original_messages):
+        request = replace(request, messages=fit_messages_to_context(
+            scoped, config=config, tools=()))
+    accounting = counter(request)
+    required = max(512, min(2048, int(accounting.context_tokens) // 16))
+    if accounting.remaining_tokens < required:
         raise ModelConfigurationError(
-            "CONSTRUCTION_JAVA_CONTEXT_NOT_SCOPABLE: no current member contract; "
-            f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens}"
-        )
-    reduced = replace(request, messages=fit_messages_to_context(
-        scoped, config=config, tools=(),
-    ))
-    fitted = counter(reduced)
-    if fitted.remaining_tokens < required:
-        raise ModelConfigurationError(
-            "CONSTRUCTION_JAVA_VERIFIED_API_CONTEXT_TOO_LARGE: split/retrieve verified "
-            "API evidence for this member before generation; "
-            f"input_tokens={fitted.input_tokens} n_ctx={fitted.context_tokens} "
-            f"required_output_tokens={required}"
-        )
-    print("CONSTRUCTION_JAVA_EXACT_CONTEXT_SCOPED: " + json.dumps({
-        "before_tokens": accounting.input_tokens,
-        "after_tokens": fitted.input_tokens,
-        "context_tokens": fitted.context_tokens,
-        "retained_current_member": True,
-    }), flush=True)
-    return reduced
+            "CONSTRUCTION_JAVA_VERIFIED_API_CONTEXT_TOO_LARGE: the member has "
+            "more exact verified API evidence than this runtime slot can hold. "
+            "Split the actual behavior/source owner, not its original meaning; "
+            f"input_tokens={accounting.input_tokens} "
+            f"n_ctx={accounting.context_tokens} required_output_tokens={required}")
+    if scoped != tuple(original_messages):
+        print("CONSTRUCTION_JAVA_EXACT_CONTEXT_SCOPED: " + json.dumps({
+            "before_tokens": before.input_tokens,
+            "after_tokens": accounting.input_tokens,
+            "context_tokens": accounting.context_tokens,
+            "retained_current_member": True,
+        }), flush=True)
+    return request
 
 
 __all__ = ["scoped_java_member_messages", "ensure_live_java_source_capacity"]
