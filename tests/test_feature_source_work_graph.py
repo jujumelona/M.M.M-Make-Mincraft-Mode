@@ -24,21 +24,23 @@ def test_producer_hook_effect_registration_compile_playtest_is_a_dag():
     )
     nodes = graph["tasks"]
     assert [row["kind"] for row in nodes] == [
-        "occurrence_hook", "runtime_producer", "gameplay_effect",
-        "event_registration", "target_compile", "runtime_playtest",
+        "custom_event_source", "occurrence_hook", "runtime_producer",
+        "gameplay_effect", "event_registration", "target_compile", "runtime_playtest",
     ]
     assert nodes[0]["status"] == "pending"
+    assert nodes[0]["evidence"]["reasons"] == ["occurrence_hook_not_owned"]
     assert nodes[1]["depends_on"] == [nodes[0]["task_id"]]
-    assert nodes[2]["depends_on"] == [nodes[0]["task_id"], nodes[1]["task_id"]]
+    assert nodes[2]["depends_on"] == [nodes[1]["task_id"]]
+    assert nodes[3]["depends_on"] == [nodes[1]["task_id"], nodes[2]["task_id"]]
     assert nodes[-1]["depends_on"] == [nodes[-2]["task_id"]]
     assert graph["completion_verified"] is False
     effect = member_source_work(graph, "b1", member_role="implement_callback_effects")
     assert {row["kind"] for row in effect["source_tasks"]} == {
-        "occurrence_hook", "runtime_producer", "gameplay_effect",
+        "custom_event_source", "occurrence_hook", "runtime_producer", "gameplay_effect",
     }
     registrar = member_source_work(graph, "b1", member_role="register_callback")
     assert {row["kind"] for row in registrar["source_tasks"]} == {
-        "occurrence_hook", "event_registration",
+        "custom_event_source", "occurrence_hook", "event_registration",
     }
 
 
@@ -100,3 +102,20 @@ def test_uninspected_source_hook_cannot_be_inserted_into_producer_graph():
     )
     with pytest.raises(ValueError, match="NOT_INSPECTED"):
         bind_selected_hooks(graph, {"b1": {"event_id": "invented#EVENT"}})
+
+
+def test_missing_inspected_callback_creates_source_owner_before_hook():
+    graph = build_source_work_graph(
+        [{"behavior_id": "new", "trigger": "User selects a custom build part"}],
+        producer_obligations=[{"behavior_id": "new", "reason": "no_inspected_callback"}],
+        inspected_hooks=[],
+    )
+    source, hook, effect, registration, compilation, playtest = graph["tasks"]
+    assert source["kind"] == "custom_event_source"
+    assert source["status"] == "pending"
+    assert hook["depends_on"] == [source["task_id"]]
+    assert effect["depends_on"] == [hook["task_id"]]
+    assert registration["depends_on"] == [hook["task_id"], effect["task_id"]]
+    assert compilation["depends_on"] == [registration["task_id"]]
+    assert playtest["depends_on"] == [compilation["task_id"]]
+    assert graph["completion_verified"] is False
