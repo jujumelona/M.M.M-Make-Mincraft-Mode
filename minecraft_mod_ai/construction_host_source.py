@@ -169,6 +169,25 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 bindings = spec.get("bindings", {})
                 prompt["source_owned_producer_obligations"] = feature_route[
                     "producer_obligations"]
+                # Give the bounded source author actual inspected hook ABIs.
+                # It owns a real registration expression and its receiver,
+                # rather than being forced back into an earlier LLM hook
+                # selection that already declared its source unimplemented.
+                candidates = callback_interfaces(
+                    context.get("symbols") or {},
+                    side=str(spec.get("side") or "COMMON"))
+                def _hook_priority(row):
+                    scopes = ("ServerLevel", "ServerWorld", "MinecraftServer",
+                              "ServerPlayer", "ServerPlayerEntity")
+                    score = sum(any(str(kind).endswith(scope) for scope in scopes)
+                                for kind in row.get("parameters", ()))
+                    return (-score, str(row.get("event_id") or ""))
+                prompt["source_owned_inspected_hooks"] = [
+                    {key: row.get(key) for key in
+                     ("event_id", "event_owner", "event_field",
+                      "parameters", "return_type")}
+                    for row in sorted(candidates, key=_hook_priority)[:32]
+                ]
                 prompt["runtime_state_bindings"] = {
                     key: value for key, value in runtime_bindings.items()
                     if any(key in row.get("runtime_state_reads", ())
@@ -230,8 +249,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             {"role": "user", "content": json.dumps(
                                 prompt, ensure_ascii=False, default=str)},
                         ], source_context=source_context,
-                        construction_context={**context, "host_state_access": state_access,
-                                              "host_state_work_order_scope": prompt["host_state_work_order_scope"]},
+                        construction_context={
+                            **context, "host_state_access": state_access,
+                            "host_state_work_order_scope": prompt["host_state_work_order_scope"],
+                            "host_source_owned": bool(
+                                feature_route and feature_route["route"] == "source_owned_java"),
+                        },
                         behaviors=behavior_rows,
                     )
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
