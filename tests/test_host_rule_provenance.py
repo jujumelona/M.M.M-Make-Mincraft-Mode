@@ -14,7 +14,25 @@ from minecraft_mod_ai.host_rule_provenance import (
 
 def test_unbound_world_observations_fail_before_model_java_requests(tmp_path):
     from minecraft_mod_ai.host_rule_feature import compose_rule_feature
-    from test_host_rule_feature import index
+    # Minimal inspected Fabric tick ABI; deliberately independent of tests
+    # being imported in any particular order or pytest import mode.
+    owner = "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents"
+    event = "net.fabricmc.fabric.api.event.Event"
+    callback = owner + ".EndTick"
+    level = "net.minecraft.server.level.ServerLevel"
+    symbols = {
+        owner: {"kind": "CLASS", "owner": owner, "access": 1},
+        event: {"kind": "CLASS", "owner": event, "access": 1},
+        callback: {"kind": "CLASS", "owner": callback, "access": 1545},
+        level: {"kind": "CLASS", "owner": level, "access": 1},
+        "register": {"kind": "METHOD", "owner": event, "name": "register",
+                     "access": 1, "parameters": ["java.lang.Object"], "return_type": "void"},
+        "tick": {"kind": "FIELD", "owner": owner, "name": "END_LEVEL_TICK",
+                 "access": 25, "return_type": event,
+                 "generic_return_type": event + "<" + callback + ">"},
+        "sam": {"kind": "METHOD", "owner": callback, "name": "onEndTick",
+                "access": 1025, "parameters": [level], "return_type": "void"},
+    }
 
     class NoRequests:
         def generate_structured_data(self, *args, **kwargs):
@@ -29,7 +47,7 @@ def test_unbound_world_observations_fail_before_model_java_requests(tmp_path):
         compose_rule_feature(NoRequests(), {
             "side": "COMMON", "target_path": "src/main/java/example/Bridge.java",
             "bindings": {"runtime_state_bindings_json": json.dumps(bindings)},
-        }, {"symbols": index(), "project_root": str(tmp_path)},
+        }, {"symbols": symbols, "project_root": str(tmp_path)},
             package="example", name="Bridge",
             behaviors=[{"behavior_id": "combat", "trigger": "Alien encounter in space",
                         "effects": "Combat with aliens",
