@@ -102,7 +102,9 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         seen.add(behavior_id)
         from .host_rule_provenance import validate_runtime_read_producers
         verified_sources = validate_runtime_read_producers(
-            behavior, runtime_bindings, rule_symbols)
+            behavior, runtime_bindings, rule_symbols,
+            input_types=tuple(dict.fromkeys(
+                kind for hook in candidates for kind in hook.get("parameters", ()))))
         # Missing producers are a dependency-graph problem, not a failed
         # Java expression. Reject before event selection, ABI paging, and
         # dozens of meaningless model calls.
@@ -125,6 +127,20 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             rule_behavior["runtime_state_observations"] = relevant_runtime
         program = RuleProgram(rule_symbols, params, rule_behavior, owner=owner,
             target_path=spec["target_path"], state_owners=[row["owner"] for row in state_access])
+        if verified_sources:
+            from .host_rule_provenance import RuleMissingRuntimeProducer
+            unreachable = []
+            for name, reference in verified_sources.items():
+                symbol = rule_symbols[reference]
+                if (not symbol.get("static") and not int(symbol.get("access", 0)) & 8
+                        and not any(program.checker.assignable(row["type"], symbol["owner"])
+                                    for row in params)):
+                    unreachable.append({
+                        "name": name, "reason": "producer_not_reachable_from_selected_event",
+                        "verified_symbol_ref": reference,
+                        "event_id": event["event_id"]})
+            if unreachable:
+                raise RuleMissingRuntimeProducer(behavior_id, unreachable)
         author = RuleAuthor(router, program, data_pages=data_pages)
         mode = author.ask("rule_activation", "Choose execution semantics: level=every matching observation, rising=false-to-true condition, changed=changed observed value",
             {"mode": {"type": "string", "enum": ["level", "rising", "changed"]}})["mode"]
