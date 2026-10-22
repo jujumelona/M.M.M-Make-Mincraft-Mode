@@ -4,7 +4,7 @@ The authoritative compiler retains the whole project/state model. Only the
 current behavior's exact Java accessor signatures belong in the model prompt.
 """
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from minecraft_mod_ai.construction_java_context import (
     scoped_java_member_messages,
