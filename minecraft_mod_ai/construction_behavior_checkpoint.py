@@ -165,6 +165,19 @@ class BehaviorPlanningCheckpoint:
                 raise ValueError("CONSTRUCTION_BEHAVIOR_CHECKPOINT_PARENT: " + parent)
             if _source_quote_bounds(source, record.source_quote) is None:
                 raise ValueError("CONSTRUCTION_BEHAVIOR_CHECKPOINT_SOURCE_DRIFT: " + parent)
+            from .construction_trigger_provenance import preserve_grounded_trigger
+            cleaned, diagnostic = preserve_grounded_trigger(
+                record.trigger, source_quote=record.source_quote, source_text=source)
+            if diagnostic:
+                # Existing checkpoints remain immutable. Repaired semantic
+                # input is an execution-time view, never written back as
+                # though the LLM originally generated a valid trigger.
+                from dataclasses import replace
+                record = replace(record, trigger=cleaned)
+                print("CONSTRUCTION_TRIGGER_PROVENANCE: " + json.dumps({
+                    "requirement_id": parent, "behavior_id": record.behavior_id,
+                    "restored_checkpoint": True, **diagnostic,
+                }, ensure_ascii=False), flush=True)
             identities.add(record.behavior_id)
             result.append(record)
         return tuple(result)
