@@ -235,6 +235,14 @@ def _scope_host_implementation_messages(
         payload["requirement"] = purpose
         payload["original_feature_goal"] = purpose
         payload["assigned_behaviors"] = [dict(behavior)]
+        # Hook selection is already finished by the host. Sending alternative
+        # event owners again tells the small coder to invent another registration.
+        payload.pop("source_owned_inspected_hooks", None)
+        if isinstance(payload.get("source_owned_producer_obligations"), list):
+            payload["source_owned_producer_obligations"] = [
+                dict(item) for item in payload["source_owned_producer_obligations"]
+                if item.get("behavior_id") == identifier
+            ]
         if for_body:
             # Retrieval emits complete inventories for each candidate owner.
             # The 17th Colab run repeated 99K characters on every tiny body
