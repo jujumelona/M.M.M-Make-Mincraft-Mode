@@ -120,7 +120,8 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         author = RuleAuthor(router, program, data_pages=data_pages)
         mode = author.ask("rule_activation", "Choose execution semantics: level=every matching observation, rising=false-to-true condition, changed=changed observed value",
             {"mode": {"type": "string", "enum": ["level", "rising", "changed"]}})["mode"]
-        gate = author.value("Original trigger and preconditions, including every branch", expected="boolean")
+        gate = author.value("Original trigger and preconditions, including every branch",
+                            expected="boolean", require_grounded=True)
         history, setup, condition, tracking = _tracking(author, program, gate, mode)
         history = history.replace("HISTORY", "history" + suffix)
         setup = setup.replace("HISTORY", "history" + suffix)
