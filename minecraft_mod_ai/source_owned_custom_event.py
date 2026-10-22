@@ -237,5 +237,79 @@ def materialize_verified_custom_event(
             _atomic_write(
                 manifest, json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
             )
+        # Proof receipt is written last: it may be trusted only after a
+        # fresh re-render and byte-for-byte check of source + mixin manifest.
+        digest = hashlib.sha256(
+            (behavior_id + "\0" + source_site_ref + "\0" + at).encode()
+        ).hexdigest()[:16]
+        receipt = {
+            "schema": "mmm/inspected-custom-source-receipt-v1",
+            "behavior_id": behavior_id, "source_site_ref": source_site_ref,
+            "package": package, "side": side, "java_version": java_version,
+            "at": at,
+        }
+        receipt_path = root / ".mmm/source-producers" / (digest + ".json")
+        expected_receipt = json.dumps(receipt, sort_keys=True, ensure_ascii=False) + "\n"
+        if receipt_path.exists() and receipt_path.read_text(encoding="utf-8") != expected_receipt:
+            raise ValueError("SOURCE_SITE_RECEIPT_CONFLICT")
+        if not receipt_path.exists():
+            _atomic_write(receipt_path, expected_receipt)
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     return result
+
+
+
+def read_verified_custom_event_receipts(
+    *, project_root: str | Path, symbols: Mapping, behavior_ids,
+    package: str, side: str = "COMMON",
+) -> list[dict]:
+    """Reproduce each generated producer from its inspected origin and bytes.
+
+    A receipt by itself is never valid source evidence. Stale or tampered Java,
+    missing Mixin configuration, uninspected sites and mismatched mod metadata
+    are rejected before an event may satisfy registration proof.
+    """
+    root = Path(project_root).resolve()
+    manifest = root / "src/main/resources/fabric.mod.json"
+    if not manifest.is_file():
+        return []
+    config = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(config, dict) or not isinstance(config.get("id"), str):
+        raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_INVALID")
+    present = config.get("mixins", [])
+    if not isinstance(present, list):
+        raise ValueError("SOURCE_SITE_FABRIC_MIXINS_INVALID")
+    names = {row if isinstance(row, str) else row.get("config")
+             for row in present if isinstance(row, (dict, str))}
+    allowed = set(behavior_ids)
+    folder = root / ".mmm/source-producers"
+    if not folder.is_dir():
+        return []
+    checked = {}
+    for receipt_path in folder.glob("*.json"):
+        if receipt_path.is_symlink():
+            raise ValueError("SOURCE_SITE_RECEIPT_SYMLINK")
+        data = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("schema") != "mmm/inspected-custom-source-receipt-v1":
+            raise ValueError("SOURCE_SITE_RECEIPT_SCHEMA_INVALID")
+        behavior_id = data.get("behavior_id")
+        if behavior_id not in allowed or data.get("package") != package or data.get("side") != side:
+            continue
+        if behavior_id in checked:
+            raise ValueError("SOURCE_SITE_RECEIPT_DUPLICATE_BEHAVIOR")
+        expected = plan_verified_custom_event(
+            symbols=symbols, source_site_ref=data["source_site_ref"],
+            behavior_id=behavior_id, package=package,
+            mod_id=config["id"], at=data["at"], side=side,
+            java_version=data["java_version"],
+        )
+        if expected["mixin_config"] not in names:
+            raise ValueError("SOURCE_SITE_MIXIN_NOT_REGISTERED")
+        for name, contents in expected["files"].items():
+            path = (root / name).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                raise ValueError("SOURCE_SITE_MATERIALIZED_FILE_MISSING")
+            if path.read_text(encoding="utf-8") != contents:
+                raise ValueError("SOURCE_SITE_MATERIALIZED_FILE_MISMATCH")
+        checked[behavior_id] = expected["callback"]
+    return list(checked.values())
