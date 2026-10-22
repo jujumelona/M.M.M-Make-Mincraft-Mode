@@ -521,3 +521,36 @@ def test_typed_inventory_membership_observation_is_not_mistaken_for_mutation():
     assert runtime_source_expression_proof(p, present, "Weapon inventory")
     with pytest.raises(ValueError, match="RULE_OBSERVATION_CALL_REQUIRED"):
         p.value("call", [holder], symbol_ref="delete")
+
+
+
+def test_impossible_observation_aborts_after_three_identical_failures():
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    world = "example.World"
+    symbols = {
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        "inventory": {"kind": "METHOD", "owner": world, "access": 1,
+                      "name": "getInventory", "parameters": [], "return_type": "int"},
+    }
+    p = RuleProgram(symbols, [{"type": world, "name": "arg0"}], {
+        "behavior_id": "no-progress", "state_reads": [], "state_writes": [],
+        "required_runtime_observation_name": "Weapon inventory",
+    }, owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    counts = {"operations": 0}
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "rule_value_operation":
+                counts["operations"] += 1
+                return {"operation": "observe"}
+            if data_name == "rule_checked_observation":
+                return {"observation_id": "o0"}
+            raise AssertionError(data_name)
+
+    with pytest.raises(ValueError, match="RULE_VALUE_NONPROGRESS"):
+        RuleAuthor(Router(), p).value(
+            "Live boolean inventory condition", expected="boolean",
+            require_grounded=True)
+    assert counts["operations"] < 10
