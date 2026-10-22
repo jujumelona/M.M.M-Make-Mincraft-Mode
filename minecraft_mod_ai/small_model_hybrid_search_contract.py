@@ -229,6 +229,9 @@ def _search_cache_key(
         int(limit),
         bool(semantic),
         bool(rerank),
+        # A lexical-only receipt must not be reused after dense retrieval
+        # is explicitly enabled (or vice versa) within the same process.
+        _dense_opted_in(),
         metadata_key,
     )
 
