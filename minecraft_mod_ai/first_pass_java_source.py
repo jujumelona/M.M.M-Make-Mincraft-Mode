@@ -483,12 +483,15 @@ def compose_first_pass_java(
                     "package": package_name,
                     "at": str(behavior.get("source_injection_point") or "HEAD"),
                     "side": str(spec.get("side") or "COMMON").upper(),
+                    "java_version": (construction_context or {}).get(
+                        "target", {}).get("java_version", 25),
                 }
                 produced = plan_verified_custom_event(
                     symbols=symbol_index, source_site_ref=str(source_ref),
                     behavior_id=behavior_id, package=package_name,
                     mod_id=metadata["id"], at=production_args["at"],
                     side=production_args["side"],
+                    java_version=production_args["java_version"],
                 )
                 pending_custom_source_sites.append(production_args)
                 bound_events[behavior_id] = produced["callback"]
