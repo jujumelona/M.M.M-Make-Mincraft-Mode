@@ -417,17 +417,30 @@ def compose_first_pass_java(
     # picker here produced JAVA_HOST_BEHAVIOR_EVENT_UNBOUND even after the
     # feature was deliberately routed away from it.
     source_owned = bool(host_mode and (construction_context or {}).get("host_source_owned"))
-    if host_mode and bindings.get("request_feature_entrypoint") and not source_owned:
+    source_work_graph = ((construction_context or {}).get("source_owned_work_graph")
+                         if source_owned else None)
+    if host_mode and bindings.get("request_feature_entrypoint"):
         from .host_fabric_callback_abi import callback_interfaces
         symbol_index = (construction_context or {}).get("symbols") or {}
         event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
         if symbol_index and not event_candidates:
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
+        by_event = {event["event_id"]: event for event in event_candidates}
         if event_candidates:
             from .host_behavior_event_binding import select_behavior_callback
             for behavior in behaviors:
-                bound_events[str(behavior["behavior_id"])] = select_behavior_callback(
-                    router, behavior, event_candidates)
+                explicit = str(behavior.get("event_binding") or "")
+                if source_owned:
+                    # A checked explicit hook can be used even if another
+                    # behavior still needs new runtime observation source.
+                    # Do not send verified ABIs through a 9B signature writer.
+                    if explicit:
+                        if explicit not in by_event:
+                            raise ValueError("JAVA_SOURCE_OWNED_HOOK_NOT_INSPECTED: " + explicit)
+                        bound_events[str(behavior["behavior_id"])] = by_event[explicit]
+                else:
+                    bound_events[str(behavior["behavior_id"])] = select_behavior_callback(
+                        router, behavior, event_candidates)
     units = []
     for index, item in enumerate(plan["units"], 1):
         unit = dict(item)
@@ -522,6 +535,12 @@ def compose_first_pass_java(
             ), None)
             metadata_context = _scope_host_implementation_messages(
                 messages, behavior=selected_behavior, purpose=unit["purpose"])
+            if source_work_graph is not None and behavior_id:
+                from .feature_source_work_graph import member_source_work
+                unit_task["source_owned_work"] = member_source_work(
+                    source_work_graph, behavior_id, member_role=(
+                        "register_callback" if unit.get("host_required_behavior")
+                        else "implement_callback_effects"))
         else:
             unit_task = {
                 **task, "imports": imports,
@@ -736,6 +755,11 @@ def compose_first_pass_java(
             # an invitation to generate another complete compilation unit.
             "previous_complete_members": finished[-3:],
         }
+        if source_work_graph is not None and owned_behavior_id:
+            from .feature_source_work_graph import member_source_work
+            body_task["source_owned_work"] = member_source_work(
+                source_work_graph, owned_behavior_id,
+                member_role=body_task["member_role"])
         if host_mode and unit_event:
             # Free-text gameplay retrieval can have no target matches. The
             # selected real callback still provides exact receiver and return
