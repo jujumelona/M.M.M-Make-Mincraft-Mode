@@ -67,6 +67,36 @@ def _actual_observer_candidates(name, symbols, input_types):
     return sorted(set(options))
 
 
+def compatible_events_for_runtime_producers(events, sources, symbols):
+    """Limit callback selection to inspected hooks that supply every receiver.
+
+    Selecting a world tick first and later discovering that the source getter
+    belongs only to a Player creates a second avoidable model failure.
+    """
+    if not sources:
+        return list(events)
+
+    def bases(kind):
+        reached, pending = set(), [kind]
+        while pending:
+            current = pending.pop()
+            if current in reached:
+                continue
+            reached.add(current)
+            record = symbols.get(current, {})
+            pending.extend(x for x in [
+                record.get("superclass"), *(record.get("interfaces") or ())
+            ] if isinstance(x, str))
+        return reached
+
+    result = []
+    for event in events:
+        reachable = set().union(*(bases(kind) for kind in event.get("parameters", ())))
+        if all(symbols[ref]["owner"] in reachable for ref in sources.values()):
+            result.append(event)
+    return result
+
+
 def validate_runtime_read_producers(behavior, runtime_bindings, symbols, *, input_types=()):
     """Reject planning-only observations; accept only checked exact source IDs.
 
