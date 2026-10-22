@@ -483,13 +483,19 @@ def compose_first_pass_java(
                     # pre-existing Fabric callback inventory.
                     source_work_graph = deepcopy(source_work_graph)
                     for row in source_work_graph["tasks"]:
-                        if (row.get("kind") == "occurrence_hook"
-                                and row.get("behavior_id") == behavior_id):
+                        if row.get("behavior_id") != behavior_id:
+                            continue
+                        if row.get("kind") == "custom_event_source":
+                            row["status"] = "materialized"
+                            row["evidence"]["source_site_ref"] = str(source_ref)
+                            row["evidence"]["source_descriptor"] = produced["source_descriptor"]
+                            row["evidence"]["materialized_paths"] = sorted(produced["files"])
+                            row["evidence"]["runtime_verified"] = False
+                        elif row.get("kind") == "occurrence_hook":
                             row["evidence"].setdefault(
                                 "materialized_custom_event_ids", []
                             ).append(produced["callback"]["event_id"])
                             row["evidence"]["source_site_ref"] = str(source_ref)
-                            break
     if source_work_graph is not None:
         from .feature_source_work_graph import bind_selected_hooks
         source_work_graph = bind_selected_hooks(source_work_graph, bound_events)
