@@ -69,7 +69,8 @@ def _tracking(author, program, gate, mode):
             {"observed": observed, "context": key, "first_observation": policy})
 
 
-def compose_rule_feature(router, spec, context, *, package, name, behaviors, state_access):
+def compose_rule_feature(router, spec, context, *, package, name, behaviors, state_access,
+                         prerequisite_apis=()):
     qualified_name(package)
     identifier(name)
     if not behaviors:
@@ -88,6 +89,10 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
     # classpath inventory. Integrate *only* their parsed, actual Java methods,
     # never model-invented state names or signatures.
     rule_symbols = dict(context["symbols"])
+    from .host_prerequisite_api import inspected_prerequisite_symbols
+    for reference, entry in inspected_prerequisite_symbols(
+            list(prerequisite_apis)).items():
+        rule_symbols.setdefault(reference, entry)
     for reference, entry in verified_state_accessor_symbols(state_access).items():
         rule_symbols.setdefault(reference, entry)
     if not candidates:
