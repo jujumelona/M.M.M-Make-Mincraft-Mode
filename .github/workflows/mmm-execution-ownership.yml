@@ -30,6 +30,7 @@ jobs:
             tests/test_feature_registration_proof.py \
             tests/test_source_owned_callback_authoring.py \
             tests/test_source_owned_host_integration.py \
+            tests/test_source_owned_custom_event.py \
             tests/test_construction_java_member_projection_regression.py \
             tests/test_construction_trigger_provenance.py \
             tests/test_construction_trigger_scope.py \
