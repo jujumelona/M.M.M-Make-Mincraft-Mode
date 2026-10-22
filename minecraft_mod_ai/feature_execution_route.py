@@ -43,7 +43,6 @@ def select_feature_execution_route(
                                 "reason": "no_inspected_callback",
                                 "required_action": "implement and register an actual callback/mixin hook"})
             continue
-        reads = tuple(dict.fromkeys(behavior.get("runtime_state_reads") or ()))
         try:
             eligible, _ = bind_runtime_sources(behavior, runtime_bindings, planner, callbacks)
         except RuleMissingRuntimeProducer as error:
