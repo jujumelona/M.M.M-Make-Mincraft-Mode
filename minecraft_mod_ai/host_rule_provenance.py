@@ -8,6 +8,7 @@ Neither a valid Fabric event nor an unrelated world boolean discharges it.
 from __future__ import annotations
 
 import json
+import re
 
 
 class RuleMissingRuntimeProducer(ValueError):
@@ -20,7 +21,53 @@ class RuleMissingRuntimeProducer(ValueError):
             details, ensure_ascii=False, sort_keys=True))
 
 
-def validate_runtime_read_producers(behavior, runtime_bindings, symbols):
+def _canonical_words(value):
+    # Only exact vocabulary correspondence is deterministic. Similar-looking
+    # words, substrings and AI-inferred synonyms are not evidence of a getter.
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
+    return tuple(re.findall(r"[^\\W_]+", text.casefold()))
+
+
+def _actual_observer_candidates(name, symbols, input_types):
+    expected = _canonical_words(name)
+    if not expected:
+        return []
+    reachable = set()
+    pending = list(dict.fromkeys(input_types))
+    while pending:
+        owner = pending.pop()
+        if owner in reachable:
+            continue
+        reachable.add(owner)
+        row = symbols.get(owner, {})
+        pending.extend(kind for kind in [
+            row.get("superclass"), *(row.get("interfaces") or ())
+        ] if isinstance(kind, str))
+    options = []
+    for key, row in symbols.items():
+        if not isinstance(row, dict) or row.get("kind") != "METHOD":
+            continue
+        if row.get("owner") not in reachable:
+            continue
+        if not int(row.get("access", 0)) & 1:
+            continue
+        if row.get("static") or int(row.get("access", 0)) & 8:
+            continue
+        if row.get("parameters") or row.get("throws"):
+            continue
+        if row.get("return_type") in {None, "void"}:
+            continue
+        method = str(row.get("name") or "")
+        prefix = next((p for p in ("get", "is", "has", "can", "read")
+                       if method.startswith(p) and len(method) > len(p)
+                       and method[len(p)].isupper()), None)
+        if not prefix or _canonical_words(method[len(prefix):]) != expected:
+            continue
+        options.append(str(key))
+    return sorted(set(options))
+
+
+def validate_runtime_read_producers(behavior, runtime_bindings, symbols, *, input_types=()):
     """Reject planning-only observations; accept only checked exact source IDs.
 
     This is a *necessary*, not sufficient, condition for semantic coverage.
@@ -34,17 +81,25 @@ def validate_runtime_read_producers(behavior, runtime_bindings, symbols):
             missing.append({"name": name, "reason": "missing_world_observer_binding"})
             continue
         ref = binding.get("verified_symbol_ref")
+        derived = []
+        if ref is None and input_types:
+            derived = _actual_observer_candidates(name, symbols, input_types)
+            if len(derived) == 1:
+                ref = derived[0]
         evidence = symbols.get(ref) if isinstance(ref, str) else None
         if (not isinstance(evidence, dict)
                 or evidence.get("kind") not in {"METHOD", "FIELD"}
                 or evidence.get("return_type") in {None, "void"}
                 or (evidence.get("kind") == "METHOD" and evidence.get("parameters"))
-                or binding.get("semantic_status") != "host_verified_observer"):
+                or (binding.get("semantic_status") != "host_verified_observer"
+                    and not (len(derived) == 1 and derived[0] == ref))):
             missing.append({
                 "name": name,
-                "reason": ("planning_only_world_state" if not ref
+                "reason": ("ambiguous_runtime_observer" if len(derived) > 1
+                           else "planning_only_world_state" if not ref
                            else "unverified_or_unusable_java_observer"),
                 "binding_status": binding.get("semantic_status"),
+                "matching_candidate_count": len(derived),
             })
             continue
         resolved[name] = ref
