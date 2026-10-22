@@ -464,9 +464,9 @@ def compose_first_pass_java(
                 source_ref = (behavior.get("source_site_ref")
                               or site_bindings.get(behavior_id))
                 if not source_ref:
-                    raise SourceHookUnavailable(
-                        behavior_id, reason="verified_source_site_required",
-                        inspected=len(event_candidates))
+                    from .source_owned_site_choice import choose_verified_source_site
+                    source_ref = choose_verified_source_site(
+                        router, behavior, symbol_index)
                 root = (construction_context or {}).get("project_root")
                 if not root:
                     raise ValueError("JAVA_CUSTOM_SOURCE_PROJECT_ROOT_REQUIRED")
