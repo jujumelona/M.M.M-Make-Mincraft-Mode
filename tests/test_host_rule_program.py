@@ -468,3 +468,27 @@ def test_rule_author_uses_checked_callback_observation_to_build_boolean_gate():
     assert author._runtime_grounded(gate)
     assert "getTime()" in p.declarations()
     assert not responses
+
+
+
+def test_rule_api_search_rejects_incidental_short_substring_matches():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    unrelated = {"kind": "METHOD", "owner": "example.MinecraftInventory",
+                 "name": "getContents", "access": 9,
+                 "parameters": [], "return_type": "int"}
+    stub = SimpleNamespace(
+        symbols={"unrelated": unrelated}, values={}, active=set(),
+        checker=SimpleNamespace(assignable=lambda *_: False))
+    stub._symbol = lambda key, **kw: unrelated
+    author = RuleAuthor(None, stub)
+    calls = []
+    def answer(name, purpose, properties, **kwargs):
+        calls.append(name)
+        assert name == "rule_api_query"
+        return {"query": "in space combat"}
+    author.ask = answer
+    with pytest.raises(ValueError, match="RULE_CHECKED_CAPABILITY_REQUIRED"):
+        author.symbol("Fight aliens in space", "METHOD")
+    assert calls == ["rule_api_query"] * 3
