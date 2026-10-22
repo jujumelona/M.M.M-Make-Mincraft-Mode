@@ -92,6 +92,22 @@ def repeated_invalid_java_implementation(first: str, second: str) -> bool:
     return first.strip() == second.strip()
 
 
+def reject_repeated_invalid_java_implementation(first: str, second: str,
+                                                error: ValueError) -> None:
+    """Preserve the original parser or transport exception and its diagnostics.
+
+    A repeated invalid Java reply is not a new revision. Never replace the
+    JavaRegionParseError category with a generic configuration exception.
+    """
+    if not repeated_invalid_java_implementation(first, second):
+        return
+    error.failed_response = second
+    error.repeated_invalid_response = True
+    print("CONSTRUCTION_JAVA_REPEATED_REJECTED_BODY: "
+          + str(error)[:1000], flush=True)
+    raise error
+
+
 def validate_generated_java_source(result, frame: Mapping, prefix: str, suffix: str) -> str:
     from .first_pass_java_declarations import validate_source_frame
     from .model_adapters.base import ModelConfigurationError
