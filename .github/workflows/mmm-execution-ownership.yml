@@ -1,0 +1,37 @@
+name: MMM execution-ownership regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source-feature-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test and parser dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Check Python source compilation
+        run: python -m compileall -q minecraft_mod_ai
+      - name: Test producer, hook, registration, context and repair contracts
+        run: |
+          python -m pytest -q \
+            tests/test_feature_source_work_graph.py \
+            tests/test_source_owned_hook.py \
+            tests/test_feature_registration_proof.py \
+            tests/test_source_owned_callback_authoring.py \
+            tests/test_construction_java_member_projection_regression.py \
+            tests/test_construction_trigger_provenance.py \
+            tests/test_construction_trigger_scope.py \
+            tests/test_java_rejected_body_identity.py \
+            tests/test_feature_execution_route.py \
+            tests/test_first_pass_java_source.py
