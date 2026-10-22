@@ -126,16 +126,29 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
                     name for name in behavior.get("runtime_state_reads", ())
                     if name not in pending_runtime_reads]},
                 runtime_bindings, rule_symbols, input_types=input_types)
+        from .host_rule_provenance import (
+            unavailable_semantic_runtime_sources, resolve_materialized_entity_presence)
+        # A content prerequisite can supply a real Entity class while a
+        # verified ServerLevel getter supplies the live collection. Treat
+        # that checked pair as an executable producer, not an arbitrary
+        # model guess or a matching class name alone.
+        derived_entity_observers = {
+            state_name: evidence
+            for state_name in pending_runtime_reads
+            if (evidence := resolve_materialized_entity_presence(
+                state_name, rule_symbols, input_types)) is not None
+        }
         if pending_runtime_reads:
-            from .host_rule_provenance import unavailable_semantic_runtime_sources
             unavailable = unavailable_semantic_runtime_sources(
-                pending_runtime_reads, rule_symbols, input_types=input_types)
+                [item for item in pending_runtime_reads
+                 if item not in derived_entity_observers],
+                rule_symbols, input_types=input_types)
             if unavailable:
                 raise RuleMissingRuntimeProducer(behavior_id, [{
-                    "name": name,
+                    "name": state_name,
                     "reason": "no_inspected_semantic_source",
-                    "required_action": "add an observable producing prerequisite module"} 
-                    for name in unavailable])
+                    "required_action": "implement the source module and its runtime observer"}
+                    for state_name in unavailable])
         # A candidate event must provide the exact typed receiver needed
         # by a directly checked observer. For synthesized observations the
         # host validates the entire typed expression after authoring.
@@ -159,8 +172,16 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
             # cannot certify a runtime state.
             concrete = semantic_runtime_candidates(
                 pending_runtime_reads, rule_symbols, event.get("parameters", ()))
-            unavailable = [name for name in pending_runtime_reads
-                           if not concrete[name]]
+            for state_name in list(derived_entity_observers):
+                evidence = resolve_materialized_entity_presence(
+                    state_name, rule_symbols, event.get("parameters", ()))
+                if evidence is None:
+                    del derived_entity_observers[state_name]
+                else:
+                    derived_entity_observers[state_name] = evidence
+            unavailable = [state_name for state_name in pending_runtime_reads
+                           if state_name not in derived_entity_observers
+                           and not concrete[state_name]]
             if unavailable:
                 raise RuleMissingRuntimeProducer(behavior_id, [{
                     "name": name, "reason": "selected_event_cannot_observe_state",
@@ -221,6 +242,31 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
                 "call" if symbol["kind"] == "METHOD" else "field",
                 operands, symbol_ref=reference, purpose="Runtime read: " + state_name)
         for state_name in pending_runtime_reads:
+            if state_name in derived_entity_observers:
+                evidence = derived_entity_observers[state_name]
+                observer = rule_symbols[evidence["observer_ref"]]
+                candidate_inputs = [ref for ref in program.inputs if
+                                    program.checker.assignable(
+                                        program.kind(ref), observer["owner"])]
+                if len(candidate_inputs) != 1:
+                    raise RuleMissingRuntimeProducer(behavior_id, [{
+                        "name": state_name,
+                        "reason": "world_enumeration_receiver_ambiguous_or_unreachable"}])
+                observed = program.value(
+                    "call", [candidate_inputs[0]],
+                    symbol_ref=evidence["observer_ref"],
+                    purpose="Live world entity enumeration")
+                result_ref = program.value(
+                    "entity_presence", [observed],
+                    entity_owner=evidence["entity_owner"],
+                    purpose="Live generated entity existence")
+                if not runtime_source_expression_proof(
+                        program, result_ref, state_name):
+                    raise RuleMissingRuntimeProducer(behavior_id, [{
+                        "name": state_name,
+                        "reason": "materialized_entity_presence_provenance_failed"}])
+                runtime_sources[state_name] = result_ref
+                continue
             # A complex observer is a bounded typed expression built with
             # inspected target symbols, not an invented Java getter. Do not
             # allow another concept's exact getter to certify this read.
