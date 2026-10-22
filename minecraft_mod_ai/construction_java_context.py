@@ -236,9 +236,13 @@ def scoped_java_member_messages(
         return tuple(dict(m) for m in messages)
 
     task = {key: current[key] for key in _CURRENT_MEMBER_FIELDS if key in current}
+    # Only a behavior-owned member has an explicit state allowlist. A
+    # supporting member without one must not silently lose its permitted API.
+    bounded_state = isinstance(current.get("assigned_behavior"), Mapping)
     names = _member_state_names(current)
-    task["host_state_work_order_scope"] = _member_work_order_scope(
-        task.get("host_state_work_order_scope"), names)
+    if bounded_state:
+        task["host_state_work_order_scope"] = _member_work_order_scope(
+            task.get("host_state_work_order_scope"), names)
     callback_api, verified_callback_types = _callback_type_api(current)
     if verified_callback_types:
         task["callback_input_api"] = callback_api
@@ -252,7 +256,8 @@ def scoped_java_member_messages(
     state_contracts = frame.get("host_state_access") or ()
     state_owners = {str(row["owner"]) for row in state_contracts
                     if isinstance(row, Mapping) and row.get("owner")}
-    task["host_state_access"] = _member_state_access(state_contracts, names)
+    task["host_state_access"] = (_member_state_access(state_contracts, names)
+                                 if bounded_state else list(state_contracts))
     if inspected:
         # Keep callable evidence rather than project-wide source inventories.
         task["inspected_target_api"] = _relevant_current_api(
@@ -262,8 +267,9 @@ def scoped_java_member_messages(
         # Generated content (registries, item constants, helper classes) is
         # absent from the target classpath inventory. Its actual declarations
         # must coexist with inspected Minecraft/Fabric API evidence.
-        task["materialized_prerequisite_api"] = _member_prerequisites(
-            prerequisite, names, state_owners)
+        task["materialized_prerequisite_api"] = (
+            _member_prerequisites(prerequisite, names, state_owners)
+            if bounded_state else prerequisite)
     repair_api = current.get("api_evidence")
     if isinstance(repair_api, Mapping):
         # Compiler diagnostics sometimes return very large search result sets
@@ -282,8 +288,9 @@ def scoped_java_member_messages(
                 "class_members": projected["class_members"],
             }
             if "materialized_prerequisite_api" in repair_api:
-                task["api_evidence"]["materialized_prerequisite_api"] = _member_prerequisites(
+                task["api_evidence"]["materialized_prerequisite_api"] = (_member_prerequisites(
                     repair_api["materialized_prerequisite_api"], names, state_owners)
+                    if bounded_state else repair_api["materialized_prerequisite_api"])
         else:
             task["api_evidence"] = {
                 key: repair_api[key] for key in (
@@ -291,8 +298,9 @@ def scoped_java_member_messages(
                 ) if key in repair_api
             }
             if "materialized_prerequisite_api" in repair_api:
-                task["api_evidence"]["materialized_prerequisite_api"] = _member_prerequisites(
+                task["api_evidence"]["materialized_prerequisite_api"] = (_member_prerequisites(
                     repair_api["materialized_prerequisite_api"], names, state_owners)
+                    if bounded_state else repair_api["materialized_prerequisite_api"])
     return (
         {"role": "system", "content": (
             "Complete exactly the current Java member. Preserve the assigned "
