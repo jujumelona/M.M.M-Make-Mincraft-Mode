@@ -344,6 +344,19 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         source_context=source_context)
     _check_identity(source, package, name)
     _check_entrypoint(source, spec)
+    if spec.get("bindings", {}).get("request_feature_entrypoint") and context.get("symbols"):
+        # An initializer that calls an invented registrar is NOT a gameplay
+        # hook. The exact source and all project prerequisites have already
+        # compiled. Now require an actual installed Fabric callback field
+        # from the same verified target classpath (also on checkpoint replay).
+        from .host_fabric_callback_abi import callback_interfaces
+        from .feature_registration_proof import validate_registered_event_sources
+        checked_events = callback_interfaces(
+            context["symbols"], side=str(spec.get("side") or "COMMON"))
+        checked_behaviors = json.loads(
+            spec.get("bindings", {}).get("construction_behaviors_json") or "[]")
+        validate_registered_event_sources(
+            source, checked_behaviors, checked_events)
     verify_source = context.get("verify_source")
     if verify_source:
         verify_source(source, spec["target_path"])
