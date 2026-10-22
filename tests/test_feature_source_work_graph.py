@@ -7,7 +7,7 @@ state names never become fabricated Java getters merely by planning them.
 import pytest
 
 from minecraft_mod_ai.feature_source_work_graph import (
-    build_source_work_graph, member_source_work,
+    build_source_work_graph, member_source_work, bind_selected_hooks,
 )
 
 
@@ -75,3 +75,28 @@ def test_duplicate_behaviors_fail_instead_of_collapsing_coverage():
         build_source_work_graph(
             [{"behavior_id": "same"}, {"behavior_id": "same"}],
             producer_obligations=[], inspected_hooks=[])
+
+
+
+def test_checked_selected_callback_does_not_fake_observer_completion():
+    graph = build_source_work_graph(
+        [{"behavior_id": "b1", "trigger": "Real runtime condition"}],
+        producer_obligations=[{"behavior_id": "b1", "name": "selected_section",
+                               "reason": "planning_only_world_state"}],
+        inspected_hooks=[{"event_id": "actual#EVENT"}],
+    )
+    selected = bind_selected_hooks(graph, {"b1": {"event_id": "actual#EVENT"}})
+    assert selected["tasks"][0]["status"] == "source_selected"
+    assert selected["tasks"][0]["evidence"]["event_binding"] == "actual#EVENT"
+    assert selected["tasks"][1]["status"] == "pending"
+    assert selected["completion_verified"] is False
+    assert graph["tasks"][0]["evidence"]["event_binding"] is None
+
+
+def test_uninspected_source_hook_cannot_be_inserted_into_producer_graph():
+    graph = build_source_work_graph(
+        [{"behavior_id": "b1"}], producer_obligations=[],
+        inspected_hooks=[{"event_id": "actual#EVENT"}],
+    )
+    with pytest.raises(ValueError, match="NOT_INSPECTED"):
+        bind_selected_hooks(graph, {"b1": {"event_id": "invented#EVENT"}})
