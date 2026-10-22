@@ -109,3 +109,45 @@ def test_unrelated_world_boolean_cannot_cover_verified_observation():
     author = RuleAuthor(None, program)
     assert not author._runtime_grounded(pvp)
     assert author._runtime_grounded(presence)
+
+
+
+def test_checked_observation_menu_never_reoffers_identical_getter_receiver():
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    symbols = {
+        "example.World": {"kind": "CLASS", "owner": "example.World", "access": 1},
+        "clock": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                  "name": "getGameTime", "parameters": [], "return_type": "long"},
+    }
+    p = RuleProgram(symbols, [{"type": "example.World", "name": "arg0"}],
+        {"behavior_id": "day-boundary", "trigger": "World game time changes",
+         "state_reads": [], "state_writes": []},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    author = RuleAuthor(None, p)
+    first = author._checked_observation_candidates("Actual game time")
+    assert len(first) == 1 and first[0]["symbol_ref"] == "clock"
+    old = p.value("call", [p.inputs[0]], symbol_ref="clock")
+    assert p.source(old)
+    assert author._checked_observation_candidates("Actual game time") == []
+
+
+def test_checked_observation_menu_uses_bound_signal_producer_not_pvp():
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    symbols = {
+        "example.World": {"kind": "CLASS", "owner": "example.World", "access": 1},
+        "pvp": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                "name": "isPvpAllowed", "return_type": "boolean", "parameters": []},
+        "presence": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                     "name": "isAlienPresent", "return_type": "boolean", "parameters": []},
+    }
+    p = RuleProgram(symbols, [{"type": "example.World", "name": "arg0"}],
+        {"behavior_id": "combat", "trigger": "Alien presence",
+         "verified_runtime_observers": {"Alien presence": "presence"},
+         "state_reads": [], "state_writes": []},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    choices = RuleAuthor(None, p)._checked_observation_candidates("Alien presence")
+    assert [row["symbol_ref"] for row in choices] == ["presence"]
