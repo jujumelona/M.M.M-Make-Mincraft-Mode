@@ -136,3 +136,74 @@ def validate_runtime_read_producers(behavior, runtime_bindings, symbols, *, inpu
     if missing:
         raise RuleMissingRuntimeProducer(str(behavior.get("behavior_id") or ""), missing)
     return resolved
+
+
+def expression_dependencies(program, root):
+    """Return all typed IR nodes actually evaluated by the selected expression."""
+    nodes = program.checker.nodes
+    if root not in nodes:
+        raise ValueError("RULE_OBSERVATION_VALUE_MISSING: " + str(root))
+    seen, pending = set(), [root]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        node = nodes.get(current)
+        if not isinstance(node, dict):
+            raise ValueError("RULE_OBSERVATION_DANGLING_REFERENCE: " + str(current))
+        seen.add(current)
+        pending.extend(node.get("input_refs", ()))
+    return seen
+
+
+def runtime_source_expression_proof(program, root, semantic_name):
+    """Check a live, typed, topic-relevant producer DAG, not a planner label.
+
+    Complex observations can be calculated from several JVM calls, fields and
+    comparisons. They need not have a zero-argument getter named after the
+    planning concept. The host verifies that the DAG references a real
+    callback input and includes an inspected API member relevant to the
+    requested observation. This is a structural proof, not a substitute for
+    gameplay tests of semantic correctness.
+    """
+    tokens = set(_canonical_words(semantic_name)) - {
+        "state", "runtime", "value", "current", "actual", "has", "get",
+        "is", "the", "of", "a", "an", "and",
+    }
+    if not tokens:
+        return False
+    graph = expression_dependencies(program, root)
+    nodes = program.checker.nodes
+
+    def derived_from_event(ref, visiting=None):
+        if visiting is None:
+            visiting = set()
+        if ref in visiting:
+            return False
+        node = nodes[ref]
+        if node["op"] == "parameter":
+            return True
+        visiting = visiting | {ref}
+        return any(derived_from_event(child, visiting)
+                   for child in node.get("input_refs", ()))
+
+    if not derived_from_event(root):
+        return False
+    for ref in graph:
+        node = nodes[ref]
+        if node.get("op") not in {"call", "field"}:
+            continue
+        symbol_ref = node.get("attributes", {}).get("symbol_ref")
+        symbol = program.symbols.get(symbol_ref)
+        if not isinstance(symbol, dict) or symbol.get("kind") not in {"METHOD", "FIELD"}:
+            continue
+        # Only a live receiver or a callback-derived API argument grounds this
+        # observation. A newly constructed helper and a constant do not.
+        if not any(derived_from_event(child) for child in node.get("input_refs", ())):
+            continue
+        member_name = str(symbol.get("name") or "")
+        # Names are evidence hints, not proofs of game effects. Require a
+        # relevant inspected member in the *actual expression DAG*.
+        if tokens & set(_canonical_words(member_name)):
+            return True
+    return False
