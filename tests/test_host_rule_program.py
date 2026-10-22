@@ -364,3 +364,60 @@ def test_rule_program_can_use_materialized_declared_state_accessors():
         state_owners=[owner])
     with pytest.raises(ValueError, match="STATE_AUTHORITY"):
         forbidden.value("call", [], symbol_ref=read)
+
+
+
+def test_rule_literal_type_menu_respects_required_boolean():
+    # Production MiMo previously chose ServerLevel + null 48 times while
+    # the enclosing task explicitly required a boolean.
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "rule_literal_type"
+            allowed = parameters["properties"]["type"]["enum"]
+            assert allowed == ["boolean"], allowed
+            return {"type": "boolean"}
+
+    p = program()
+    author = RuleAuthor(Router(), p)
+    # A nonprimitive world input is present in p.menu(), but it cannot become
+    # a null literal in a boolean-typed predicate.
+    author._literal("Boolean intermediary", expected="boolean")
+
+
+def test_gameplay_trigger_cannot_be_only_a_boolean_literal():
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+    p = program()
+    constant = p.value("literal", type="boolean", value=True)
+    author = RuleAuthor(None, p)
+    assert not author._runtime_grounded(constant)
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "rule_value_operation"
+            operations = parameters["properties"]["operation"]["enum"]
+            assert "literal" not in operations
+            assert "use" not in operations
+            assert "call" in operations
+            raise RuntimeError("menu inspected")
+
+    author.router = Router()
+    with pytest.raises(RuntimeError, match="menu inspected"):
+        author.value("Original trigger and preconditions, including every branch",
+                     expected="boolean", require_grounded=True)
+
+
+def test_checked_runtime_observation_can_ground_computed_boolean_gate():
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+
+    p = program()
+    time = p.value("call", [p.inputs[0]], symbol_ref="clock")
+    threshold = p.value("literal", type="long", value=100)
+    gate = p.value("binary", [time, threshold], operator=">=")
+    pure = p.value("binary", [
+        p.value("literal", type="long", value=2),
+        p.value("literal", type="long", value=1)], operator=">")
+    author = RuleAuthor(None, p)
+    assert p.kind(gate) == "boolean"
+    assert author._runtime_grounded(gate)
+    assert not author._runtime_grounded(pure)
