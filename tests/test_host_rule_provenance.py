@@ -151,3 +151,45 @@ def test_checked_observation_menu_uses_bound_signal_producer_not_pvp():
         owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
     choices = RuleAuthor(None, p)._checked_observation_candidates("Alien presence")
     assert [row["symbol_ref"] for row in choices] == ["presence"]
+
+
+
+def test_deterministic_exact_name_getter_resolves_without_model_api_guess():
+    symbols = {
+        "example.World": {"kind": "CLASS", "owner": "example.World", "access": 1},
+        "worldtime": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                      "name": "getWorldTime", "parameters": [],
+                      "return_type": "long"},
+        "unrelated": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                      "name": "isPvpAllowed", "parameters": [],
+                      "return_type": "boolean"},
+    }
+    state = "world_time"
+    bindings = {state: {"binding": "world_state", "observation": state,
+                        "semantic_status": "host_classified_unbound_read"}}
+    assert validate_runtime_read_producers({
+        "behavior_id": "world-rule", "runtime_state_reads": [state],
+    }, bindings, symbols, input_types=["example.World"]) == {
+        state: "worldtime",
+    }
+    with pytest.raises(RuleMissingRuntimeProducer):
+        validate_runtime_read_producers({
+            "behavior_id": "world-rule", "runtime_state_reads": [state],
+        }, bindings, symbols, input_types=["example.Other"])
+
+
+def test_ambiguous_exact_name_sources_require_explicit_provenance():
+    owner = "example.World"
+    symbols = {owner: {"kind": "CLASS", "owner": owner, "access": 1}}
+    for key in ("first", "second"):
+        symbols[key] = {"kind": "METHOD", "owner": owner, "access": 1,
+                        "name": "getWorldTime", "parameters": [],
+                        "return_type": "long"}
+    with pytest.raises(RuleMissingRuntimeProducer) as caught:
+        validate_runtime_read_producers({
+            "behavior_id": "world-rule", "runtime_state_reads": ["world_time"],
+        }, {"world_time": {"binding": "world_state",
+                           "semantic_status": "host_classified_unbound_read"}},
+           symbols, input_types=[owner])
+    assert caught.value.missing[0]["reason"] == "ambiguous_runtime_observer"
+    assert caught.value.missing[0]["matching_candidate_count"] == 2
