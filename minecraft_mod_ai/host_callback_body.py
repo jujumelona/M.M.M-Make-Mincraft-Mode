@@ -140,21 +140,36 @@ def _validate_state(source, frame):
 
 
 def _effect_operation(action, code):
-    """Local value bookkeeping cannot satisfy a world/state effect obligation.
+    """Only a possible external mutation can satisfy an effect receipt.
 
-    Invoking an API is an effect attempt, not proof of its gameplay meaning;
-    javac and external behavior verification remain separate authorities.
+    Console/log calls, pure getter queries and local declarations used to
+    masquerade as the entire requested gameplay implementation. This gate
+    does not claim semantic success; a real playtest remains mandatory.
     """
-    if action == "call":
-        return True
+    import re
     _, root = _parse("class MmmEffect { void run() {\n" + code + "\n} }")
     pending = [root]
     while pending:
         node = pending.pop()
+        if node.type == "method_invocation" and action in {"call", "declare"}:
+            name_node = node.child_by_field_name("name")
+            name = _text(_, name_node) if name_node is not None else ""
+            expression = _text(_, node)
+            # Effect receipts must be based on gameplay state changes, not
+            # textual diagnostics. Identifiers here describe Java API kinds,
+            # not user prompts or particular Minecraft mechanics.
+            logger = bool(re.search(
+                r"(?:\\bSystem\\.(?:out|err)\\.|\\b(?:logger|log)\\.)",
+                expression, re.IGNORECASE))
+            passive = name.startswith(("get", "is", "has", "can", "peek", "read"))
+            if not logger and not passive and name not in {
+                    "print", "println", "printf", "log", "debug", "info",
+                    "warn", "warning", "error", "trace"}:
+                return True
         if action == "assign" and node.type == "assignment_expression":
-            return node.child_by_field_name("left").type in {"field_access", "array_access"}
-        if action == "declare" and node.type == "method_invocation":
-            return True
+            target = node.child_by_field_name("left")
+            if target is not None and target.type in {"field_access", "array_access"}:
+                return True
         pending.extend(node.named_children)
     return False
 
