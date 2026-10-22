@@ -100,6 +100,12 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         if not behavior_id or behavior_id in seen:
             raise ValueError("RULE_BEHAVIOR_IDENTITY")
         seen.add(behavior_id)
+        from .host_rule_provenance import validate_runtime_read_producers
+        verified_sources = validate_runtime_read_producers(
+            behavior, runtime_bindings, rule_symbols)
+        # Missing producers are a dependency-graph problem, not a failed
+        # Java expression. Reject before event selection, ABI paging, and
+        # dozens of meaningless model calls.
         binding = bind_rule_observation(router, behavior, candidates)
         event = binding["event"]
         if event.get("type_parameters"):
@@ -110,6 +116,8 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         params = [{"type": kind, "name": "arg" + str(i)} for i, kind in enumerate(event["parameters"])]
         signature = ", ".join(row["type"] + " " + row["name"] for row in params)
         rule_behavior = {**behavior}
+        if verified_sources:
+            rule_behavior["verified_runtime_observers"] = verified_sources
         relevant_runtime = {key: runtime_bindings[key] for key in (
             *behavior.get("runtime_state_reads", ()), *behavior.get("runtime_state_writes", ()))
             if key in runtime_bindings}
