@@ -124,7 +124,7 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         if pending_runtime_reads:
             from .host_rule_provenance import unavailable_semantic_runtime_sources
             unavailable = unavailable_semantic_runtime_sources(
-                pending_runtime_reads, rule_symbols)
+                pending_runtime_reads, rule_symbols, input_types=input_types)
             if unavailable:
                 raise RuleMissingRuntimeProducer(behavior_id, [{
                     "name": name,
@@ -146,6 +146,22 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
                 for key, ref in verified_sources.items()])
         binding = bind_rule_observation(router, behavior, options)
         event = binding["event"]
+        if pending_runtime_reads:
+            from .host_rule_provenance import (
+                semantic_runtime_candidates, RuleMissingRuntimeProducer)
+            # Binding an actual tick hook narrows the set of observable
+            # receivers. A method on a completely unrelated callback type
+            # cannot certify a runtime state.
+            concrete = semantic_runtime_candidates(
+                pending_runtime_reads, rule_symbols, event.get("parameters", ()))
+            unavailable = [name for name in pending_runtime_reads
+                           if not concrete[name]]
+            if unavailable:
+                raise RuleMissingRuntimeProducer(behavior_id, [{
+                    "name": name, "reason": "selected_event_cannot_observe_state",
+                    "event_id": event["event_id"],
+                    "required_action": "bind the producing event or materialize a prerequisite observer"}
+                    for name in unavailable])
         if event.get("type_parameters"):
             raise ValueError("RULE_GENERIC_CALLBACK_REQUIRES_ADAPTER")
         suffix = hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
