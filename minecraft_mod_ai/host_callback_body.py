@@ -159,7 +159,7 @@ def _effect_operation(action, code):
             # textual diagnostics. Identifiers here describe Java API kinds,
             # not user prompts or particular Minecraft mechanics.
             logger = bool(re.search(
-                r"(?:\\bSystem\\.(?:out|err)\\.|\\b(?:logger|log)\\.)",
+                r"(?:\bSystem\.(?:out|err)\.|\b(?:logger|log)\.)",
                 expression, re.IGNORECASE))
             passive = name.startswith(("get", "is", "has", "can", "peek", "read"))
             if not logger and not passive and name not in {
