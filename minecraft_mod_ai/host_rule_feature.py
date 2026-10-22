@@ -121,6 +121,16 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
                     name for name in behavior.get("runtime_state_reads", ())
                     if name not in pending_runtime_reads]},
                 runtime_bindings, rule_symbols, input_types=input_types)
+        if pending_runtime_reads:
+            from .host_rule_provenance import unavailable_semantic_runtime_sources
+            unavailable = unavailable_semantic_runtime_sources(
+                pending_runtime_reads, rule_symbols)
+            if unavailable:
+                raise RuleMissingRuntimeProducer(behavior_id, [{
+                    "name": name,
+                    "reason": "no_inspected_semantic_source",
+                    "required_action": "add an observable producing prerequisite module"} 
+                    for name in unavailable])
         # A candidate event must provide the exact typed receiver needed
         # by a directly checked observer. For synthesized observations the
         # host validates the entire typed expression after authoring.
