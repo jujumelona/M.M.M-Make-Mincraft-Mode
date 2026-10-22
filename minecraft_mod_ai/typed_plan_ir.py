@@ -549,6 +549,8 @@ class _Validator:
                 plan.get("event_bindings"),
                 signatures=self.signatures,
             )
+            from .typed_action_contract import action_bindings
+            action_bindings(normalized)
         return normalized
 
 

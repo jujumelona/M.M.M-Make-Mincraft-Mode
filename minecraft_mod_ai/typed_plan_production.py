@@ -907,6 +907,11 @@ def validate_typed_plan_generation_contract(
             minecraft_version=str(config.get("minecraft_version") or ""),
         )
     }
+    from .typed_action_contract import action_bindings
+    if action_bindings(raw_plan):
+        from .typed_action_java import render_action_dispatch_java
+        files[f"src/main/java/{package_name.replace('.', '/')}/AuthoredActions.java"] = (
+            render_action_dispatch_java(raw_plan, package=package_name))
 
     capability_ids = typed_plan_capability_ids(raw_plan)
     missing_capabilities = [
@@ -1081,6 +1086,12 @@ def generate_typed_plan_module(
         minecraft_version=str(config.get("minecraft_version") or ""),
     )
     files = {expected_path: source}
+    from .typed_action_contract import action_bindings
+    if action_bindings(raw_plan):
+        from .typed_action_java import render_action_dispatch_java
+        action_path = f"src/main/java/{package_name.replace('.', '/')}/AuthoredActions.java"
+        _assert_host_owned_or_absent(root, action_path, marker="// MMM:TYPED_ACTION_DISPATCH_OWNER")
+        files[action_path] = render_action_dispatch_java(raw_plan, package=package_name)
 
     capability_ids = typed_plan_capability_ids(raw_plan)
     if capability_ids:

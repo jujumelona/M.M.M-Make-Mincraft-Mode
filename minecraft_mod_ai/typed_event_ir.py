@@ -187,12 +187,19 @@ def validate_event_bindings(
         expected = EVENT_SIGNATURES.get(event)
         if expected is None:
             raise ValueError(f"{where}: unsupported event {event!r}")
+        action = None
+        if event == "command" and isinstance(raw.get("config"), Mapping) and "action" in raw["config"]:
+            from .typed_action_contract import validate_action_contract
+            action = validate_action_contract(raw["config"]["action"])
+            expected = (("object", *(row["type"] for row in action["inputs"])), "int")
 
         function = str(raw["function"])
         actual = signatures.get(function)
         if actual is None:
             raise ValueError(f"{where}: unknown function {function!r}")
         if actual != expected:
+            if action is not None:
+                raise ValueError("ACTION_FUNCTION_SIGNATURE_MISMATCH: " + function)
             raise ValueError(
                 f"{where}: function {function!r} has signature {actual!r}, "
                 f"expected {expected!r} for {event!r}"
@@ -214,7 +221,7 @@ def validate_event_bindings(
             raise ValueError(f"{where}.config: expected object")
         config = deepcopy(dict(config))
         if event == "command":
-            if set(config) - {"literal", "permission_level"}:
+            if set(config) - {"literal", "permission_level", "action"}:
                 raise ValueError(f"{where}.config: invalid command fields")
             literal = str(config.get("literal") or "")
             if not _COMMAND_LITERAL.fullmatch(literal):
@@ -225,6 +232,8 @@ def validate_event_bindings(
                     f"{where}.config.permission_level: expected integer 0-4"
                 )
             config["permission_level"] = permission
+            if action is not None:
+                config["action"] = action
         elif config:
             raise ValueError(f"{where}.config: event {event!r} takes no config")
 

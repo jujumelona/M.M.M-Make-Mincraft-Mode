@@ -281,6 +281,10 @@ class _Renderer:
             ]
         if event == "command":
             config = binding["config"]
+            if "action" in config:
+                from .typed_action_java import render_action_command_registration
+                return render_action_command_registration(
+                    binding, minecraft_version=self.minecraft_version, indent=indent)
             literal = _string_expr(str(config["literal"]))
             permission = int(config.get("permission_level", 0))
             if self.minecraft_version.startswith("26."):
