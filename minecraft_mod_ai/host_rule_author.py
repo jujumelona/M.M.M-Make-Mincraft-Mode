@@ -302,9 +302,11 @@ class RuleAuthor:
             usable = [row["id"] for row in self.p.menu()
                       if (expected is None or self.p.checker.assignable(row["type"], expected))
                       and (not require_grounded or self._runtime_grounded(row["id"]))]
-            operations = ["observe", "call", "field", "binary", "unary", "ternary",
+            operations = ["call", "field", "binary", "unary", "ternary",
                           "array_get", "array_length", "cast"]
-            if not require_grounded:
+            if require_grounded:
+                operations.insert(0, "observe")
+            else:
                 operations = ["literal", *operations[:2], "new", *operations[2:]]
                 if self.data_pages:
                     operations.append("data_value")
