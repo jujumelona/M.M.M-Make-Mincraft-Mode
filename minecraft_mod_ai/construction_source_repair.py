@@ -74,6 +74,24 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
         raise
 
 
+def repeated_invalid_java_implementation(first: str, second: str) -> bool:
+    """Detect a repeated rejected Java body, ignoring envelope-only whitespace.
+
+    This does not rewrite or normalize executable Java. Two attempts that
+    repeat exactly the same statements (modulo outer blank lines) provide no
+    new implementation and must never be reported as a repair.
+    """
+    try:
+        left, right = json.loads(first), json.loads(second)
+    except (TypeError, ValueError):
+        return first.strip() == second.strip()
+    if (isinstance(left, dict) and isinstance(right, dict)
+            and isinstance(left.get("implementation"), str)
+            and isinstance(right.get("implementation"), str)):
+        return left["implementation"].strip() == right["implementation"].strip()
+    return first.strip() == second.strip()
+
+
 def validate_generated_java_source(result, frame: Mapping, prefix: str, suffix: str) -> str:
     from .first_pass_java_declarations import validate_source_frame
     from .model_adapters.base import ModelConfigurationError
