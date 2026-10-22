@@ -142,6 +142,24 @@ class RuleProgram:
             generic = row.get("generic_return_type", "")
             if row["owner"] in self.state_owners:
                 self.read_states.add(row["name"][len("readState_"):])
+        elif op == "entity_presence":
+            # A reusable host lowering of a real generated Entity subtype's
+            # presence in a world-provided Iterable. This is not a generic
+            # model-authored expression or a guessed Minecraft API.
+            if set(attrs) != {"entity_owner"} or len(refs) != 1:
+                raise ValueError("RULE_ENTITY_PRESENCE_FIELDS")
+            entity = attrs["entity_owner"]
+            record = self.symbols.get(entity, {})
+            if (record.get("kind") != "CLASS"
+                    or record.get("provenance") != "materialized_prerequisite_declaration"
+                    or not self.checker.subtype(entity, "net.minecraft.world.entity.Entity")
+                    or self.kind(refs[0]) != "java.lang.Iterable"):
+                raise ValueError("RULE_ENTITY_PRESENCE_TYPE_UNVERIFIED")
+            kind = "boolean"
+            source = ("java.util.stream.StreamSupport.stream("
+                      "((java.lang.Iterable<?>)" + self.source(refs[0])
+                      + ").spliterator(), false).anyMatch("
+                      "__mmmEntity -> __mmmEntity instanceof " + entity + ")")
         elif op in {"binary", "unary", "array_get", "array_length", "cast", "ternary"}:
             required = {"binary": {"operator"}, "unary": {"operator"}, "cast": {"type_ref"}}.get(op, set())
             if set(attrs) != required:
