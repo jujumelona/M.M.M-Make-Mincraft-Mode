@@ -209,7 +209,13 @@ def inspected_prerequisite_symbols(declarations: list[dict]) -> dict:
             for header in declaration.get("members", ()):
                 if not isinstance(header, str):
                     continue
-                raw, root = _parse("class MmmHeader {\n" + header + "\n}")
+                try:
+                    raw, root = _parse("class MmmHeader {\n" + header + "\n}")
+                except (ValueError, TypeError):
+                    # Some legal signatures require source-level context
+                    # (generic type variables, nested owners, etc.).
+                    # Never invent a callable signature from a failed parse.
+                    continue
                 outer = next((node for node in root.named_children
                               if node.type == "class_declaration"), None)
                 if outer is None:
