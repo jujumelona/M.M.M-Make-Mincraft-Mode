@@ -6,6 +6,7 @@ import json
 
 from .construction_task import BehaviorRequirement, ConstructionTask, validate_task_graph
 from .fixed_template_generation import _validate_native_arguments
+from .construction_trigger_provenance import preserve_grounded_trigger
 
 
 _BEHAVIOR_SCHEMA = {"type": "object", "properties": {
@@ -76,10 +77,22 @@ def author_behavior_requirements(scope, router, *, checkpoint=None):
     result = []
     saved = scope.get("behavior_requirements")
     if saved is not None:
+        requirement_text = {
+            item["requirement_id"]: str(
+                item.get("source_span", {}).get("text") or item["statement"])
+            for item in scope.get("requirements", ())
+        }
         for row in saved:
             row = dict(row)
             for name in ("state_reads", "state_writes", "runtime_state_reads", "runtime_state_writes"):
                 row[name] = tuple(row.get(name, ()))
+            row["trigger"], diagnostic = preserve_grounded_trigger(
+                row.get("trigger", ""), source_quote=row["source_quote"],
+                source_text=requirement_text.get(row["requirement_id"], row["source_quote"]))
+            if diagnostic:
+                print("CONSTRUCTION_TRIGGER_PROVENANCE: " +
+                      json.dumps({"behavior_id": row["behavior_id"], **diagnostic},
+                                 ensure_ascii=False), flush=True)
             result.append(BehaviorRequirement(**row))
         if {row.requirement_id for row in result} != {
             r["requirement_id"] for r in scope.get("requirements", ())
@@ -167,9 +180,15 @@ def author_behavior_requirements(scope, router, *, checkpoint=None):
             anchored.append((left, right))
             prior.append({"intent": intent, "source_quote": quote,
                           "source_start": left, "source_end": right})
+            grounded_trigger, diagnostic = preserve_grounded_trigger(
+                row["trigger"], source_quote=quote, source_text=source_text)
+            if diagnostic:
+                print("CONSTRUCTION_TRIGGER_PROVENANCE: " +
+                      json.dumps({"requirement_id": parent, **diagnostic},
+                                 ensure_ascii=False), flush=True)
             result.append(BehaviorRequirement(
                 _id(parent, intent, left, right), parent, intent, quote,
-                row["trigger"], row["effects"], tuple(row["state_reads"]),
+                grounded_trigger, row["effects"], tuple(row["state_reads"]),
                 tuple(row["state_writes"]),
             ))
         else:
