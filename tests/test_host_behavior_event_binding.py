@@ -117,10 +117,12 @@ def test_unbound_owner_is_search_uncertainty_not_absence_of_all_hooks():
 
     router = DecliningOwner()
     usable = _event("test.TickEvents", "END_LEVEL_TICK")
+    lifecycle = _event("test.LifecycleEvents", "AFTER_SAVE")
+    lifecycle["parameters"] = []
     result = select_behavior_callback(
         router, {"behavior_id": "arbitrary-world-trigger",
                  "trigger": "World condition reaches threshold"},
-        [_event("test.LifecycleEvents", "AFTER_SAVE"), usable],
+        [lifecycle, usable],
     )
     assert result is usable
     assert router.calls == [
