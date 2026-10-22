@@ -106,6 +106,43 @@ def build_source_work_graph(
     }
 
 
+def bind_selected_hooks(
+    graph: Mapping[str, Any], selected: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Record inspected hook selection, without certifying runtime behavior.
+
+    An inspected Fabric callback was CHOSEN, not yet proven to produce the
+    original observation; dependent work must remain pending.
+    """
+    from copy import deepcopy
+
+    amended = deepcopy(dict(graph))
+    registered = set()
+    for row in amended.get("tasks", ()):
+        if row.get("kind") != "occurrence_hook":
+            continue
+        owner = row.get("behavior_id")
+        if owner not in selected:
+            continue
+        event = selected[owner]
+        selected_id = event.get("event_id")
+        if not isinstance(selected_id, str) or not selected_id:
+            raise ValueError("FEATURE_WORK_SELECTED_EVENT_ID_REQUIRED")
+        offered = set(row.get("evidence", {}).get("available_inspected_event_ids") or ())
+        if selected_id not in offered:
+            raise ValueError("FEATURE_WORK_SELECTED_HOOK_NOT_INSPECTED: " + selected_id)
+        row["evidence"]["event_binding"] = selected_id
+        if row.get("status") != "verified":
+            row["status"] = "source_selected"
+        registered.add(owner)
+    if set(selected) - registered:
+        raise ValueError("FEATURE_WORK_SELECTED_HOOK_OWNER_UNKNOWN")
+    amended["unverified_obligations"] = sum(
+        row.get("status") != "verified" for row in amended.get("tasks", ()))
+    amended["completion_verified"] = False
+    return amended
+
+
 def member_source_work(graph: Mapping[str, Any], behavior_id: str, *, member_role: str) -> dict[str, Any]:
     """Provide just this member's hook/producer/effect ownership chain."""
     rows = [dict(row) for row in graph.get("tasks", ())
