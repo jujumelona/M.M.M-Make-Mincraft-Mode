@@ -153,11 +153,49 @@ class RuleAuthor:
                                  expected=kind, depth=depth))
         return refs
 
+    def _runtime_grounded(self, key):
+        """Require a checked runtime observation in the completed trigger DAG.
+
+        Constants and arbitrary planned data cannot be used to certify a
+        gameplay trigger. A verified instance API read, a typed state read, or
+        a primitive callback input grounds an expression; derived arithmetic
+        inherits that provenance, even through a comparison.
+        """
+        seen = set()
+
+        def walk(ref):
+            if ref in seen:
+                return False
+            seen.add(ref)
+            node = self.p.checker.nodes[ref]
+            operation = node["op"]
+            if operation == "parameter":
+                return self.p.kind(ref) in PRIMITIVES
+            if operation in {"call", "field", "array_get"}:
+                signature = node.get("attributes", {}).get("symbol_ref")
+                if signature is not None:
+                    api = self.p.checker.symbol(signature)
+                    if api.get("kind") in {"METHOD", "FIELD"}:
+                        static = bool(api.get("static") or int(api.get("access", 0)) & 8)
+                        if not static or api.get("name", "").startswith("readState_"):
+                            return True
+                if operation == "array_get":
+                    return any(walk(child) for child in node.get("input_refs", ()))
+            return any(walk(child) for child in node.get("input_refs", ()))
+
+        return walk(key)
+
     def _literal(self, purpose, expected):
-        options = list(dict.fromkeys([*_TYPES,
-            *[row["type"] for row in self.p.menu() if row["type"] not in PRIMITIVES]]))
-        if expected and expected != "void":
-            options = [expected, *[value for value in options if value != expected]]
+        # A literal does not create or observe a runtime object. Offering the
+        # current ServerLevel/Player input type as a literal produced 48
+        # ServerLevel=null responses for a required boolean predicate.
+        # A specified type is a hard constraint, not merely the first option.
+        options = list(_TYPES) if expected is None else [
+            kind for kind in dict.fromkeys([expected, *_TYPES])
+            if self.p.checker.assignable(kind, expected)
+        ]
+        if not options:
+            raise ValueError("RULE_LITERAL_TYPE_UNAVAILABLE: " + str(expected))
         kind = self.ask("rule_literal_type", purpose,
             {"type": {"type": "string", "enum": options}})["type"]
         bits = {"byte": 8, "short": 16, "int": 32, "long": 64}.get(kind)
@@ -170,17 +208,20 @@ class RuleAuthor:
         literal = self.ask("rule_literal", purpose, {"value": schema})["value"]
         return self.p.value("literal", type=kind, value=literal, purpose=purpose)
 
-    def value(self, purpose, *, expected=None, depth=0):
+    def value(self, purpose, *, expected=None, depth=0, require_grounded=False):
         if depth > 8:
             raise ValueError("RULE_VALUE_DEPTH: " + purpose)
         diagnostic = ""
         for _step in range(48):
             usable = [row["id"] for row in self.p.menu()
-                      if expected is None or self.p.checker.assignable(row["type"], expected)]
-            operations = ["literal", "call", "field", "new", "binary", "unary",
-                          "ternary", "array_get", "array_length", "cast"]
-            if self.data_pages:
-                operations.append("data_value")
+                      if (expected is None or self.p.checker.assignable(row["type"], expected))
+                      and (not require_grounded or self._runtime_grounded(row["id"]))]
+            operations = ["call", "field", "binary", "unary", "ternary",
+                          "array_get", "array_length", "cast"]
+            if not require_grounded:
+                operations = ["literal", *operations[:2], "new", *operations[2:]]
+                if self.data_pages:
+                    operations.append("data_value")
             if usable:
                 operations.insert(0, "use")
             op = self.ask("rule_value_operation", purpose,
