@@ -24,14 +24,15 @@ def test_producer_hook_effect_registration_compile_playtest_is_a_dag():
     )
     nodes = graph["tasks"]
     assert [row["kind"] for row in nodes] == [
-        "custom_event_source", "occurrence_hook", "runtime_producer",
+        "custom_event_source", "runtime_producer", "occurrence_hook",
         "gameplay_effect", "event_registration", "target_compile", "runtime_playtest",
     ]
     assert nodes[0]["status"] == "pending"
     assert nodes[0]["evidence"]["reasons"] == ["occurrence_hook_not_owned"]
     assert nodes[1]["depends_on"] == [nodes[0]["task_id"]]
-    assert nodes[2]["depends_on"] == [nodes[1]["task_id"]]
-    assert nodes[3]["depends_on"] == [nodes[1]["task_id"], nodes[2]["task_id"]]
+    assert nodes[1]["evidence"]["source_order"] == "before_occurrence_hook"
+    assert nodes[2]["depends_on"] == [nodes[0]["task_id"], nodes[1]["task_id"]]
+    assert nodes[3]["depends_on"] == [nodes[2]["task_id"], nodes[1]["task_id"]]
     assert nodes[-1]["depends_on"] == [nodes[-2]["task_id"]]
     assert graph["completion_verified"] is False
     effect = member_source_work(graph, "b1", member_role="implement_callback_effects")
@@ -118,4 +119,23 @@ def test_missing_inspected_callback_creates_source_owner_before_hook():
     assert registration["depends_on"] == [hook["task_id"], effect["task_id"]]
     assert compilation["depends_on"] == [registration["task_id"]]
     assert playtest["depends_on"] == [compilation["task_id"]]
+    assert graph["completion_verified"] is False
+
+
+def test_missing_runtime_observation_precedes_real_callback_even_if_fabric_has_events():
+    graph = build_source_work_graph(
+        [{"behavior_id": "trade", "trigger": "Player confirms a transaction",
+          "runtime_state_reads": ["selected_offer"]}],
+        producer_obligations=[{"behavior_id": "trade",
+                               "name": "selected_offer",
+                               "reason": "no_inspected_semantic_source"}],
+        inspected_hooks=[{"event_id": "FabricOwner#END"}],
+    )
+    producer, hook, effect, registration, compilation, playtest = graph["tasks"]
+    assert producer["kind"] == "runtime_producer"
+    assert producer["depends_on"] == []
+    assert hook["depends_on"] == [producer["task_id"]]
+    assert hook["status"] == "pending"
+    assert effect["depends_on"] == [hook["task_id"], producer["task_id"]]
+    assert all(task["status"] != "verified" for task in graph["tasks"])
     assert graph["completion_verified"] is False
