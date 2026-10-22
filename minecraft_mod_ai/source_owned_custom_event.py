@@ -83,7 +83,7 @@ def _verified_method(symbols: Mapping, site_ref: str) -> dict:
 
 def plan_verified_custom_event(
     *, symbols: Mapping, source_site_ref: str, behavior_id: str,
-    package: str, mod_id: str, at: str = "HEAD",
+    package: str, mod_id: str, at: str = "HEAD", side: str = "COMMON",
 ) -> dict:
     """Return exact source files and an ABI; this function does not write."""
     if not behavior_id or not isinstance(behavior_id, str):
@@ -94,6 +94,8 @@ def plan_verified_custom_event(
         raise ValueError("SOURCE_SITE_MOD_ID_INVALID")
     if at not in {"HEAD", "RETURN"}:
         raise ValueError("SOURCE_SITE_INJECTION_POINT_INVALID")
+    if side not in {"COMMON", "CLIENT"}:
+        raise ValueError("SOURCE_SITE_SIDE_INVALID")
     site = _verified_method(symbols, source_site_ref)
     digest = hashlib.sha256(
         (behavior_id + "\0" + source_site_ref + "\0" + at).encode()
@@ -151,12 +153,14 @@ public abstract class {mixin_name} {{
     config = {
         "required": True, "package": package + ".mixin",
         "compatibilityLevel": "JAVA_21",
-        "mixins": [mixin_name], "injectors": {"defaultRequire": 1},
+        ("client" if side == "CLIENT" else "mixins"): [mixin_name],
+        "injectors": {"defaultRequire": 1},
     }
     package_path = package.replace(".", "/")
+    source_root = "src/client/java" if side == "CLIENT" else "src/main/java"
     files = {
-        f"src/main/java/{package_path}/{event_name}.java": source,
-        f"src/main/java/{package_path}/mixin/{mixin_name}.java": injection,
+        f"{source_root}/{package_path}/{event_name}.java": source,
+        f"{source_root}/{package_path}/mixin/{mixin_name}.java": injection,
         f"src/main/resources/{mixin_file}":
             json.dumps(config, indent=2, ensure_ascii=False) + "\n",
     }
@@ -180,7 +184,7 @@ public abstract class {mixin_name} {{
 
 def materialize_verified_custom_event(
     *, project_root: str | Path, symbols: Mapping, source_site_ref: str,
-    behavior_id: str, package: str, at: str = "HEAD",
+    behavior_id: str, package: str, at: str = "HEAD", side: str = "COMMON",
 ) -> dict:
     """Install event, Mixin and manifest atomically per process, idempotently.
 
@@ -204,7 +208,8 @@ def materialize_verified_custom_event(
             raise ValueError("SOURCE_SITE_FABRIC_MIXINS_INVALID")
         result = plan_verified_custom_event(
             symbols=symbols, source_site_ref=source_site_ref,
-            behavior_id=behavior_id, package=package, mod_id=metadata["id"], at=at,
+            behavior_id=behavior_id, package=package, mod_id=metadata["id"],
+            at=at, side=side,
         )
         for relative, contents in result["files"].items():
             path = (root / relative).resolve()
