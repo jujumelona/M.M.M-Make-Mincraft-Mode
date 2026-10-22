@@ -210,31 +210,86 @@ def runtime_source_expression_proof(program, root, semantic_name):
 
 
 
-def unavailable_semantic_runtime_sources(names, symbols):
-    """Fast capability preflight for observations the exact-getter path misses.
+def semantic_runtime_candidates(names, symbols, input_types):
+    """Discover *reachable* semantic observations from the inspected event ABI.
 
-    This is only a necessary condition. It prevents burning a long sequence
-    of model decisions on an observation for which there is no inspected JVM
-    symbol even *capable* of anchoring the required semantic concept.
+    A random method anywhere in the 872k-symbol classpath is not a producer.
+    Only public readable members of callback input receivers and the objects
+    returned by their inspected getters may be offered. Planning labels are
+    lexical search hints, never accepted as semantic certification.
     """
-    available = set()
-    requested = {}
-    for name in names:
-        requested[name] = set(_canonical_words(name)) - {
-            "state", "runtime", "value", "current", "actual", "has", "get",
-            "is", "the", "of", "a", "an", "and",
-        }
-    for row in symbols.values():
+    wanted = {name: set(_canonical_words(name)) - {
+        "state", "runtime", "value", "current", "actual", "has", "get",
+        "is", "the", "of", "a", "an", "and",
+    } for name in dict.fromkeys(names)}
+    candidates = {name: [] for name in wanted}
+    origins = set(input_types)
+    visited, pending = set(), list(origins)
+
+    def parents(owner):
+        record = symbols.get(owner, {})
+        return [parent for parent in (
+            record.get("superclass"), *(record.get("interfaces") or ()))
+            if isinstance(parent, str)]
+
+    while pending:
+        owner = pending.pop()
+        if owner in visited:
+            continue
+        visited.add(owner)
+        pending.extend(parents(owner))
+    # A public observation getter may return a typed inventory or holder
+    # which supplies a second step in the observation chain. Keep the
+    # derivation conservative, bounded, and inspectable.
+    receiver_owners = set(visited)
+    for key, row in symbols.items():
+        if not isinstance(row, dict) or row.get("kind") != "METHOD":
+            continue
+        if row.get("owner") not in visited or not int(row.get("access", 0)) & 1:
+            continue
+        if row.get("static") or int(row.get("access", 0)) & 8:
+            continue
+        if row.get("parameters") or row.get("throws"):
+            continue
+        if not str(row.get("name") or "").startswith((
+            "get", "is", "has", "can", "read", "peek"
+        )):
+            continue
+        output = row.get("return_type")
+        if isinstance(output, str) and output in symbols and output not in receiver_owners:
+            receiver_owners.add(output)
+            receiver_owners.update(parents(output))
+
+    for key, row in symbols.items():
         if not isinstance(row, dict) or row.get("kind") not in {"METHOD", "FIELD"}:
+            continue
+        if row.get("owner") not in receiver_owners:
             continue
         if not int(row.get("access", 0)) & 1:
             continue
-        if row.get("return_type") in {"void", None}:
+        if row.get("static") or int(row.get("access", 0)) & 8:
             continue
-        words = set(_canonical_words(row.get("name", "")))
-        for name, wanted in requested.items():
-            if name not in available and wanted and wanted & words:
-                available.add(name)
-        if len(available) == len(requested):
-            break
-    return [name for name in names if name not in available]
+        if row.get("return_type") in {None, "void"} or row.get("throws"):
+            continue
+        if row.get("kind") == "METHOD":
+            if row.get("parameters"):
+                continue
+            if not str(row.get("name") or "").startswith((
+                "get", "is", "has", "can", "read", "peek"
+            )):
+                continue
+        member_tokens = set(_canonical_words(row.get("name") or ""))
+        for name, tokens in wanted.items():
+            if tokens and tokens & member_tokens:
+                candidates[name].append(str(key))
+    return {name: sorted(refs) for name, refs in candidates.items()}
+
+
+def unavailable_semantic_runtime_sources(names, symbols, input_types=()):
+    """Report missing live observers before spending model tokens.
+
+    Without callback input types, nothing has proven reachability. Never
+    infer authority from a globally matched JVM method name.
+    """
+    capabilities = semantic_runtime_candidates(names, symbols, input_types)
+    return [name for name in names if not capabilities[name]]
