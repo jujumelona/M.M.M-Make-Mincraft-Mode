@@ -65,3 +65,25 @@ def test_comment_does_not_satisfy_registration():
     with pytest.raises(ValueError, match="INSPECTED_HOOK_NOT_REGISTERED"):
         validate_registered_event_sources(
             source, [{"behavior_id": "generic"}], _events())
+
+
+def test_separate_direct_handler_call_cannot_mask_empty_registered_listener():
+    """A registrar cannot satisfy coverage by calling its handler once on init."""
+    suffix = hashlib.sha256(b"generic").hexdigest()[:20]
+    src = _source(handler=False)
+    src = src.replace(
+        f"private void registerBehavior{suffix}() {{ ",
+        f"private void registerBehavior{suffix}() {{ this.handleBehavior{suffix}(null); ",
+    )
+    with pytest.raises(ValueError, match="INSPECTED_HOOK_NOT_REGISTERED"):
+        validate_registered_event_sources(
+            src, [{"behavior_id": "generic"}], _events())
+
+
+def test_verified_lambda_forwarding_to_exact_handler_is_supported():
+    suffix = hashlib.sha256(b"generic").hexdigest()[:20]
+    src = _source().replace(
+        f"register(this::handleBehavior{suffix})",
+        f"register(s -> this.handleBehavior{suffix}(s))",
+    )
+    validate_registered_event_sources(src, [{"behavior_id": "generic"}], _events())
