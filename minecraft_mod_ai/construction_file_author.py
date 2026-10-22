@@ -355,8 +355,15 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
             context["symbols"], side=str(spec.get("side") or "COMMON"))
         checked_behaviors = json.loads(
             spec.get("bindings", {}).get("construction_behaviors_json") or "[]")
+        from .source_owned_custom_event import read_verified_custom_event_receipts
+        registered_custom = read_verified_custom_event_receipts(
+            project_root=context["project_root"], symbols=context["symbols"],
+            behavior_ids=[row["behavior_id"] for row in checked_behaviors],
+            package=package, side=str(spec.get("side") or "COMMON").upper(),
+        )
         validate_registered_event_sources(
-            source, checked_behaviors, checked_events)
+            source, checked_behaviors, checked_events,
+            materialized_events=registered_custom)
     verify_source = context.get("verify_source")
     if verify_source:
         verify_source(source, spec["target_path"])
