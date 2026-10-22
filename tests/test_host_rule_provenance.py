@@ -280,3 +280,54 @@ def test_static_or_newly_constructed_object_is_not_live_runtime_provenance():
     fake_world = p.value("new", [], symbol_ref="new")
     fake_inventory = p.value("call", [fake_world], symbol_ref="inventory")
     assert not runtime_source_expression_proof(p, fake_inventory, "Weapon inventory")
+
+
+
+def test_semantic_runtime_preflight_requires_event_reachability():
+    from minecraft_mod_ai.host_rule_provenance import (
+        semantic_runtime_candidates, unavailable_semantic_runtime_sources)
+
+    world = "example.World"
+    other = "example.UnrelatedGUI"
+    symbols = {
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        other: {"kind": "CLASS", "owner": other, "access": 1},
+        "world_inventory": {"kind": "METHOD", "owner": world, "access": 1,
+                            "name": "getInventory", "parameters": [],
+                            "return_type": "int"},
+        "unrelated_section": {"kind": "METHOD", "owner": other, "access": 1,
+                              "name": "getSelectedSection", "parameters": [],
+                              "return_type": "java.lang.String"},
+        "static_alien": {"kind": "METHOD", "owner": other, "access": 9,
+                         "static": True, "name": "isAlienPresent",
+                         "parameters": [], "return_type": "boolean"},
+    }
+    names = ["Weapon inventory", "selected_section", "Alien presence"]
+    candidates = semantic_runtime_candidates(names, symbols, [world])
+    assert candidates["Weapon inventory"] == ["world_inventory"]
+    assert not candidates["selected_section"]
+    assert not candidates["Alien presence"]
+    assert unavailable_semantic_runtime_sources(names, symbols, [world]) == [
+        "selected_section", "Alien presence"
+    ]
+
+
+def test_rule_observation_menu_never_offers_unrelated_method_for_bound_state():
+    from minecraft_mod_ai.host_rule_author import RuleAuthor
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+
+    world, other = "example.World", "example.Unrelated"
+    symbols = {
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        other: {"kind": "CLASS", "owner": other, "access": 1},
+        "inventory": {"kind": "METHOD", "owner": world, "access": 1,
+                      "name": "getInventory", "parameters": [], "return_type": "int"},
+        "unrelated": {"kind": "METHOD", "owner": world, "access": 1,
+                      "name": "isPvpAllowed", "parameters": [], "return_type": "boolean"},
+    }
+    p = RuleProgram(symbols, [{"type": world, "name": "arg0"}],
+        {"behavior_id": "inventory", "state_reads": [], "state_writes": [],
+         "required_runtime_observation_name": "Weapon inventory"},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    choices = RuleAuthor(None, p)._checked_observation_candidates("Observe actual inventory")
+    assert [item["symbol_ref"] for item in choices] == ["inventory"]
