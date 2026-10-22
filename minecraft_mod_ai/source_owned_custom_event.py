@@ -65,7 +65,13 @@ def _verified_method(symbols: Mapping, site_ref: str) -> dict:
         raise ValueError("SOURCE_SITE_NOT_INJECTABLE")
     parent = symbols.get(owner)
     if not isinstance(parent, Mapping) or parent.get("kind") != "CLASS":
-        # An uninspected source owner cannot be manufactured from a string.
+        # Bytecode symbol tables may key classes by an opaque symbol ID.
+        # Require their actual inspected CLASS entry, not a string guess.
+        parent = next((value for value in symbols.values()
+                       if isinstance(value, Mapping)
+                       and value.get("kind") == "CLASS"
+                       and value.get("owner") == owner), None)
+    if parent is None:
         raise ValueError("SOURCE_SITE_OWNER_NOT_INSPECTED")
     args = list(parameter_types(row))
     ret = str(row.get("return_type") or "")
