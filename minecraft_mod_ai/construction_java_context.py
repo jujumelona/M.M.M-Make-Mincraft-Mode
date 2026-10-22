@@ -122,6 +122,87 @@ def _relevant_current_api(evidence: Mapping[str, Any], owners: set[str],
         ],
     }
 
+def _member_state_names(current: Mapping[str, Any]) -> set[str]:
+    """State names in the immutable behavior contract, not the full world model."""
+    behavior = current.get("assigned_behavior") or current.get("host_behavior_contract") or {}
+    if not isinstance(behavior, Mapping):
+        return set()
+    return {str(name) for key in ("state_reads", "state_writes")
+            for name in (behavior.get(key) or ()) if isinstance(name, str) and name}
+
+
+def _member_state_access(records: Any, names: set[str]) -> list[dict]:
+    """Retain exact overload signatures for only this behavior's state API.
+
+    This is a prompt projection. The original full frame remains in the host
+    and is used by parser, state provenance and target compilation.
+    """
+    if not isinstance(records, list):
+        return []
+    allowed = {"readState_" + name for name in names}
+    allowed |= {"writeState_" + name for name in names}
+    result = []
+    for row in records:
+        if not isinstance(row, Mapping):
+            continue
+        methods = [dict(method) for method in row.get("methods", ())
+                   if isinstance(method, Mapping) and method.get("name") in allowed]
+        if methods:
+            result.append({"owner": row["owner"], "methods": methods})
+    return result
+
+
+def _member_prerequisites(records: Any, names: set[str],
+                          state_owners: set[str]) -> Any:
+    """Project large generated state owners without dropping other source ABIs.
+
+    Keep all non-state source, plus the state owner's general transaction
+    methods and the exact read/write accessors needed by the assigned behavior.
+    The original source hashes/paths are still visible to the host verifier.
+    """
+    if not isinstance(records, list):
+        return records
+    prefixes = tuple(("readState_" + n, "writeState_" + n) for n in sorted(names))
+    allowed = {name for pair in prefixes for name in pair}
+    import re
+    projected = []
+    for api in records:
+        if not isinstance(api, Mapping):
+            projected.append(api)
+            continue
+        entry = dict(api)
+        types = []
+        for declared in api.get("types", ()):
+            if not isinstance(declared, Mapping):
+                types.append(declared)
+                continue
+            kind = dict(declared)
+            if str(kind.get("owner") or "") in state_owners:
+                def relevant(header):
+                    found = re.search(r"\\b(?:readState_|writeState_)[A-Za-z0-9_$]+\\s*\\(", str(header))
+                    if not found:
+                        return True
+                    member = re.search(r"(readState_|writeState_)[A-Za-z0-9_$]+", found.group())
+                    return bool(member and member.group() in allowed)
+                kind["members"] = [h for h in declared.get("members", ()) if relevant(h)]
+            types.append(kind)
+        entry["types"] = types
+        projected.append(entry)
+    return projected
+
+
+def _member_work_order_scope(value: Any, names: set[str]) -> Any:
+    """Do not send names of hundreds of unrelated persistent variables."""
+    if not isinstance(value, Mapping):
+        return value
+    projected = dict(value)
+    for key in ("declared_readable", "declared_writable",
+                "undeclared_plan_reads", "undeclared_plan_writes"):
+        if isinstance(projected.get(key), list):
+            projected[key] = [name for name in projected[key] if name in names]
+    return projected
+
+
 def scoped_java_member_messages(
     messages: Sequence[Mapping[str, Any]], frame: Mapping[str, Any],
 ) -> tuple[Mapping[str, str], ...]:
@@ -155,6 +236,9 @@ def scoped_java_member_messages(
         return tuple(dict(m) for m in messages)
 
     task = {key: current[key] for key in _CURRENT_MEMBER_FIELDS if key in current}
+    names = _member_state_names(current)
+    task["host_state_work_order_scope"] = _member_work_order_scope(
+        task.get("host_state_work_order_scope"), names)
     callback_api, verified_callback_types = _callback_type_api(current)
     if verified_callback_types:
         task["callback_input_api"] = callback_api
@@ -165,8 +249,10 @@ def scoped_java_member_messages(
         "prefix": frame.get("prefix"),
         "suffix": frame.get("suffix"),
     }
-    if "host_state_access" in frame:
-        task["host_state_access"] = frame["host_state_access"]
+    state_contracts = frame.get("host_state_access") or ()
+    state_owners = {str(row["owner"]) for row in state_contracts
+                    if isinstance(row, Mapping) and row.get("owner")}
+    task["host_state_access"] = _member_state_access(state_contracts, names)
     if inspected:
         # Keep callable evidence rather than project-wide source inventories.
         task["inspected_target_api"] = _relevant_current_api(
@@ -176,7 +262,8 @@ def scoped_java_member_messages(
         # Generated content (registries, item constants, helper classes) is
         # absent from the target classpath inventory. Its actual declarations
         # must coexist with inspected Minecraft/Fabric API evidence.
-        task["materialized_prerequisite_api"] = prerequisite
+        task["materialized_prerequisite_api"] = _member_prerequisites(
+            prerequisite, names, state_owners)
     repair_api = current.get("api_evidence")
     if isinstance(repair_api, Mapping):
         # Compiler diagnostics sometimes return very large search result sets
@@ -195,15 +282,17 @@ def scoped_java_member_messages(
                 "class_members": projected["class_members"],
             }
             if "materialized_prerequisite_api" in repair_api:
-                task["api_evidence"]["materialized_prerequisite_api"] = repair_api[
-                    "materialized_prerequisite_api"]
+                task["api_evidence"]["materialized_prerequisite_api"] = _member_prerequisites(
+                    repair_api["materialized_prerequisite_api"], names, state_owners)
         else:
             task["api_evidence"] = {
                 key: repair_api[key] for key in (
                     "selected_target_api", "typed_input_producers", "class_members",
-                    "materialized_prerequisite_api",
                 ) if key in repair_api
             }
+            if "materialized_prerequisite_api" in repair_api:
+                task["api_evidence"]["materialized_prerequisite_api"] = _member_prerequisites(
+                    repair_api["materialized_prerequisite_api"], names, state_owners)
     return (
         {"role": "system", "content": (
             "Complete exactly the current Java member. Preserve the assigned "
