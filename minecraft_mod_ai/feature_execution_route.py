@@ -54,9 +54,9 @@ def select_feature_execution_route(
             obligations.append({"behavior_id": behavior_id,
                                 "reason": "explicit_event_cannot_supply_runtime_reads",
                                 "required_action": "implement a producer on the actual event owner"})
-        elif not reads and not explicit:
-            # No state observation to anchor this rule and no authorized native
-            # trigger. Model selection cannot substitute for an executable hook.
+        elif not explicit:
+            # An observed getter is not proof of which Fabric occurrence
+            # owns this behavior. Avoid an unbounded native-hook pager.
             obligations.append({"behavior_id": behavior_id,
                                 "reason": "occurrence_hook_not_owned",
                                 "required_action": "bind a checked event or implement an owned hook"})
