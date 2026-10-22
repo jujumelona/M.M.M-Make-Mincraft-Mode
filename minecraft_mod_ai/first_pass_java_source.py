@@ -425,19 +425,18 @@ def compose_first_pass_java(
         event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
         if symbol_index and not event_candidates:
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
-        by_event = {event["event_id"]: event for event in event_candidates}
         if event_candidates:
             from .host_behavior_event_binding import select_behavior_callback
             for behavior in behaviors:
                 explicit = str(behavior.get("event_binding") or "")
                 if source_owned:
-                    # A checked explicit hook can be used even if another
-                    # behavior still needs new runtime observation source.
-                    # Do not send verified ABIs through a 9B signature writer.
-                    if explicit:
-                        if explicit not in by_event:
-                            raise ValueError("JAVA_SOURCE_OWNED_HOOK_NOT_INSPECTED: " + explicit)
-                        bound_events[str(behavior["behavior_id"])] = by_event[explicit]
+                    # Split the unknown runtime observation into a small
+                    # independent hook choice before Java authoring. The
+                    # model cannot invent an event ID, and the host owns
+                    # every selected listener signature and registration.
+                    from .source_owned_hook import choose_source_hook
+                    bound_events[str(behavior["behavior_id"])] = choose_source_hook(
+                        router, behavior, event_candidates)
                 else:
                     bound_events[str(behavior["behavior_id"])] = select_behavior_callback(
                         router, behavior, event_candidates)
