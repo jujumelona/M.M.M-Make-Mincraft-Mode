@@ -167,7 +167,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     from .host_rule_feature import compose_rule_feature
                     source = compose_rule_feature(
                         router, effective_spec, context, package=package, name=name,
-                        behaviors=behavior_rows, state_access=state_access)
+                        behaviors=behavior_rows, state_access=state_access,
+                        prerequisite_apis=prerequisite_api)
                 else:
                     source = verified_entity_type_source(
                         effective_spec, contract, prompt["inspected_target_api"],
