@@ -240,7 +240,10 @@ def scoped_java_member_messages(
     # supporting member without one must not silently lose its permitted API.
     bounded_state = isinstance(current.get("assigned_behavior"), Mapping)
     names = _member_state_names(current)
-    if bounded_state:
+    # A behavior may own a source observation even when its canonical state
+    # read/write lists are empty. An empty allowlist is NOT proof that the
+    # upstream work order's missing-source diagnostics are irrelevant.
+    if bounded_state and names:
         task["host_state_work_order_scope"] = _member_work_order_scope(
             task.get("host_state_work_order_scope"), names)
     callback_api, verified_callback_types = _callback_type_api(current)
@@ -257,7 +260,7 @@ def scoped_java_member_messages(
     state_owners = {str(row["owner"]) for row in state_contracts
                     if isinstance(row, Mapping) and row.get("owner")}
     task["host_state_access"] = (_member_state_access(state_contracts, names)
-                                 if bounded_state else list(state_contracts))
+                                 if bounded_state and names else list(state_contracts))
     if inspected:
         # Keep callable evidence rather than project-wide source inventories.
         task["inspected_target_api"] = _relevant_current_api(
@@ -269,7 +272,7 @@ def scoped_java_member_messages(
         # must coexist with inspected Minecraft/Fabric API evidence.
         task["materialized_prerequisite_api"] = (
             _member_prerequisites(prerequisite, names, state_owners)
-            if bounded_state else prerequisite)
+            if bounded_state and names else prerequisite)
     repair_api = current.get("api_evidence")
     if isinstance(repair_api, Mapping):
         # Compiler diagnostics sometimes return very large search result sets
@@ -290,7 +293,7 @@ def scoped_java_member_messages(
             if "materialized_prerequisite_api" in repair_api:
                 task["api_evidence"]["materialized_prerequisite_api"] = (_member_prerequisites(
                     repair_api["materialized_prerequisite_api"], names, state_owners)
-                    if bounded_state else repair_api["materialized_prerequisite_api"])
+                    if bounded_state and names else repair_api["materialized_prerequisite_api"])
         else:
             task["api_evidence"] = {
                 key: repair_api[key] for key in (
@@ -300,7 +303,7 @@ def scoped_java_member_messages(
             if "materialized_prerequisite_api" in repair_api:
                 task["api_evidence"]["materialized_prerequisite_api"] = (_member_prerequisites(
                     repair_api["materialized_prerequisite_api"], names, state_owners)
-                    if bounded_state else repair_api["materialized_prerequisite_api"])
+                    if bounded_state and names else repair_api["materialized_prerequisite_api"])
     return (
         {"role": "system", "content": (
             "Complete exactly the current Java member. Preserve the assigned "
@@ -341,7 +344,14 @@ def ensure_live_java_source_capacity(adapter: Any, config: Any, request: Any,
 
     before = counter(request)
     scoped = scoped_java_member_messages(original_messages, source_frame)
-    if scoped != tuple(original_messages):
+    if scoped == tuple(original_messages):
+        required = max(512, min(2048, int(before.context_tokens) // 16))
+        if before.remaining_tokens < required:
+            raise ModelConfigurationError(
+                "CONSTRUCTION_JAVA_CONTEXT_NOT_SCOPABLE: no current member "
+                f"contract; input_tokens={before.input_tokens} "
+                f"n_ctx={before.context_tokens}")
+    else:
         request = replace(request, messages=fit_messages_to_context(
             scoped, config=config, tools=()))
     accounting = counter(request)
