@@ -73,20 +73,31 @@ def test_semantic_world_label_is_not_java_producer():
 
 
 def test_checked_source_id_requires_existing_readable_java_signature():
-    bindings = {"time": {"binding": "world_state",
-                         "verified_symbol_ref": "clock",
-                         "semantic_status": "host_verified_observer"}}
-    symbols = {"clock": {"kind": "METHOD", "owner": "example.World",
-                         "name": "getGameTime", "return_type": "long",
+    bindings = {"world_time": {"binding": "world_state",
+                        "verified_symbol_ref": "clock",
+                        "semantic_status": "host_verified_observer"}}
+    symbols = {"example.World": {"kind": "CLASS", "owner": "example.World", "access": 1},
+               "clock": {"kind": "METHOD", "owner": "example.World",
+                         "name": "getWorldTime", "return_type": "long",
                          "parameters": [], "access": 1}}
-    assert validate_runtime_read_producers({
-        "behavior_id": "time", "runtime_state_reads": ["time"],
-    }, bindings, symbols) == {"time": "clock"}
+    expected = {"behavior_id": "time", "runtime_state_reads": ["world_time"]}
+    assert validate_runtime_read_producers(
+        expected, bindings, symbols, input_types=["example.World"]
+    ) == {"world_time": "clock"}
     for row in ({}, {"clock": {**symbols["clock"], "return_type": "void"}},
                 {"clock": {**symbols["clock"], "parameters": ["int"]}}):
         with pytest.raises(RuleMissingRuntimeProducer):
-            validate_runtime_read_producers({"behavior_id": "time",
-                "runtime_state_reads": ["time"]}, bindings, row)
+            validate_runtime_read_producers(
+                expected, bindings, {**symbols, **row}, input_types=["example.World"])
+
+    # A valid but semantically unrelated symbol cannot be made authoritative
+    # by inserting 'host_verified_observer' into a planner-controlled record.
+    malicious = {"world_time": {**bindings["world_time"],
+                 "verified_symbol_ref": "pvp"}}
+    with pytest.raises(RuleMissingRuntimeProducer):
+        validate_runtime_read_producers(
+            expected, malicious, {**symbols, "pvp": {**symbols["clock"],
+                "name": "isPvpAllowed"}}, input_types=["example.World"])
 
 
 def test_unrelated_world_boolean_cannot_cover_verified_observation():
