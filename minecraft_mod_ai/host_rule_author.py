@@ -198,9 +198,19 @@ class RuleAuthor:
                     for node in self.p.checker.nodes.values()
                     if node["op"] in {"call", "field"}}
         required = set(self.p.behavior.get("verified_runtime_observers", {}).values())
+        pending_name = self.p.behavior.get("required_runtime_observation_name")
+        semantic_choices = None
+        if pending_name:
+            from .host_rule_provenance import semantic_runtime_candidates
+            semantic_choices = set(semantic_runtime_candidates(
+                [pending_name], self.p.symbols,
+                [self.p.values[key]["type"] for key in self.p.inputs]
+            )[pending_name])
         pool = []
         for key, row in self.p.symbols.items():
             if required and key not in required:
+                continue
+            if semantic_choices is not None and key not in semantic_choices:
                 continue
             kind = row.get("kind")
             if kind not in {"METHOD", "FIELD"}:
@@ -327,6 +337,7 @@ class RuleAuthor:
         if depth > 8:
             raise ValueError("RULE_VALUE_DEPTH: " + purpose)
         diagnostic = ""
+        repeated_failure = {}
         for _step in range(48):
             usable = [row["id"] for row in self.p.menu()
                       if (expected is None or self.p.checker.assignable(row["type"], expected))
@@ -402,6 +413,15 @@ class RuleAuthor:
                 diagnostic = ""
             except ValueError as exc:
                 diagnostic = str(exc)
+                # When a model repeats a failed operation without adding a
+                # typed value, do not spend 48 identical inferences. A new
+                # input value resets this identity and permits real progress.
+                identity = (op, diagnostic, len(self.p.values))
+                repeated_failure[identity] = repeated_failure.get(identity, 0) + 1
+                if repeated_failure[identity] >= 3:
+                    raise ValueError(
+                        "RULE_VALUE_UNFINISHED: " + purpose
+                        + "; RULE_VALUE_NONPROGRESS: " + diagnostic) from exc
         raise ValueError("RULE_VALUE_UNFINISHED: " + purpose + "; " + diagnostic)
 
     def effects(self):
