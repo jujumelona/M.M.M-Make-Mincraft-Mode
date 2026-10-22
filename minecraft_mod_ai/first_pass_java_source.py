@@ -480,7 +480,6 @@ def compose_first_pass_java(
                 if source_work_graph is not None:
                     # Keep newly materialized events separate from the
                     # pre-existing Fabric callback inventory.
-                    from copy import deepcopy
                     source_work_graph = deepcopy(source_work_graph)
                     for row in source_work_graph["tasks"]:
                         if (row.get("kind") == "occurrence_hook"
