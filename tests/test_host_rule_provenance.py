@@ -331,3 +331,94 @@ def test_rule_observation_menu_never_offers_unrelated_method_for_bound_state():
         owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
     choices = RuleAuthor(None, p)._checked_observation_candidates("Observe actual inventory")
     assert [item["symbol_ref"] for item in choices] == ["inventory"]
+
+
+
+def test_generated_entity_presence_is_lowered_to_live_world_enumeration(tmp_path):
+    """Compile and execute the actual entity-check source, not only an IR name."""
+    import shutil
+    import subprocess
+    from minecraft_mod_ai.host_rule_provenance import (
+        resolve_materialized_entity_presence, runtime_source_expression_proof)
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+
+    assert shutil.which("javac"), "JDK must be present for executable contract"
+    world, entity, alien = (
+        "example.World", "net.minecraft.world.entity.Entity", "example.AlienEntity")
+    symbols = {
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        entity: {"kind": "CLASS", "owner": entity, "access": 1},
+        alien: {"kind": "CLASS", "owner": alien, "access": 1,
+                "superclass": entity,
+                "provenance": "materialized_prerequisite_declaration"},
+        "java.lang.Iterable": {"kind": "CLASS", "owner": "java.lang.Iterable",
+                               "access": 1537},
+        "all_entities": {"kind": "METHOD", "owner": world,
+                         "name": "getAllEntities", "access": 1,
+                         "return_type": "java.lang.Iterable",
+                         "parameters": []},
+    }
+    evidence = resolve_materialized_entity_presence(
+        "Alien presence", symbols, [world])
+    assert evidence and evidence["entity_owner"] == alien
+    assert evidence["observer_ref"] == "all_entities"
+    p = RuleProgram(symbols, [{"type": world, "name": "arg0"}],
+        {"behavior_id": "entity-exists", "state_reads": [], "state_writes": []},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    enumerated = p.value("call", [p.inputs[0]], symbol_ref=evidence["observer_ref"])
+    presence = p.value("entity_presence", [enumerated], entity_owner=alien)
+    assert runtime_source_expression_proof(p, presence, "Alien presence")
+    assert not runtime_source_expression_proof(p, presence, "Selected section")
+    files = {
+        "net/minecraft/world/entity/Entity.java":
+            "package net.minecraft.world.entity; public class Entity {}",
+        "example/AlienEntity.java":
+            "package example; public class AlienEntity extends net.minecraft.world.entity.Entity {}",
+        "example/World.java":
+            "package example; public class World { "
+            "public java.lang.Iterable<net.minecraft.world.entity.Entity> items="
+            "new java.util.ArrayList<>(); "
+            "public java.lang.Iterable<net.minecraft.world.entity.Entity> "
+            "getAllEntities(){return items;} }",
+        "example/Bridge.java": ("package example; public class Bridge { "
+            "public boolean check(example.World arg0) { "
+            + p.declarations() + " return " + p.source(presence) + "; } }"),
+        "example/Probe.java": ("package example; public class Probe { "
+            "public static void main(String[] args){ World world=new World(); "
+            "Bridge bridge=new Bridge(); if(bridge.check(world)) throw new AssertionError(); "
+            "world.items=java.util.List.of(new AlienEntity()); "
+            "if(!bridge.check(world)) throw new AssertionError(); } }"),
+    }
+    paths = []
+    for name, source in files.items():
+        f = tmp_path / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(source)
+        paths.append(str(f))
+    result = subprocess.run(["javac", "-proc:none", "-d", str(tmp_path), *paths],
+                            capture_output=True, text=True, timeout=40)
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run(["java", "-cp", str(tmp_path), "example.Probe"],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
+def test_entity_presence_requires_real_materialized_java_type_not_name_only():
+    from minecraft_mod_ai.host_rule_provenance import (
+        resolve_materialized_entity_presence)
+    world, entity, alien = (
+        "example.World", "net.minecraft.world.entity.Entity", "example.AlienEntity")
+    symbols = {
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        entity: {"kind": "CLASS", "owner": entity, "access": 1},
+        alien: {"kind": "CLASS", "owner": alien, "access": 1,
+                "superclass": entity, "provenance": "model_authored_unverified"},
+        "enumerate": {"kind": "METHOD", "owner": world,
+                      "name": "getAllEntities", "access": 1,
+                      "return_type": "java.lang.Iterable", "parameters": []},
+    }
+    assert resolve_materialized_entity_presence(
+        "Alien presence", symbols, [world]) is None
+    symbols[alien]["provenance"] = "materialized_prerequisite_declaration"
+    assert resolve_materialized_entity_presence(
+        "Alien presence", symbols, ["example.Other"]) is None
