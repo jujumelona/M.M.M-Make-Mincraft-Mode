@@ -46,6 +46,8 @@ def test_verified_event_has_exact_observed_receiver_args_and_mixin_descriptor():
     assert "arg0, arg1" in mixin
     assert "require = 1" in mixin
     assert result["runtime_verified"] is False
+    assert json.loads(next(body for key, body in files.items()
+                           if key.endswith(".mixins.json")))["compatibilityLevel"] == "JAVA_25"
 
 
 def test_inspected_source_site_must_exist_and_be_injectable():
@@ -233,3 +235,29 @@ def test_source_required_materializes_mixin_and_binds_real_generated_event(tmp_p
     assert "example.generated.MmmEvent" in source
     assert "private boolean matchesBehavior" in source
     assert len(implemented) == 2
+
+
+
+def test_client_mixin_uses_client_source_set_and_scoped_manifest(tmp_path):
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    existing = {"config": "another.client.mixins.json", "environment": "client"}
+    manifest.write_text(json.dumps({
+        "schemaVersion": 1, "id": "custommod", "mixins": [existing],
+    }))
+    created = materialize_verified_custom_event(
+        project_root=tmp_path, symbols=SYMBOLS,
+        source_site_ref="opaqueMethod", behavior_id="client_purchase",
+        package="example.generated", side="CLIENT", java_version=25,
+    )
+    files = created["files"]
+    assert any(name.startswith("src/client/java/") for name in files)
+    assert not any(name.startswith("src/main/java/") for name in files)
+    mixin = json.loads(files["src/main/resources/" + created["mixin_config"]])
+    assert mixin["compatibilityLevel"] == "JAVA_25"
+    assert mixin["client"] == [next(name.rsplit("/", 1)[-1].removesuffix(".java")
+                                    for name in files if "/mixin/" in name)]
+    mixins = json.loads(manifest.read_text())["mixins"]
+    assert mixins == [existing, {
+        "config": created["mixin_config"], "environment": "client",
+    }]
