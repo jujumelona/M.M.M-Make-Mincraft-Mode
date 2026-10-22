@@ -493,6 +493,7 @@ class ModelRouter:
         )
         from .construction_source_repair import (
             assemble_java_implementation, focused_java_correction_messages,
+            repeated_invalid_java_implementation,
         )
         from dataclasses import replace
         from .construction_java_context import ensure_live_java_source_capacity
@@ -500,6 +501,7 @@ class ModelRouter:
         # Correct only this implementation after a concrete decode/parser error.
         # Transport/backend failures retain their own handling and are not
         # mistaken for invalid Java. No whole-file regeneration or strategy switch.
+        rejected_source = None
         for attempt in range(2):
             with self._generation_scope(config):
                 request = ensure_live_java_source_capacity(
@@ -511,8 +513,17 @@ class ModelRouter:
             try:
                 return assemble_java_implementation(result, source_frame)
             except ValueError as error:
+                if rejected_source is not None and repeated_invalid_java_implementation(
+                        rejected_source, result):
+                    failure = ModelConfigurationError(
+                        "CONSTRUCTION_JAVA_REPEATED_REJECTED_BODY: "
+                        "second candidate repeated the same invalid Java member; "
+                        + str(error))
+                    failure.failed_response = result
+                    raise failure from error
                 if attempt:
                     raise
+                rejected_source = result
                 request = replace(request, messages=fit_messages_to_context(
                     focused_java_correction_messages(
                         messages, frame=source_frame,
