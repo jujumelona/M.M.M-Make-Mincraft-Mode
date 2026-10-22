@@ -500,6 +500,7 @@ def test_typed_inventory_membership_observation_is_not_mistaken_for_mutation():
     from minecraft_mod_ai.host_rule_provenance import runtime_source_expression_proof
     world, inventory = "example.World", "example.Inventory"
     symbols = {
+        "java.lang.String": {"kind": "CLASS", "owner": "java.lang.String", "access": 17},
         world: {"kind": "CLASS", "owner": world, "access": 1},
         inventory: {"kind": "CLASS", "owner": inventory, "access": 1},
         "inventory": {"kind": "METHOD", "owner": world, "name": "getInventory",
