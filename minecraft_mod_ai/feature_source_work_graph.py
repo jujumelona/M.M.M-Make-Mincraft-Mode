@@ -70,7 +70,9 @@ def build_source_work_graph(
                               "available_inspected_event_ids": available_ids})
         producers = []
         for row in by_behavior.get(owner, ()):
-            if row.get("reason") == "occurrence_hook_not_owned":
+            if row.get("reason") in {
+                "occurrence_hook_not_owned", "no_inspected_callback",
+            }:
                 continue
             name = str(row.get("name") or row.get("reason") or "")
             if not name:
