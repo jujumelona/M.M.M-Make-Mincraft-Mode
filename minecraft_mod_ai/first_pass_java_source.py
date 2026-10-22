@@ -419,6 +419,7 @@ def compose_first_pass_java(
     # method-reference registration are host-authored, not guessed locals.
     bound_events = {}
     event_candidates = []
+    pending_custom_source_sites = []
     # Source-owned features must supply their own real execution producer.
     # The restricted rule path above is allowed to bind only inspected hooks
     # whose observation contract is already proven. Reusing the same hook
@@ -469,14 +470,31 @@ def compose_first_pass_java(
                 root = (construction_context or {}).get("project_root")
                 if not root:
                     raise ValueError("JAVA_CUSTOM_SOURCE_PROJECT_ROOT_REQUIRED")
-                from .source_owned_custom_event import materialize_verified_custom_event
-                produced = materialize_verified_custom_event(
-                    project_root=root, symbols=symbol_index,
-                    source_site_ref=str(source_ref), behavior_id=behavior_id,
-                    package=package_name,
-                    at=str(behavior.get("source_injection_point") or "HEAD"),
-                    side=str(spec.get("side") or "COMMON").upper(),
+                # Plan the exact Java/Mixin ABI *without writing files*.
+                # An unfinished coder response must not leave a live Mixin
+                # registered in fabric.mod.json or poison the next run.
+                from pathlib import Path
+                from .source_owned_custom_event import plan_verified_custom_event
+                manifest = Path(root) / "src/main/resources/fabric.mod.json"
+                if not manifest.is_file():
+                    raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
+                metadata = json.loads(manifest.read_text(encoding="utf-8"))
+                if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
+                    raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_INVALID")
+                production_args = {
+                    "project_root": root, "symbols": symbol_index,
+                    "source_site_ref": str(source_ref), "behavior_id": behavior_id,
+                    "package": package_name,
+                    "at": str(behavior.get("source_injection_point") or "HEAD"),
+                    "side": str(spec.get("side") or "COMMON").upper(),
+                }
+                produced = plan_verified_custom_event(
+                    symbols=symbol_index, source_site_ref=str(source_ref),
+                    behavior_id=behavior_id, package=package_name,
+                    mod_id=metadata["id"], at=production_args["at"],
+                    side=production_args["side"],
                 )
+                pending_custom_source_sites.append(production_args)
                 bound_events[behavior_id] = produced["callback"]
                 if source_work_graph is not None:
                     # Keep newly materialized events separate from the
@@ -943,4 +961,8 @@ def compose_first_pass_java(
             source, symbols=dict(construction_context.get("symbols") or {}),
             owner=package_name + "." + class_name,
             target_path=str(spec["target_path"]))
+    if pending_custom_source_sites:
+        from .source_owned_custom_event import materialize_verified_custom_event
+        for site in pending_custom_source_sites:
+            materialize_verified_custom_event(**site)
     return source
