@@ -64,8 +64,23 @@ def build_source_work_graph(
         explicit = str(behavior.get("event_binding") or "")
         if explicit and explicit not in available_ids:
             raise ValueError("FEATURE_WORK_EXPLICIT_HOOK_NOT_INSPECTED: " + explicit)
-        hook = task("occurrence_hook", owner,
-                    status="verified" if owner in verified and explicit else "pending",
+        # A missing occurrence source is a *producer job*, not a reason
+        # to pick an unrelated callback. It must exist before its listener.
+        owner_obligations = by_behavior.get(owner, ())
+        missing_occurrence = [row for row in owner_obligations if row.get("reason") in {
+            "occurrence_hook_not_owned", "no_inspected_callback",
+        }]
+        source_dep = ()
+        if missing_occurrence:
+            source_id = task("custom_event_source", owner, evidence={
+                "trigger": str(behavior.get("trigger") or ""),
+                "source_quote": str(behavior.get("source_quote") or ""),
+                "required_action": "implement an inspected source-site event or explicit typed UI action",
+                "reasons": sorted({str(row["reason"]) for row in missing_occurrence}),
+            })
+            source_dep = (source_id,)
+        hook = task("occurrence_hook", owner, depends=source_dep,
+                    status="verified" if owner in verified and explicit and not source_dep else "pending",
                     evidence={"event_binding": explicit or None,
                               "available_inspected_event_ids": available_ids})
         producers = []
@@ -149,12 +164,12 @@ def member_source_work(graph: Mapping[str, Any], behavior_id: str, *, member_rol
             if row.get("behavior_id") == behavior_id]
     role = str(member_role)
     if role == "register_callback":
-        active = {"occurrence_hook", "event_registration"}
+        active = {"custom_event_source", "occurrence_hook", "event_registration"}
     elif role in {"implement_callback_effects", "test_callback_condition"}:
-        active = {"occurrence_hook", "runtime_producer", "gameplay_effect"}
+        active = {"custom_event_source", "occurrence_hook", "runtime_producer", "gameplay_effect"}
     else:
-        active = {"occurrence_hook", "runtime_producer", "gameplay_effect",
-                  "event_registration"}
+        active = {"custom_event_source", "occurrence_hook", "runtime_producer",
+                  "gameplay_effect", "event_registration"}
     return {
         "schema": "mmm/member-source-work-v1",
         "behavior_id": behavior_id,
