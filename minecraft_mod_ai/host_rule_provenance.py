@@ -293,3 +293,75 @@ def unavailable_semantic_runtime_sources(names, symbols, input_types=()):
     """
     capabilities = semantic_runtime_candidates(names, symbols, input_types)
     return [name for name in names if not capabilities[name]]
+
+
+
+def resolve_materialized_entity_presence(name, symbols, input_types):
+    """Find an executable world-entity presence producer using inspected facts.
+
+    This is a generic lowering for generated entity types, not a feature-name
+    special case. The source type must actually be a materialized subclass of
+    Minecraft Entity, and the callback must expose an inspected Iterable
+    collection getter. Never synthesize a missing Minecraft API.
+    """
+    words = set(_canonical_words(name))
+    if not words & {"presence", "present", "exists", "existing"}:
+        return None
+    core = words - {
+        "presence", "present", "exists", "existing", "of", "the", "an",
+        "a", "entity", "entities", "mob", "mobs",
+    }
+    if not core:
+        return None
+
+    def ancestors(owner):
+        seen, pending = set(), [owner]
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            row = symbols.get(current, {})
+            pending.extend(parent for parent in (
+                row.get("superclass"), *(row.get("interfaces") or ()))
+                if isinstance(parent, str))
+        return seen
+
+    matched_entities = []
+    for owner, row in symbols.items():
+        if not isinstance(row, dict) or row.get("kind") != "CLASS":
+            continue
+        if row.get("provenance") != "materialized_prerequisite_declaration":
+            continue
+        if "net.minecraft.world.entity.Entity" not in ancestors(owner):
+            continue
+        entity_words = set(_canonical_words(owner.rsplit(".", 1)[-1]))
+        if core <= entity_words:
+            matched_entities.append(owner)
+    if len(matched_entities) != 1:
+        return None
+
+    choices = []
+    for ref, row in symbols.items():
+        if not isinstance(row, dict) or row.get("kind") != "METHOD":
+            continue
+        if row.get("name") != "getAllEntities" or row.get("parameters"):
+            continue
+        if row.get("return_type") != "java.lang.Iterable":
+            continue
+        if not int(row.get("access", 0)) & 1:
+            continue
+        if row.get("static") or int(row.get("access", 0)) & 8:
+            continue
+        for kind in input_types:
+            if row.get("owner") in ancestors(kind):
+                choices.append((ref, kind))
+    if len(choices) != 1:
+        return None
+    method_ref, input_type = choices[0]
+    return {
+        "entity_owner": matched_entities[0],
+        "observer_ref": method_ref,
+        "receiver_type": input_type,
+        "evidence": "inspected_materialized_entity_plus_callback_world_enumeration",
+    }
