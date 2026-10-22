@@ -435,13 +435,9 @@ def compose_first_pass_java(
         site_bindings = (construction_context or {}).get("source_site_bindings") or {}
         if not isinstance(site_bindings, Mapping):
             raise ValueError("JAVA_SOURCE_SITE_BINDINGS_INVALID")
-        if (symbol_index or source_owned) and not event_candidates and not (
-                source_owned and all(
-                    behavior.get("source_site_ref") or
-                    site_bindings.get(str(behavior.get("behavior_id")))
-                    for behavior in behaviors)):
-            # Neither a guessed default callback nor an uninspected source
-            # location can implement an unknown gameplay occurrence.
+        if symbol_index and not event_candidates and not source_owned:
+            # The rule-only route cannot invent a custom owner. Source-owned
+            # mode below searches exact inspected source sites instead.
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
         if event_candidates or source_owned:
             from .host_behavior_event_binding import select_behavior_callback
