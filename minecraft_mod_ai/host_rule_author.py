@@ -27,6 +27,9 @@ class RuleAuthor:
         self.router, self.p = router, program
         self.decisions = 0
         self.data_pages = dict(data_pages or {})
+        # The symbol table can contain 870k+ entries. Resolve each bound
+        # semantic receiver menu once, not on every model decision.
+        self._semantic_runtime_cache = {}
 
     def ask(self, name, purpose, properties, **context):
         self.decisions += 1
@@ -201,11 +204,14 @@ class RuleAuthor:
         pending_name = self.p.behavior.get("required_runtime_observation_name")
         semantic_choices = None
         if pending_name:
-            from .host_rule_provenance import semantic_runtime_candidates
-            semantic_choices = set(semantic_runtime_candidates(
-                [pending_name], self.p.symbols,
-                [self.p.values[key]["type"] for key in self.p.inputs]
-            )[pending_name])
+            if pending_name not in self._semantic_runtime_cache:
+                from .host_rule_provenance import semantic_runtime_candidates
+                self._semantic_runtime_cache[pending_name] = set(
+                    semantic_runtime_candidates(
+                        [pending_name], self.p.symbols,
+                        [self.p.values[key]["type"] for key in self.p.inputs]
+                    )[pending_name])
+            semantic_choices = self._semantic_runtime_cache[pending_name]
         pool = []
         for key, row in self.p.symbols.items():
             if required and key not in required:
