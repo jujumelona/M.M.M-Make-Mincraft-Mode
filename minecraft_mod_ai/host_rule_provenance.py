@@ -207,3 +207,34 @@ def runtime_source_expression_proof(program, root, semantic_name):
         if tokens & set(_canonical_words(member_name)):
             return True
     return False
+
+
+
+def unavailable_semantic_runtime_sources(names, symbols):
+    """Fast capability preflight for observations the exact-getter path misses.
+
+    This is only a necessary condition. It prevents burning a long sequence
+    of model decisions on an observation for which there is no inspected JVM
+    symbol even *capable* of anchoring the required semantic concept.
+    """
+    available = set()
+    requested = {}
+    for name in names:
+        requested[name] = set(_canonical_words(name)) - {
+            "state", "runtime", "value", "current", "actual", "has", "get",
+            "is", "the", "of", "a", "an", "and",
+        }
+    for row in symbols.values():
+        if not isinstance(row, dict) or row.get("kind") not in {"METHOD", "FIELD"}:
+            continue
+        if not int(row.get("access", 0)) & 1:
+            continue
+        if row.get("return_type") in {"void", None}:
+            continue
+        words = set(_canonical_words(row.get("name", "")))
+        for name, wanted in requested.items():
+            if name not in available and wanted and wanted & words:
+                available.add(name)
+        if len(available) == len(requested):
+            break
+    return [name for name in names if name not in available]
