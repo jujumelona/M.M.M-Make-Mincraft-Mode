@@ -431,7 +431,11 @@ def compose_first_pass_java(
         from .host_fabric_callback_abi import callback_interfaces
         symbol_index = (construction_context or {}).get("symbols") or {}
         event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
-        if symbol_index and not event_candidates:
+        if (symbol_index or source_owned) and not event_candidates:
+            # Even an empty/missing symbol index cannot authorize the
+            # no-argument, fake registration path. The original occurrence
+            # needs an inspected callback or a separately compiled custom
+            # source hook before a feature handler can be emitted.
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
         if event_candidates:
             from .host_behavior_event_binding import select_behavior_callback
