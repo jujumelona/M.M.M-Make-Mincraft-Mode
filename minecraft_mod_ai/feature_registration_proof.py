@@ -12,6 +12,30 @@ import re
 from collections.abc import Mapping, Sequence
 
 
+def _listener_invokes_handler(compact_body: str, marker: str,
+                              handler: str) -> bool:
+    """Inspect register(...)'s callback argument, not unrelated method calls."""
+    start = 0
+    while True:
+        position = compact_body.find(marker, start)
+        if position < 0:
+            return False
+        cursor, depth = position + len(marker), 1
+        begin = cursor
+        while cursor < len(compact_body) and depth:
+            char = compact_body[cursor]
+            depth += (char == "(") - (char == ")")
+            cursor += 1
+        if depth == 0:
+            listener = compact_body[begin:cursor - 1]
+            if (listener == "this::" + handler or (
+                "->" in listener and
+                re.search(r"\bthis\." + re.escape(handler) + r"\(", listener)
+            )):
+                return True
+        start = position + len(marker)
+
+
 def validate_registered_event_sources(
     source: str,
     behaviors: Sequence[Mapping],
@@ -52,14 +76,13 @@ def validate_registered_event_sources(
                 continue
             reference = owner + "." + field + ".register("
             simple = owner.rsplit(".", 1)[-1] + "." + field + ".register("
-            if reference in compact_body:
-                found = True
-                break
-            if simple in compact_body and "import" + owner + ";" in compact:
-                found = True
-                break
-            if (field + ".register(" in compact_body
-                    and "importstatic" + owner + "." + field + ";" in compact):
+            markers = [reference]
+            if "import" + owner + ";" in compact:
+                markers.append(simple)
+            if "importstatic" + owner + "." + field + ";" in compact:
+                markers.append(field + ".register(")
+            if any(_listener_invokes_handler(compact_body, current, handler)
+                   for current in markers):
                 found = True
                 break
         if not found:
