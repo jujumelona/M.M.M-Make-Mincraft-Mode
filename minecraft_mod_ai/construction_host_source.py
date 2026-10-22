@@ -197,6 +197,22 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     bindings.get("retained_typed_behavior_json") or "{}")
                 prompt["owned_runtime_records"] = json.loads(
                     bindings.get("owned_runtime_records_json") or "[]")
+                from .feature_source_work_graph import build_source_work_graph
+                source_work = build_source_work_graph(
+                    behavior_rows,
+                    producer_obligations=feature_route["producer_obligations"],
+                    inspected_hooks=candidates,
+                    verified_behavior_ids=feature_route["verified_behavior_ids"],
+                )
+                # The full task ledger is host-owned. Never repeat the entire
+                # inspected event catalogue or every behavior's dependency chain
+                # on each 9B member request.
+                print("FEATURE_SOURCE_WORK_GRAPH: " + json.dumps({
+                    "owner": owner,
+                    "task_count": len(source_work["tasks"]),
+                    "unverified_obligations": source_work["unverified_obligations"],
+                    "runtime_verified": False,
+                }, ensure_ascii=False), flush=True)
                 # These obligations are implementation work, NOT proof that
                 # any state getter/hook already exists. The ordinary target
                 # compiler/coverage contract remains mandatory.
@@ -254,6 +270,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             "host_state_work_order_scope": prompt["host_state_work_order_scope"],
                             "host_source_owned": bool(
                                 feature_route and feature_route["route"] == "source_owned_java"),
+                            "source_owned_work_graph": locals().get("source_work"),
                         },
                         behaviors=behavior_rows,
                     )
