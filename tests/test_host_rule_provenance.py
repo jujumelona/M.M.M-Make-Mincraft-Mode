@@ -232,3 +232,51 @@ def test_runtime_observer_filters_incompatible_event_input_types():
         events[1],
     ]
     assert compatible_events_for_runtime_producers(events, {}, symbols) == events
+
+
+def test_computed_runtime_source_uses_live_checked_api_not_exact_getter():
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+    from minecraft_mod_ai.host_rule_provenance import (
+        expression_dependencies, runtime_source_expression_proof)
+
+    symbols = {
+        "example.World": {"kind": "CLASS", "owner": "example.World", "access": 1},
+        "inventory": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                      "name": "getInventory", "return_type": "int", "parameters": []},
+        "pvp": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                "name": "isPvpAllowed", "return_type": "boolean", "parameters": []},
+    }
+    program = RuleProgram(symbols, [{"type": "example.World", "name": "arg0"}],
+        {"behavior_id": "arbitrary-feature", "state_reads": [], "state_writes": []},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    world = program.inputs[0]
+    live_inventory = program.value("call", [world], symbol_ref="inventory")
+    baseline = program.value("literal", type="int", value=0)
+    has_inventory = program.value("binary", [live_inventory, baseline], operator=">")
+    unrelated = program.value("call", [world], symbol_ref="pvp")
+    assert runtime_source_expression_proof(program, has_inventory, "Weapon inventory")
+    assert not runtime_source_expression_proof(program, unrelated, "Weapon inventory")
+    assert not runtime_source_expression_proof(program, has_inventory, "selected_section")
+    assert {world, live_inventory, baseline, has_inventory} <= expression_dependencies(
+        program, has_inventory)
+    assert unrelated not in expression_dependencies(program, has_inventory)
+
+
+def test_static_or_newly_constructed_object_is_not_live_runtime_provenance():
+    from minecraft_mod_ai.host_rule_program import RuleProgram
+    from minecraft_mod_ai.host_rule_provenance import runtime_source_expression_proof
+
+    symbols = {
+        "example.World": {"kind": "CLASS", "owner": "example.World", "access": 1},
+        "new": {"kind": "CONSTRUCTOR", "owner": "example.World",
+                "name": "<init>", "access": 1, "return_type": "example.World",
+                "parameters": []},
+        "inventory": {"kind": "METHOD", "owner": "example.World", "access": 1,
+                      "name": "getInventory", "return_type": "int", "parameters": []},
+    }
+    p = RuleProgram(symbols, [{"type": "example.World", "name": "arg0"}],
+        {"behavior_id": "probe", "state_reads": [], "state_writes": []},
+        owner="example.Bridge", target_path="src/main/java/example/Bridge.java")
+    fake_world = p.value("new", [], symbol_ref="new")
+    fake_inventory = p.value("call", [fake_world], symbol_ref="inventory")
+    assert not runtime_source_expression_proof(p, fake_inventory, "Weapon inventory")
