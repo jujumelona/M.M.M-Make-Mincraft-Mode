@@ -69,7 +69,7 @@ class EventRouter:
         if "_predicate_try_" in data_name:
             return {"expression": "player != null"}
         if "_operation_0_call_try_" in data_name:
-            return {"receiver": "System.out", "method": "println", "arguments": ["player"]}
+            return {"receiver": "player", "method": "setPos", "arguments": ["0.0", "0.0", "0.0"]}
         if "_operation_0_try_" in data_name:
             return {"action": "call"}
         if "_operation_1_try_" in data_name:
@@ -177,7 +177,8 @@ def test_method_reference_and_sam_compile_together(tmp_path):
              " net.minecraft.world.InteractionHand hand,"
              " net.minecraft.world.phys.BlockHitResult hit); }"),
         "net/minecraft/world/entity/player/Player.java":
-            "package net.minecraft.world.entity.player; public class Player {}",
+            "package net.minecraft.world.entity.player; public class Player { "
+            "public void setPos(double x, double y, double z) {} }",
         "net/minecraft/world/level/Level.java":
             "package net.minecraft.world.level; public class Level {}",
         "net/minecraft/world/InteractionHand.java":
