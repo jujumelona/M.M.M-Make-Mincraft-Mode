@@ -440,7 +440,6 @@ def compose_first_pass_java(
         if event_candidates:
             from .host_behavior_event_binding import select_behavior_callback
             for behavior in behaviors:
-                explicit = str(behavior.get("event_binding") or "")
                 if source_owned:
                     # Split the unknown runtime observation into a small
                     # independent hook choice before Java authoring. The
