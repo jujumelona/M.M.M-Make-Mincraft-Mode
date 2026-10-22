@@ -11,6 +11,7 @@ import json
 import re
 
 from .fixed_template_generation import _validate_native_arguments
+from .java_operation_ir import parameter_types
 from .source_owned_hook import SourceHookUnavailable
 
 
@@ -68,7 +69,7 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24) -
             score += 3
         matches.append((score, str(ref), {
             "ref": str(ref), "owner": owner, "method": name,
-            "parameter_types": list(row.get("parameters") or ()),
+            "parameter_types": list(parameter_types(row)),
             "return_type": row.get("return_type"),
             "source_path": source or None,
         }))
