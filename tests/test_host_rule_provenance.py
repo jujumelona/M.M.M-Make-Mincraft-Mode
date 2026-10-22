@@ -84,11 +84,14 @@ def test_checked_source_id_requires_existing_readable_java_signature():
     assert validate_runtime_read_producers(
         expected, bindings, symbols, input_types=["example.World"]
     ) == {"world_time": "clock"}
-    for row in ({}, {"clock": {**symbols["clock"], "return_type": "void"}},
-                {"clock": {**symbols["clock"], "parameters": ["int"]}}):
+    for bad_symbols in (
+        {"example.World": symbols["example.World"]},
+        {**symbols, "clock": {**symbols["clock"], "return_type": "void"}},
+        {**symbols, "clock": {**symbols["clock"], "parameters": ["int"]}},
+    ):
         with pytest.raises(RuleMissingRuntimeProducer):
             validate_runtime_read_producers(
-                expected, bindings, {**symbols, **row}, input_types=["example.World"])
+                expected, bindings, bad_symbols, input_types=["example.World"])
 
     # A valid but semantically unrelated symbol cannot be made authoritative
     # by inserting 'host_verified_observer' into a planner-controlled record.
