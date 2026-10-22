@@ -191,8 +191,17 @@ class RuleAuthor:
                 ) if item)
         wanted = set(re.findall(r"[a-z]{3,}", re.sub(
             r"(?<=[a-z0-9])(?=[A-Z])", " ", purpose).lower()))
+        # A repeated Java getter with the same receiver is not a new
+        # observation. Reuse its existing value through 'use'; do not let a
+        # 9B model append 48 identical isPvpAllowed() nodes as fake progress.
+        observed = {(node["attributes"].get("symbol_ref"), tuple(node["input_refs"]))
+                    for node in self.p.checker.nodes.values()
+                    if node["op"] in {"call", "field"}}
+        required = set(self.p.behavior.get("verified_runtime_observers", {}).values())
         pool = []
         for key, row in self.p.symbols.items():
+            if required and key not in required:
+                continue
             kind = row.get("kind")
             if kind not in {"METHOD", "FIELD"}:
                 continue
@@ -221,6 +230,9 @@ class RuleAuthor:
                                  if self.p.checker.assignable(value_type, owner)), None)
                 if receiver is None:
                     continue
+            operand_refs = () if receiver is None else (receiver,)
+            if (key, operand_refs) in observed:
+                continue
             label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name).lower()
             score = len(set(re.findall(r"[a-z]{3,}", label)) & wanted)
             pool.append((-score, 0 if result == "boolean" else 1,
