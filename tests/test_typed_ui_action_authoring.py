@@ -741,3 +741,72 @@ def test_repeated_ast_recovery_preserves_explicit_ui_ownership(monkeypatch):
     assert [row["op"] for row in functions[0]["body"]] == [
         "state_set", "return",
     ]
+
+
+def test_production_rejects_unrelated_launch_write_as_ui_transaction():
+    from minecraft_mod_ai.typed_action_authoring import preflight_ui_action_effects
+
+    design = sections()
+    interaction = design["resources_and_ui"]["specification"]["interactions"][0]
+    interaction["trigger"] = (
+        "Player opens the ground-mode resource and ship-construction UI"
+    )
+    interaction["server_action"]["intent"] = (
+        "Ground-mode resource and ship-construction UI"
+    )
+    # A real write exists, but it belongs to another trigger.
+    updates = design["state_model"]["specification"]["updates"]
+    assert updates[0]["mutation"][0]["target"] == "amount"
+    assert updates[0]["trigger"] != interaction["trigger"]
+    with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
+        preflight_ui_action_effects(design)
+
+
+def test_production_never_generates_recursive_ast_for_missing_transaction(
+    monkeypatch,
+):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    design = sections()
+    interaction = design["resources_and_ui"]["specification"]["interactions"][0]
+    interaction["server_action"]["intent"] = "Purchase a ship upgrade"
+    interaction["trigger"] = "Purchase selected ship upgrade"
+    # An unrelated credit reset is not authorization for the purchase.
+    design["state_model"]["specification"]["updates"][0]["trigger"] = "launch_to_space"
+
+    def forbidden_model_call(*args, **kwargs):
+        raise AssertionError(
+            "production may not fall back to recursive model AST invention"
+        )
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        forbidden_model_call,
+    )
+    with pytest.raises(ValueError, match="ACTION_SOURCE_EFFECT_UNBOUND"):
+        author_action_functions(
+            None, "Construct and purchase ship upgrades", design,
+            typed_host_capability_contracts(), first_index=0,
+            prefer_grounded=True,
+        )
+
+
+def test_production_direct_lowering_preserves_matched_input_effect(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("grounded action must not spend a model call")
+        ),
+    )
+    functions, bindings = author_action_functions(
+        None, "Use the selection form", sections(),
+        typed_host_capability_contracts(), first_index=0,
+        prefer_grounded=True,
+    )
+    assert len(functions) == len(bindings) == 1
+    assert functions[0]["body"][0]["op"] == "state_set"
+    assert functions[0]["body"][0]["value"] == {
+        "op": "ref", "name": "amount",
+    }
