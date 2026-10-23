@@ -118,6 +118,10 @@ def parse_initializer(value: str, *, host_local: str) -> str:
             raise expression_error
         name = variables[0].child_by_field_name("name")
         initializer = variables[0].child_by_field_name("value")
+        if name is not None and _text(raw, name).startswith("__mmmHostEffectApplied"):
+            # This local is host-owned evidence of an executed gameplay effect,
+            # never a model-chosen value or a valid effect in its own right.
+            raise ValueError("CALLBACK_HOST_RECEIPT_NOT_AN_EFFECT")
         if (name is None or _text(raw, name) != host_local
                 or initializer is None):
             raise expression_error
@@ -363,8 +367,10 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     if effect_receipt:
         statements.append(f"boolean {receipt_name} = false;")
     effects = 0
+    blocked_operations: set[str] = set()
     for index in range(64):
-        choices = ["call", "assign", "declare", "if", "while", "foreach"]
+        choices = [kind for kind in ("call", "assign", "declare", "if", "while", "foreach")
+                   if kind not in blocked_operations]
         if blocks:
             choices.append("end")
             if blocks[-1] == "if":
@@ -374,7 +380,8 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         if effects and not blocks:
             choices.append("complete")
         context = {**correction, "accepted_host_statements": semantic_statements, "host_locals": locals_,
-                   "open_blocks": blocks, "next_operation": index}
+                   "open_blocks": blocks, "next_operation": index,
+                   "blocked_non_effect_operations": sorted(blocked_operations)}
         action = _ask(router, scoped, name=f"{data_name}_operation_{index}",
                       schema=_object({"action": {"type": "string", "enum": choices}}),
                       context=context, lower=lambda row: row["action"])
@@ -417,9 +424,21 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             return code
 
         if action in _SCHEMAS:
-            code = _author_operation(
-                router, scoped, data_name, index, action, context, verified_calls,
-                frame, statements, blocks, new_local, lower_operation)
+            try:
+                code = _author_operation(
+                    router, scoped, data_name, index, action, context, verified_calls,
+                    frame, statements, blocks, new_local, lower_operation)
+            except ValueError as exc:
+                if (action == "declare"
+                        and "CALLBACK_HOST_RECEIPT_NOT_AN_EFFECT" in str(exc)):
+                    # A captured 9B response repeatedly declared the private
+                    # effect receipt instead of mutating game state. Repeating
+                    # the same value-only slot cannot solve that ownership
+                    # mismatch. Disallow this non-effect action and ask for a
+                    # different semantic operation; never mark success here.
+                    blocked_operations.add("declare")
+                    continue
+                raise
             statements.append(code)
             semantic_statements.append(code)
             effect_attempted = action in {"call", "assign", "declare"} and _effect_operation(action, code)
