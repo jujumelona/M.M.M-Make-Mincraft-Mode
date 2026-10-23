@@ -1157,3 +1157,25 @@ def test_state_guard_preflight_rejects_self_comparison_and_text_ordering():
         preflight_state_guard_semantics(sections)
     sections["state_model"]["specification"]["variables"][0]["type"] = "int"
     preflight_state_guard_semantics(sections)
+
+
+def test_state_preflight_rejects_identity_mutations_across_state_collections():
+    from minecraft_mod_ai.typed_action_authoring import preflight_state_guard_semantics
+
+    unchanged = {
+        "target": "player_credits", "operator": "=",
+        "value": {"kind": "state_ref", "name": "player_credits"},
+    }
+    cases = (
+        ("transitions", "mutation"),
+        ("updates", "mutation"),
+        ("initialization", "initial_state"),
+        ("cleanup", "action"),
+    )
+    for collection, field in cases:
+        sections = {"state_model": {"specification": {
+            "variables": [{"name": "player_credits", "type": "int"}],
+            collection: [{field: [unchanged]}],
+        }}}
+        with pytest.raises(ValueError, match="STATE_IDENTITY_MUTATION"):
+            preflight_state_guard_semantics(sections)
