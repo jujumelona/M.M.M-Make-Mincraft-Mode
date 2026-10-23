@@ -152,16 +152,34 @@ def author_action_metadata(router, record, *, budget=None):
             input_index=index,
             accepted_inputs=inputs,
         )
-        # A screen title or an already-admitted label describes no new user
-        # input. Without a verified source field it must not become a control.
-        label = head["label"].strip().casefold()
+        # The small model can repeat the entire screen title or an earlier
+        # control when a requested input count exceeds the real form.
+        # Do not synthesize duplicate inputs: request one grounded correction,
+        # and treat a repeated prior control as the end of the list.
         previous = {entry["label"].strip().casefold() for entry in inputs}
-        if label == title.strip().casefold() or label in previous:
+        screen_label = title.strip().casefold()
+        label = head["label"].strip().casefold()
+        if label == screen_label or label in previous:
+            head = ask(
+                "input_type",
+                {
+                    "type": {"type": "string", "enum": list(SCALARS)},
+                    "label": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                input_index=index,
+                accepted_inputs=inputs,
+                rejected_input=head,
+                correction="Name a DISTINCT user-supplied field, not the screen title or a prior field. If no other field exists, do not invent an option.",
+            )
+            label = head["label"].strip().casefold()
+        if label in previous:
+            break
+        if label == screen_label:
             raise ValueError(
-                "ACTION_INPUT_NOT_A_DISTINCT_PLAYER_VALUE: "
+                "ACTION_INPUT_NOT_A_PLAYER_VALUE: "
                 + json.dumps({"input_index": index, "label": head["label"]}, ensure_ascii=False)
             )
-        row = {"name": "input_" + str(index + 1), **head}
+        row = {"name": "input_" + str(len(inputs) + 1), **head}
         if head["type"] in {"int", "long", "double"}:
             if head["type"] == "double":
                 numeric = {
