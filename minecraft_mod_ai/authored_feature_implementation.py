@@ -38,10 +38,38 @@ def compile_request_feature_jobs(
             )
         )
 
-    execution_features = tuple(
-        feature for feature in plan.request_scope.get("requirements", ())
-        if not _owned_interface(feature)
-    )
+    # A broad request heading is not itself an observable gameplay callback.
+    # In the October production trace, an unresolved "space mod" heading was
+    # converted into a separate Fabric ModInitializer even though it supplied
+    # no occurrence, state read or executable effect. Retain this context in
+    # the approved request scope, but never ask a 9B model to invent a hook.
+    source_behaviors = plan.request_scope.get("behavior_requirements", ())
+
+    def _context_only(feature):
+        rid = feature["requirement_id"]
+        matches = [row for row in source_behaviors
+                   if row.get("requirement_id") == rid]
+        if not matches:
+            return False
+        statement = str(feature.get("statement") or "").strip()
+        return all(
+            row.get("source_status") == "source_preserved_unresolved"
+            and not str(row.get("trigger") or "").strip()
+            and not (row.get("state_reads") or row.get("state_writes")
+                     or row.get("runtime_state_reads")
+                     or row.get("runtime_state_writes"))
+            and str(row.get("intent") or "").strip() == statement
+            and str(row.get("effects") or "").strip() == statement
+            for row in matches
+        )
+
+    non_interface = tuple(feature for feature in plan.request_scope.get(
+        "requirements", ()) if not _owned_interface(feature))
+    concrete = tuple(feature for feature in non_interface if not _context_only(feature))
+    if non_interface and not concrete:
+        # A request consisting only of ungrounded headings is not a success.
+        raise ValueError("REQUEST_FEATURE_EXECUTABLE_BEHAVIOR_REQUIRED")
+    execution_features = concrete
     if not execution_features:
         return (), ()
     from .construction_planner import author_behavior_requirements, plan_construction_tasks
