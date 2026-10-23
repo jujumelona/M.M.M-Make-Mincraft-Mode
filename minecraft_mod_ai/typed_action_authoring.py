@@ -152,16 +152,30 @@ def preflight_ui_action_effects(sections):
             r"spawn|create|change|set|save|withdraw|deposit)\b",
             intent, re.I,
         )
-        if display_noun and not gameplay_verb and not actual_writes:
-            raise ValueError(
-                "ACTION_DESIGN_NO_EXECUTABLE_EFFECT: "
-                + intent[:160] + "; the server action only names a UI, "
-                "and the state plan has no non-identity mutation "
-                f"(identity_only={sorted(set(invalid_writes))}). "
-                "Regenerate a source-owned action contract with concrete "
-                "server preconditions, authorized target, state change and "
-                "observable result; do not invent a success command."
-            )
+        if display_noun and not gameplay_verb:
+            # A write elsewhere in the design is not evidence for this UI.
+            # Production previously accepted a launch-time credits reset as
+            # implementation of an unrelated ship-construction screen.
+            trigger = str(row.get("trigger") or "").strip().casefold()
+            matching_writes = [
+                mutation
+                for collection in ("updates", "transitions")
+                for change in state.get(collection, ())
+                if isinstance(change, Mapping)
+                and str(change.get("trigger") or "").strip().casefold() == trigger
+                for mutation in (change.get("mutation") or ())
+                if isinstance(mutation, Mapping)
+                and mutation.get("target") in actual_writes
+            ]
+            if not matching_writes:
+                raise ValueError(
+                    "ACTION_UI_EFFECT_UNBOUND: " + intent[:160]
+                    + "; the UI is presentation-only and has no source-owned "
+                    "transaction for its exact trigger. Unrelated state writes "
+                    "are not a valid implementation. Split screen opening from "
+                    "a typed server action, or author the required concrete "
+                    "input-bound state mutation before production."
+                )
 
 
 def _checked_action_target(router, minecraft_version=""):
@@ -719,16 +733,17 @@ def author_action_functions(
         }
         body = None
         if prefer_grounded:
-            # Production: deterministic source-owned mutation first. A scalar
-            # state update does not require hundreds of recursive model calls.
-            # If the owned contract cannot be lowered, retain the existing
-            # bounded authoring route and its strict admission checks.
+            # A declared transaction must compile from its source-owned IR.
+            # Do not spend dozens of model calls inventing a recursive body
+            # when the source has no corresponding executable mutation.
             try:
                 body = _host_lower_ui_action_body(
                     record, metadata, owned_refs, sections, state_types,
                 )
-            except ValueError:
-                pass
+            except ValueError as error:
+                raise ValueError(
+                    "ACTION_SOURCE_EFFECT_UNBOUND: " + str(error)
+                ) from error
         if body is None:
             try:
                 body = author.body(
