@@ -25,8 +25,11 @@ _STOPWORDS = frozenset({
 
 def _words(text: object) -> set[str]:
     raw = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(text or ""))
-    return {x for x in re.findall(r"[a-z][a-z0-9]{3,}", raw.lower())
-            if x not in _STOPWORDS}
+    # Java occurrence methods include short but meaningful verbs such as
+    # use, hit, buy and pay. The old four-character minimum dropped them,
+    # making an actual inspected producer invisible to the selection step.
+    return {x for x in re.findall(r"[a-z][a-z0-9]{2,}", raw.lower())
+            if x not in _STOPWORDS and x not in {"the", "and", "for", "are"}}
 
 
 def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24) -> list[dict]:
