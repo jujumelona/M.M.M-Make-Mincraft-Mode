@@ -134,8 +134,12 @@ def author_action_metadata(router, record, *, budget=None):
     title = ask(
         "label", {"label": {"type": "string", "minLength": 1, "maxLength": 160}}
     )["label"]
+    # Free-form prose has no authoritative form schema. Let the model propose
+    # a small set of actually player-supplied controls, not sixteen fields
+    # merely because the decoder allows that maximum. Structured action
+    # metadata still supports up to sixteen explicitly declared controls.
     count = ask(
-        "input_count", {"count": {"type": "integer", "minimum": 0, "maximum": 16}}
+        "input_count", {"count": {"type": "integer", "minimum": 0, "maximum": 4}}
     )["count"]
     inputs = []
     for index in range(count):
@@ -148,6 +152,15 @@ def author_action_metadata(router, record, *, budget=None):
             input_index=index,
             accepted_inputs=inputs,
         )
+        # A screen title or an already-admitted label describes no new user
+        # input. Without a verified source field it must not become a control.
+        label = head["label"].strip().casefold()
+        previous = {entry["label"].strip().casefold() for entry in inputs}
+        if label == title.strip().casefold() or label in previous:
+            raise ValueError(
+                "ACTION_INPUT_NOT_A_DISTINCT_PLAYER_VALUE: "
+                + json.dumps({"input_index": index, "label": head["label"]}, ensure_ascii=False)
+            )
         row = {"name": "input_" + str(index + 1), **head}
         if head["type"] in {"int", "long", "double"}:
             if head["type"] == "double":
@@ -177,27 +190,16 @@ def author_action_metadata(router, record, *, budget=None):
                     float(row["maximum"]),
                 )
         elif head["type"] == "string":
-            row.update(
-                ask(
-                    "input_choices",
-                    {
-                        "max_length": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": min(
-                                4096,
-                                (32767 - 128 - count * 50) * 3 // (16 * max(1, count)),
-                            ),
-                        },
-                        "choices": {
-                            "type": "array",
-                            "maxItems": 8,
-                            "items": {"type": "string", "maxLength": 160},
-                        },
-                    },
-                    input=row,
-                )
+            # A list of legal server values is not present in this prose
+            # interaction. Never ask the small model to manufacture choices:
+            # it repeated a screen title eight times in production, and even
+            # unique fabricated options would not be authoritative. Empty
+            # choices means text entry, subject to server-side validation.
+            # The host chooses a UTF-8/command-safe byte budget.
+            row["max_length"] = min(
+                160, (32767 - 128 - count * 50) * 3 // (16 * max(1, count))
             )
+            row["choices"] = []
         inputs.append(row)
     return validate_action_metadata({"intent": title, "inputs": inputs})
 
