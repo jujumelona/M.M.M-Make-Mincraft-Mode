@@ -31,7 +31,8 @@ jobs:
         run: python scripts/prepare_typed_action_sdk.py --cache "$RUNNER_TEMP/typed-action-sdk"
       - name: Compile client, server, state and persistence against real SDK
         run: |
-          export MMM_ACTION_COMPILE_CLASSPATH="$(cat "$RUNNER_TEMP/typed-action-sdk/classpath.txt")"
+          MMM_ACTION_COMPILE_CLASSPATH="$(cat "$RUNNER_TEMP/typed-action-sdk/classpath.txt")"
+          export MMM_ACTION_COMPILE_CLASSPATH
           python -m pytest \
             tests/test_typed_ui_action_contract.py \
             tests/test_typed_ui_action_authoring.py \
