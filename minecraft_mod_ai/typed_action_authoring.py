@@ -904,7 +904,7 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
         sections,
         typed_host_capability_contracts(),
         first_index=first,
-        runtime_owners=owners,
+        runtime_owners=owners, prefer_grounded=True,
     )
     ir["functions"].extend(functions)
     ir["event_bindings"].extend(bindings)
