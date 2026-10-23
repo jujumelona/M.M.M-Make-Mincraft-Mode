@@ -1194,3 +1194,28 @@ def test_state_preflight_rejects_identity_mutations_across_state_collections(raw
         }}}
         with pytest.raises(ValueError, match="STATE_IDENTITY_MUTATION"):
             preflight_state_guard_semantics(sections)
+
+
+def test_state_identity_preflight_on_canonical_valid_worksheet():
+    """The real normalization path admits the shape but rejects the no-op."""
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+    from minecraft_mod_ai.typed_action_authoring import preflight_state_guard_semantics
+
+    specification = {concern: [] for concern in DETAIL_RECORDS["state_model"]}
+    specification["inapplicable_concerns"] = []
+    specification["variables"] = [{
+        "name": "player_credits", "owner": "player", "type": "int",
+        "unit": "credits", "default": "0", "domain": "0..1000000",
+    }]
+    specification["updates"] = [{
+        "trigger": "buy", "owner": "server",
+        "mutation": [{
+            "target": "player_credits", "operator": "=",
+            "value": {"kind": "state_ref", "name": "player_credits"},
+        }],
+    }]
+    sections = {"state_model": {
+        "specification": specification, "constraint_evidence_refs": [],
+    }}
+    with pytest.raises(ValueError, match="STATE_IDENTITY_MUTATION"):
+        preflight_state_guard_semantics(sections)
