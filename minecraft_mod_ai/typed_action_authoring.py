@@ -93,7 +93,7 @@ def preflight_state_guard_semantics(sections):
                     )
 
 
-def preflight_ui_action_effects(sections):
+def preflight_ui_action_effects(sections, *, strict_source=False):
     """Reject presentation-only command bodies without a source-owned effect.
 
     A UI label and a typed text field do not define a purchase, craft, trade or
@@ -152,30 +152,29 @@ def preflight_ui_action_effects(sections):
             r"spawn|create|change|set|save|withdraw|deposit)\b",
             intent, re.I,
         )
-        if display_noun and not gameplay_verb:
-            # A write elsewhere in the design is not evidence for this UI.
-            # Production previously accepted a launch-time credits reset as
-            # implementation of an unrelated ship-construction screen.
-            trigger = str(row.get("trigger") or "").strip().casefold()
-            matching_writes = [
-                mutation
-                for collection in ("updates", "transitions")
-                for change in state.get(collection, ())
-                if isinstance(change, Mapping)
-                and str(change.get("trigger") or "").strip().casefold() == trigger
-                for mutation in (change.get("mutation") or ())
-                if isinstance(mutation, Mapping)
-                and mutation.get("target") in actual_writes
-            ]
-            if not matching_writes:
-                raise ValueError(
-                    "ACTION_UI_EFFECT_UNBOUND: " + intent[:160]
-                    + "; the UI is presentation-only and has no source-owned "
-                    "transaction for its exact trigger. Unrelated state writes "
-                    "are not a valid implementation. Split screen opening from "
-                    "a typed server action, or author the required concrete "
-                    "input-bound state mutation before production."
-                )
+        # Only a transaction with the same trigger can justify this command.
+        # A launch-time currency reset cannot implement a shipyard purchase,
+        # even if both mention the same state variable.
+        trigger = str(row.get("trigger") or "").strip().casefold()
+        matching_writes = [
+            mutation
+            for collection in ("updates", "transitions")
+            for change in state.get(collection, ())
+            if isinstance(change, Mapping)
+            and str(change.get("trigger") or "").strip().casefold() == trigger
+            for mutation in (change.get("mutation") or ())
+            if isinstance(mutation, Mapping)
+            and mutation.get("target") in actual_writes
+        ]
+        if not matching_writes and (strict_source or (display_noun and not gameplay_verb)):
+            raise ValueError(
+                "ACTION_UI_EFFECT_UNBOUND: " + intent[:160]
+                + "; no state mutation belongs to this UI trigger. "
+                "The UI opening is not a purchase, and an unrelated state "
+                "write cannot implement the requested server transaction. "
+                "Author a source-owned input-bound update or transition, "
+                "or separate the read-only screen from mutating actions."
+            )
 
 
 def _checked_action_target(router, minecraft_version=""):
@@ -389,7 +388,13 @@ def author_action_metadata(router, record, *, budget=None):
         row = {"name": "input_" + str(len(inputs) + 1), **head}
         row = _complete_action_input(ask, row, count=count)
         inputs.append(row)
-    return validate_action_metadata({"intent": title, "inputs": inputs})
+    # The screen title is not the transaction. Preserve the authored
+    # server-side action, otherwise a purchase becomes a presentation-only UI.
+    source_intent = str(record.get("server_action") or "").strip()
+    return validate_action_metadata({
+        "intent": source_intent or title,
+        "inputs": inputs,
+    })
 
 
 def _nodes(value):
