@@ -309,6 +309,10 @@ class TypedOperationAuthor:
         )
         self.call_count = 0
         self.budget = budget
+        # Carry the committed body prefix into each small-model decision.
+        # Without this, successive statement slots receive indistinguishable
+        # prompts and the model can repeat the same state write indefinitely.
+        self._body_progress: dict[str, Any] | None = None
         self.function_signatures: dict[str, tuple[str, ...]] = {}
         self.function_covers: dict[str, tuple[str, ...]] = {}
         self.scope_covers: dict[str, tuple[str, ...]] = {}
@@ -473,6 +477,7 @@ class TypedOperationAuthor:
             "scope": scope,
             "field": field,
             "decision_index": self.call_count,
+            "body_progress": self._body_progress,
             "policy": (
                 "Choose only the requested bounded typed value or AST node. Do not emit Java, prose, "
                 "markdown, or additional fields. Stop at the compile-ready semantic unit; "
@@ -1106,24 +1111,73 @@ class TypedOperationAuthor:
         )
         nesting_limit = 24 if _depth == 0 else max(2, 16 // (2 ** _depth))
         limit = min(requested_limit, nesting_limit)
-        for _ in range(limit):
-            statement = self.statement(
-                f"{scope}.statement[{len(result)}]",
-                env=bindings,
-                return_type=return_type,
-                _depth=_depth,
+        previous_progress = self._body_progress
+        seen_statements: set[str] = set()
+        try:
+            for _ in range(limit):
+                self._body_progress = {
+                    "body_scope": scope,
+                    "completed_statements": result[-4:],
+                    "completed_count": len(result),
+                    "remaining_slots": limit - len(result),
+                    "instruction": (
+                        "Do not repeat a committed statement. Emit done or "
+                        "return when the owned behavior is complete."
+                    ),
+                }
+                statement = self.statement(
+                    f"{scope}.statement[{len(result)}]",
+                    env=bindings,
+                    return_type=return_type,
+                    _depth=_depth,
+                )
+                if statement is None:
+                    return result
+                signature = json.dumps(
+                    statement, sort_keys=True, ensure_ascii=False, default=str
+                )
+                if signature in seen_statements:
+                    raise ValueError(
+                        "TYPED_PLAN_REPEATED_NO_PROGRESS: "
+                        f"{scope} emitted the same AST statement again "
+                        f"after {len(result)} completed statements"
+                    )
+                seen_statements.add(signature)
+                # A UI state write must name an actual declared persistent
+                # state key. The failing production model used state_get()
+                # as the KEY; that cannot become a valid state_set at codegen.
+                if scope.startswith("ui_action.") and statement.get("op") == "state_set":
+                    state_types = _extract_state_variable_types(
+                        self.structured_sections
+                    )
+                    key = statement.get("key", {})
+                    if (not isinstance(key, Mapping)
+                            or key.get("op") != "literal"
+                            or key.get("type") != "string"
+                            or key.get("value") not in state_types):
+                        raise ValueError(
+                            "ACTION_STATE_TARGET_NOT_DECLARED: "
+                            f"{scope} requires a literal declared state key"
+                        )
+                    value = statement.get("value", {})
+                    if (isinstance(value, Mapping)
+                            and value.get("op") == "state_get"
+                            and value.get("key") == key):
+                        raise ValueError(
+                            "TYPED_PLAN_SELF_ASSIGNMENT: "
+                            f"{scope} writes the same stored value without a mutation"
+                        )
+                result.append(statement)
+                if statement.get("op") == "let":
+                    bindings[str(statement["name"])] = str(statement["type"])
+                if self._statement_terminates(statement):
+                    return result
+            raise ValueError(
+                "TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED: "
+                f"{scope} exceeded {limit} statements before semantic completion"
             )
-            if statement is None:
-                return result
-            result.append(statement)
-            if statement.get("op") == "let":
-                bindings[str(statement["name"])] = str(statement["type"])
-            if self._statement_terminates(statement):
-                return result
-        raise ValueError(
-            "TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED: "
-            f"{scope} exceeded {limit} statements before semantic completion"
-        )
+        finally:
+            self._body_progress = previous_progress
 
 
 def _extract_state_variable_types(
