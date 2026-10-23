@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import hashlib
 import html
 import io
@@ -7,6 +8,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -32,12 +34,28 @@ _DEFAULT_DISCOVERY_RETRIES = 4
 _MAX_DISCOVERY_RETRIES = 6
 _RETRY_DELAYS = (0.25, 0.75, 1.5, 2.5, 4.0)
 
+# Prefetch workers are daemon threads: they must never write to Python streams
+# once atexit starts, even if an in-flight metadata request fails late.
+_DISCOVERY_LOG_SHUTDOWN = threading.Event()
+_DISCOVERY_LOG_LOCK = threading.RLock()
+
+
+def _stop_discovery_background_logs() -> None:
+    with _DISCOVERY_LOG_LOCK:
+        _DISCOVERY_LOG_SHUTDOWN.set()
+
+
+atexit.register(_stop_discovery_background_logs)
+
 
 def _emit_discovery_log(message: str, *, exc_info: bool = False) -> None:
-    """Make discovery failures visible in both normal Python and Colab output."""
+    """Make failures visible while avoiding daemon-thread writes at shutdown."""
 
-    _LOGGER.warning("%s", message, exc_info=exc_info)
-    print(f"platform discovery: {message}", flush=True)
+    with _DISCOVERY_LOG_LOCK:
+        if _DISCOVERY_LOG_SHUTDOWN.is_set() or sys.is_finalizing():
+            return
+        _LOGGER.warning("%s", message, exc_info=exc_info)
+        print(f"platform discovery: {message}", flush=True)
 
 
 def _discovery_retries() -> int:
