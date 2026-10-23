@@ -1138,3 +1138,22 @@ def test_ui_only_metadata_without_mutation_fails_closed():
         "value": {"kind": "literal", "type": "int", "value": 10},
     }
     preflight_ui_action_effects(ui)
+
+
+def test_state_guard_preflight_rejects_self_comparison_and_text_ordering():
+    from minecraft_mod_ai.typed_action_authoring import preflight_state_guard_semantics
+    left = {"kind": "state_ref", "name": "player_credits"}
+    sections = {"state_model": {"specification": {
+        "variables": [{"name": "player_credits", "type": "string"}],
+        "transitions": [{"guard": {"kind": "compare", "op": ">=",
+                                   "left": left, "right": left}, "mutation": []}],
+    }}}
+    with pytest.raises(ValueError, match="STATE_GUARD_TAUTOLOGY"):
+        preflight_state_guard_semantics(sections)
+    sections["state_model"]["specification"]["transitions"][0]["guard"]["right"] = {
+        "kind": "literal", "type": "int", "value": 10,
+    }
+    with pytest.raises(ValueError, match="STATE_GUARD_NONNUMERIC_ORDERING"):
+        preflight_state_guard_semantics(sections)
+    sections["state_model"]["specification"]["variables"][0]["type"] = "int"
+    preflight_state_guard_semantics(sections)
