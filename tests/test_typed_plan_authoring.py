@@ -1099,3 +1099,19 @@ def test_semantic_schema_has_only_declared_states_and_capabilities():
     )
     assert {branch["properties"]["action_kind"]["const"]
             for branch in schema["oneOf"]} == {"set_state", "increment_state"}
+
+
+def test_repeated_typed_statements_are_rejected_before_twelve_attempts():
+    from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
+    import json
+
+    model = NativePlanner([
+        {"op": "expr"}, {"op": "literal", "type": "int", "value": 1},
+        {"op": "expr"}, {"op": "literal", "type": "int", "value": 1},
+    ])
+    author = TypedOperationAuthor(model, "resource action", {}, {}, max_calls=10)
+    with pytest.raises(ValueError, match="TYPED_PLAN_REPEATED_NO_PROGRESS"):
+        author.body("ui_action.example", max_statements=12)
+    assert len(model.calls) == 4
+    third_request = json.loads(model.calls[2][1][1]["content"])
+    assert third_request["body_progress"]["completed_count"] == 1
