@@ -138,11 +138,11 @@ def test_mutation_transport_constrains_targets_to_declared_symbols():
         {"count": "one"},
         {"target": "hull"},
         {"operator": "="},
-        {"source": "state"},
-        {"value": "hull"},
+        {"source": "number"},
+        {"value": "100"},
     ])
 
-    author_state_field_page(
+    result = author_state_field_page(
         router,
         "Update hull.",
         concern="updates",
@@ -151,8 +151,14 @@ def test_mutation_transport_constrains_targets_to_declared_symbols():
         symbols=_symbols(),
     )
 
+    assert result["updates"][0]["mutation"][0]["value"] == {
+        "kind": "number", "value": "100"
+    }
     target_schema = router.calls[1]["response_schema"]
     assert target_schema["properties"]["target"]["enum"] == ["hull"]
+    # 'hull = hull' cannot count as a gameplay state change.
+    value_source_schema = router.calls[3]["response_schema"]
+    assert "state" not in value_source_schema["properties"]["source"]["enum"]
     assert all(
         "oneOf" not in json.dumps(call["response_schema"])
         for call in router.calls
@@ -392,3 +398,89 @@ def test_condition_model_schemas_never_request_guard_or_ast_wrappers():
         properties = set(call["response_schema"].get("properties", {}))
         assert not (properties & forbidden)
 
+
+
+def test_credit_unit_corrects_text_type_before_any_state_default():
+    item_schema = state_concern_schema("variables")
+    router = StateChoices([
+        {"type": "string", "owner": "player", "unit": "credits"},
+        {"type": "int"},
+    ])
+    budget = []
+    result = author_state_semantic_page(
+        router,
+        "Players pay numeric credits for upgrades.",
+        concern="variables",
+        fields=("type", "owner", "unit"),
+        count=1,
+        item_schema=item_schema,
+        on_additional_call=lambda: budget.append("correction"),
+    )
+    assert result == {"variables": [
+        {"type": "int", "owner": "player", "unit": "credits"}
+    ]}
+    assert router.calls[1]["response_schema"]["properties"]["type"]["enum"] == [
+        "int", "long", "double"
+    ]
+    assert budget == ["correction"]
+
+
+def test_single_state_variable_cannot_be_compared_to_itself():
+    router = StateChoices([
+        {"layout": "single"},
+        {"source": "state", "state": "hull", "context": "context", "operator": ">="},
+        {"source": "number"},
+        {"value": "1"},
+    ])
+    result = author_state_field_page(
+        router,
+        "Launch with positive hull health.",
+        concern="transitions", field="guard", count=1,
+        symbols=_symbols(),
+    )
+    assert result["transitions"][0]["guard"]["right"] == {
+        "kind": "number", "value": "1"
+    }
+    # The model never receives an option to choose hull as both operands.
+    assert "state" not in router.calls[2]["response_schema"]["properties"]["source"]["enum"]
+
+
+def test_string_currency_ordering_rejected_before_right_operand_authoring():
+    symbols = StateSymbolTable([{
+        "name": "player_credits", "type": "string",
+        "owner": "player", "unit": "credits", "default": "0", "domain": "credits"
+    }])
+    router = StateChoices([
+        {"layout": "single"},
+        {"source": "state", "state": "player_credits",
+         "context": "context", "operator": ">="},
+    ])
+    with pytest.raises(ValueError, match="STATE_GUARD_NONNUMERIC_ORDERING"):
+        author_state_field_page(
+            router, "Buy a spaceship", concern="transitions",
+            field="guard", count=1, symbols=symbols,
+        )
+    assert len(router.calls) == 2
+
+
+def test_comparison_rhs_allows_only_distinct_compatible_state():
+    symbols = StateSymbolTable([
+        {"name": "hull", "type": "double", "owner": "ship", "unit": "points", "default": "100", "domain": "0..100"},
+        {"name": "fuel", "type": "double", "owner": "ship", "unit": "points", "default": "25", "domain": "0..100"},
+        {"name": "ship_name", "type": "string", "owner": "ship", "unit": "text", "default": "rocket", "domain": "names"},
+    ])
+    router = StateChoices([
+        {"layout": "single"},
+        {"source": "state", "state": "hull", "context": "context", "operator": ">="},
+        {"source": "state"},
+        {"value": "fuel"},
+    ])
+    result = author_state_field_page(
+        router, "Compare hull and fuel", concern="transitions",
+        field="guard", count=1, symbols=symbols,
+    )
+    assert result["transitions"][0]["guard"]["right"] == {
+        "kind": "state_ref", "name": "fuel"
+    }
+    value_schema = router.calls[3]["response_schema"]
+    assert value_schema["properties"]["value"]["enum"] == ["fuel"]
