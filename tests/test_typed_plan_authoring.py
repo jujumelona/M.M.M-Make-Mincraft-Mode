@@ -1117,7 +1117,22 @@ def test_repeated_typed_statements_are_rejected_before_twelve_attempts():
     assert third_request["body_progress"]["completed_count"] == 1
 
 
-def test_ui_only_metadata_without_mutation_fails_closed():
+@pytest.fixture
+def raw_semantic_concerns(monkeypatch):
+    """Isolate semantic preflight from the unrelated full worksheet envelope.
+
+    Production validates the complete canonical worksheet before this pass;
+    these unit fixtures intentionally contain only the relevant concern rows.
+    """
+    from minecraft_mod_ai import authored_structured_design
+
+    monkeypatch.setattr(
+        authored_structured_design, "active_concern_records",
+        lambda sections, name: sections.get(name, {}).get("specification", {}),
+    )
+
+
+def test_ui_only_metadata_without_mutation_fails_closed(raw_semantic_concerns):
     from minecraft_mod_ai.typed_action_authoring import preflight_ui_action_effects
     ui = {"resources_and_ui": {"specification": {"interactions": [{
         "trigger": "Open builder screen",
@@ -1140,7 +1155,7 @@ def test_ui_only_metadata_without_mutation_fails_closed():
     preflight_ui_action_effects(ui)
 
 
-def test_state_guard_preflight_rejects_self_comparison_and_text_ordering():
+def test_state_guard_preflight_rejects_self_comparison_and_text_ordering(raw_semantic_concerns):
     from minecraft_mod_ai.typed_action_authoring import preflight_state_guard_semantics
     left = {"kind": "state_ref", "name": "player_credits"}
     sections = {"state_model": {"specification": {
@@ -1159,7 +1174,7 @@ def test_state_guard_preflight_rejects_self_comparison_and_text_ordering():
     preflight_state_guard_semantics(sections)
 
 
-def test_state_preflight_rejects_identity_mutations_across_state_collections():
+def test_state_preflight_rejects_identity_mutations_across_state_collections(raw_semantic_concerns):
     from minecraft_mod_ai.typed_action_authoring import preflight_state_guard_semantics
 
     unchanged = {
