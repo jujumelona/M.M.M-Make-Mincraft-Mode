@@ -168,7 +168,8 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
         ]
         if not matching_writes and (strict_source or (display_noun and not gameplay_verb)):
             raise ValueError(
-                "ACTION_UI_EFFECT_UNBOUND: " + intent[:160]
+                ("ACTION_UI_EFFECT_UNBOUND: " if actual_writes
+                 else "ACTION_DESIGN_NO_EXECUTABLE_EFFECT: ") + intent[:160]
                 + "; no state mutation belongs to this UI trigger. "
                 "The UI opening is not a purchase, and an unrelated state "
                 "write cannot implement the requested server transaction. "
