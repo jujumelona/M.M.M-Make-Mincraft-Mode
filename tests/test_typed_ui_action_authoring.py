@@ -843,3 +843,44 @@ def test_production_checks_all_ui_actions_for_source_owned_mutation():
     design["state_model"]["specification"]["updates"][0]["trigger"] = "launch_to_space"
     with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
         preflight_ui_action_effects(design, strict_source=True)
+
+
+def test_owner_assignment_cannot_borrow_another_trigger_effect():
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+    from minecraft_mod_ai.authored_ui_action_bindings import action_record_identity
+
+    design = sections()
+    action = design["resources_and_ui"]["specification"]["interactions"][0]
+    design["state_model"]["specification"]["updates"][0]["trigger"] = "launch_to_space"
+    owners = [{
+        "feature_id": "__typed_ui__",
+        "ui_action": action_record_identity(action),
+        "worksheet_record_refs": ["state_model.updates[0]"],
+    }]
+    with pytest.raises(ValueError, match="ACTION_HOST_OWNER_TRIGGER_MISMATCH"):
+        author_action_functions(
+            None, "Purchase an upgrade", design,
+            typed_host_capability_contracts(), first_index=0,
+            runtime_owners=owners, prefer_grounded=True,
+        )
+
+
+def test_duplicate_credited_transactions_are_not_applied_twice():
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+    from minecraft_mod_ai.authored_ui_action_bindings import action_record_identity
+
+    design = sections()
+    updates = design["state_model"]["specification"]["updates"]
+    updates.append(deepcopy(updates[0]))
+    action = design["resources_and_ui"]["specification"]["interactions"][0]
+    owners = [{
+        "feature_id": "__typed_ui__",
+        "ui_action": action_record_identity(action),
+        "worksheet_record_refs": ["state_model.updates[0]", "state_model.updates[1]"],
+    }]
+    with pytest.raises(ValueError, match="ACTION_HOST_DUPLICATE_MUTATION"):
+        author_action_functions(
+            None, "Select the number to record", design,
+            typed_host_capability_contracts(), first_index=0,
+            runtime_owners=owners, prefer_grounded=True,
+        )
