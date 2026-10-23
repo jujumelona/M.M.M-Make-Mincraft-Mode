@@ -16,6 +16,56 @@ import re
 from .typed_action_contract import SCALARS, action_bindings, validate_action_contract
 
 
+def preflight_state_guard_semantics(sections):
+    """Validate typed state guard inputs before any method-body generation.
+
+    A comparison of a variable with itself proves no prerequisite, and an
+    ordering comparison against string-typed currency cannot implement a
+    numeric purchase or launch gate. Neither is an actionable game contract.
+    """
+    from .authored_structured_design import active_concern_records
+
+    model = active_concern_records(sections, "state_model")
+    types = {
+        row["name"]: row.get("type")
+        for row in model.get("variables", ())
+        if isinstance(row, Mapping) and isinstance(row.get("name"), str)
+    }
+
+    def visit(node, section):
+        if isinstance(node, Mapping):
+            if node.get("kind") == "compare":
+                op = node.get("op")
+                left = node.get("left")
+                right = node.get("right")
+                if (op in {"==", "!=", "<", "<=", ">", ">="}
+                        and isinstance(left, Mapping)
+                        and isinstance(right, Mapping) and left == right):
+                    raise ValueError(
+                        "STATE_GUARD_TAUTOLOGY: "
+                        + section + " compares an expression with itself"
+                    )
+                if op in {"<", "<=", ">", ">="}:
+                    for expr in (left, right):
+                        if (isinstance(expr, Mapping)
+                                and expr.get("kind") == "state_ref"
+                                and types.get(expr.get("name")) == "string"):
+                            raise ValueError(
+                                "STATE_GUARD_NONNUMERIC_ORDERING: "
+                                + section + " orders string state "
+                                + str(expr.get("name"))
+                            )
+            for value in node.values():
+                visit(value, section)
+        elif isinstance(node, (list, tuple)):
+            for value in node:
+                visit(value, section)
+
+    for collection in ("transitions", "invariants"):
+        for index, row in enumerate(model.get(collection, ())):
+            visit(row, f"state_model.{collection}[{index}]")
+
+
 def preflight_ui_action_effects(sections):
     """Reject presentation-only command bodies without a source-owned effect.
 
@@ -380,6 +430,7 @@ def author_action_functions(
     rows = active_concern_records(sections, "resources_and_ui").get("interactions", ())
     state = active_concern_records(sections, "state_model")
     state_types = _extract_state_variable_types(sections)
+    preflight_state_guard_semantics(sections)
     preflight_ui_action_effects(sections)
     functions, bindings = [], []
     for record in rows:
