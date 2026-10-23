@@ -92,6 +92,50 @@ def validate_action_metadata(metadata):
     return deepcopy(dict(metadata))
 
 
+def _complete_action_input(ask, row, *, count):
+    """Host-owned bounds and unrestricted text ABI for one admitted user field."""
+    head = row
+    if head["type"] in {"int", "long", "double"}:
+        if head["type"] == "double":
+            numeric = {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$",
+            }
+        else:
+            bits = 32 if head["type"] == "int" else 64
+            numeric = {
+                "type": "integer",
+                "minimum": -(2 ** (bits - 1)),
+                "maximum": 2 ** (bits - 1) - 1,
+            }
+        row.update(
+            ask(
+                "input_bounds",
+                {"minimum": numeric, "maximum": numeric},
+                input=row,
+            )
+        )
+        if head["type"] == "double":
+            row["minimum"], row["maximum"] = (
+                float(row["minimum"]),
+                float(row["maximum"]),
+            )
+    elif head["type"] == "string":
+        # A list of legal server values is not present in this prose
+        # interaction. Never ask the small model to manufacture choices:
+        # it repeated a screen title eight times in production, and even
+        # unique fabricated options would not be authoritative. Empty
+        # choices means text entry, subject to server-side validation.
+        # The host chooses a UTF-8/command-safe byte budget.
+        row["max_length"] = min(
+            160, (32767 - 128 - count * 50) * 3 // (16 * max(1, count))
+        )
+        row["choices"] = []
+    return row
+
+
 def author_action_metadata(router, record, *, budget=None):
     from .fixed_template_generation import _validate_native_arguments
 
@@ -180,44 +224,7 @@ def author_action_metadata(router, record, *, budget=None):
                 + json.dumps({"input_index": index, "label": head["label"]}, ensure_ascii=False)
             )
         row = {"name": "input_" + str(len(inputs) + 1), **head}
-        if head["type"] in {"int", "long", "double"}:
-            if head["type"] == "double":
-                numeric = {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 24,
-                    "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$",
-                }
-            else:
-                bits = 32 if head["type"] == "int" else 64
-                numeric = {
-                    "type": "integer",
-                    "minimum": -(2 ** (bits - 1)),
-                    "maximum": 2 ** (bits - 1) - 1,
-                }
-            row.update(
-                ask(
-                    "input_bounds",
-                    {"minimum": numeric, "maximum": numeric},
-                    input=row,
-                )
-            )
-            if head["type"] == "double":
-                row["minimum"], row["maximum"] = (
-                    float(row["minimum"]),
-                    float(row["maximum"]),
-                )
-        elif head["type"] == "string":
-            # A list of legal server values is not present in this prose
-            # interaction. Never ask the small model to manufacture choices:
-            # it repeated a screen title eight times in production, and even
-            # unique fabricated options would not be authoritative. Empty
-            # choices means text entry, subject to server-side validation.
-            # The host chooses a UTF-8/command-safe byte budget.
-            row["max_length"] = min(
-                160, (32767 - 128 - count * 50) * 3 // (16 * max(1, count))
-            )
-            row["choices"] = []
+        row = _complete_action_input(ask, row, count=count)
         inputs.append(row)
     return validate_action_metadata({"intent": title, "inputs": inputs})
 
