@@ -563,3 +563,82 @@ public class Probe {
         timeout=30,
     )
     assert executed.returncode == 0, executed.stderr
+
+
+def test_production_repeated_ui_title_and_options_do_not_fabricate_enum_or_inputs():
+    """Replay the real input_count=16 / repeated-title failure as bounded decisions."""
+    from minecraft_mod_ai.typed_action_authoring import author_action_metadata
+
+    title = "Ground-mode resource and ship-construction UI"
+    answers = [
+        {"label": title},
+        {"count": 4},  # 16 is no longer a legal prose-derived control count.
+        {"type": "string", "label": title},
+        {"type": "string", "label": "Selected purchase or upgrade"},
+        {"type": "string", "label": title},
+        {"type": "string", "label": "Selected purchase or upgrade"},
+    ]
+    requested = []
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            requested.append((data_name, json.loads(messages[-1]["content"]), parameters))
+            return answers.pop(0)
+
+    result = author_action_metadata(Router(), {
+        "trigger": "Player opens the ground-mode resource and ship-construction UI",
+        "server_action": "Validate the selected purchase or upgrade and apply its state",
+        "client_feedback": "Show the selected section, credits and result",
+    })
+    assert answers == []
+    assert len(result["inputs"]) == 1
+    assert result["inputs"][0] == {
+        "name": "input_1", "type": "string",
+        "label": "Selected purchase or upgrade", "max_length": 160,
+        "choices": [],
+    }
+    assert requested[1][2]["properties"]["count"]["maximum"] == 4
+    assert not any(name == "ui_action_input_choices" for name, _, _ in requested)
+    assert requested[3][1]["rejected_input"]["label"] == title
+
+
+def test_repeated_screen_title_is_an_explicit_missing_input_not_a_fake_field():
+    from minecraft_mod_ai.typed_action_authoring import author_action_metadata
+    title = "Shipyard screen"
+    answers = [
+        {"label": title}, {"count": 2},
+        {"type": "string", "label": title},
+        {"type": "string", "label": title},
+    ]
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            return answers.pop(0)
+
+    with pytest.raises(ValueError, match="ACTION_INPUT_NOT_A_PLAYER_VALUE"):
+        author_action_metadata(Router(), {
+            "trigger": "Player selects an upgrade",
+            "server_action": "Upgrade selected equipment",
+            "client_feedback": "Show equipment",
+        })
+
+
+def test_structured_ui_enum_remains_explicit_and_is_never_replaced_by_model_values():
+    from minecraft_mod_ai.typed_action_authoring import author_action_metadata
+
+    metadata = {
+        "intent": "Choose ship section",
+        "inputs": [{
+            "name": "section", "type": "string", "label": "Section",
+            "max_length": 16, "choices": ["hull", "weapon", "crew"],
+        }],
+    }
+
+    class NoInference:
+        def generate_structured_data(self, *a, **kw):
+            raise AssertionError("Declared enum is authoritative; never reinfer it")
+
+    got = author_action_metadata(NoInference(), {
+        "trigger": "Select ship section", "server_action": metadata,
+    })
+    assert got == metadata
