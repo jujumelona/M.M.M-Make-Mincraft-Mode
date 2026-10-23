@@ -398,3 +398,28 @@ def test_callback_api_cap_does_not_starve_later_input_owner():
     assert len(result) == 2
     assert len(result[0]["members"]) == 1
     assert [x["name"] for x in result[1]["members"]] == ["getWorldTime"]
+
+
+def test_repeated_model_authored_receipt_switches_to_a_real_effect_operation():
+    # Captured production shape: the small coder repeatedly tried to declare
+    # the receipt variable reserved to the host instead of implementing an
+    # actual game state change. A safe recovery must not accept the receipt as
+    # evidence or trap the coder in the same invalid 'declare' slot.
+    router = OperationRouter([
+        {"action": "declare"},
+        {"expression": "boolean __mmmHostEffectApplied = false;"},
+        {"expression": "boolean __mmmHostEffectApplied = false;"},
+        {"action": "assign"},
+        {"target": "target.value", "operator": "=", "value": "4"},
+        {"action": "complete"},
+    ])
+    source = author_callback_body(
+        router, [], data_name="receipt_recovery", frame=frame("boolean"),
+        effect_receipt=True,
+    )
+    assert source.count("boolean __mmmHostEffectApplied = false;") == 1
+    assert "target.value = 4;" in source
+    assert "__mmmHostEffectApplied = true;" in source
+    assert "declare" not in router.calls[3][1]["properties"]["action"]["enum"]
+    assert json.loads(router.calls[3][2][-1]["content"])[
+        "blocked_non_effect_operations"] == ["declare"]
