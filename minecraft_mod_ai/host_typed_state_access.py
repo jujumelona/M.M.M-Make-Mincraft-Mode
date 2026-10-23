@@ -7,6 +7,8 @@ from copy import deepcopy
 
 from .java_region_parser import _parse, _text
 
+_HOST_STATE_INTERNALS = frozenset({"getState", "setState", "exportState", "importState", "clearScopedState", "defaultStateSnapshot"})
+
 
 def render_typed_state_accessors(variables) -> str:
     """Lower already validated state names/types/defaults through the same IR ABI."""
@@ -217,7 +219,7 @@ def state_prompt_api(prerequisite_api, evidence, contracts):
                 raw, root = _parse('class MmmStatePrompt {\n' + header + '\n}')
                 body = root.named_children[0].child_by_field_name('body')
                 blocked = any(member.type == 'method_declaration'
-                    and _text(raw, member.child_by_field_name('name')) in {'getState', 'setState'}
+                    and _text(raw, member.child_by_field_name('name')) in _HOST_STATE_INTERNALS
                     for member in body.named_children)
                 if not blocked:
                     members.append(header)
@@ -225,7 +227,7 @@ def state_prompt_api(prerequisite_api, evidence, contracts):
 
     def allowed(row, owner=''):
         return not (row.get('owner', owner) in owners
-                    and row.get('name') in {'getState', 'setState'})
+                    and row.get('name') in _HOST_STATE_INTERNALS)
 
     inspected['source'] = [row for row in inspected.get('source', ())
                            if row.get('path') not in state_paths]
@@ -333,7 +335,7 @@ def validate_host_state_access(source: str, contracts) -> None:
             if row is not None and name is not None:
                 called = _text(raw, name)
                 allowed = {method["name"] for method in row["methods"]}
-                code = ("JAVA_HOST_RAW_STATE_ACCESS" if called in {"getState", "setState"}
+                code = ("JAVA_HOST_RAW_STATE_ACCESS" if called in _HOST_STATE_INTERNALS
                         else "JAVA_HOST_STATE_ACCESS_UNKNOWN" if (
                             called.startswith(("readState_", "writeState_")) and called not in allowed
                         ) else "")

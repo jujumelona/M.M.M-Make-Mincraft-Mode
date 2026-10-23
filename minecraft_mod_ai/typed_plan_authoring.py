@@ -2489,7 +2489,15 @@ def author_typed_plan_ir(
     logic_sections = runtime_sections(structured_sections, runtime_owners)
     logic_coverage = set(_active_concern_refs(logic_sections))
     from .authored_ui_action_bindings import _mutating_ui_actions
-    requested_actions = _mutating_ui_actions(structured_sections)
+    from .authored_structured_design import active_concern_records
+    typed_ui_rows = [row for row in active_concern_records(structured_sections, "resources_and_ui").get("interactions", ())
+                     if isinstance(row.get("server_action"), Mapping)]
+    typed_ids = set()
+    if typed_ui_rows:
+        from .authored_ui_action_bindings import action_record_identity
+        typed_ids = {action_record_identity(row) for row in typed_ui_rows}
+    requested_actions = tuple(action for action in _mutating_ui_actions(structured_sections)
+                              if action not in typed_ids)
     bind_ui_actions = bool(requested_actions)
     author = TypedOperationAuthor(
         router,
@@ -2584,6 +2592,14 @@ def author_typed_plan_ir(
         actions=requested_actions, entry_points=entry_points,
         specs=specs, bindings=event_bindings, known_ids=known_ids,
     ) if bind_ui_actions else {}
+    typed_ui_functions = []
+    if typed_ui_rows:
+        from .typed_action_authoring import author_action_functions
+        typed_ui_functions, typed_ui_bindings = author_action_functions(
+            router, source_text, structured_sections, capabilities,
+            first_index=len(entry_points) + len(requested_actions),
+            budget=budget, runtime_owners=runtime_owners)
+        event_bindings.extend(typed_ui_bindings)
 
     logic_refs = sorted(
         ref
@@ -2761,6 +2777,7 @@ def author_typed_plan_ir(
             **ui_dispatch_spec,
             "body": ui_dispatch_body,
         })
+    functions.extend(typed_ui_functions)
 
     signature_map = {
         str(spec["id"]): (

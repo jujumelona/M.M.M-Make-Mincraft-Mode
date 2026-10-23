@@ -202,10 +202,11 @@ def typed_plan_support_issues(
     ui_rows = active_concern_records(normalized, "resources_and_ui").get(
         "interactions", ()
     )
+    from .authored_ui_action_bindings import action_record_identity
     ui_actions = tuple(dict.fromkeys(
-        str(row.get("server_action") or "").strip()
+        action_record_identity(row)
         for row in ui_rows
-        if isinstance(row, Mapping) and str(row.get("server_action") or "").strip()
+        if isinstance(row, Mapping) and action_record_identity(row)
     )) if mutating_ui else ()
     functions_by_id = {
         str(fn.get("id") or ""): fn
@@ -216,6 +217,18 @@ def typed_plan_support_issues(
     for index in sorted(bound_entry_points - valid_entry_points):
         ordinal = index - len(entry_points) + 1
         binding = bindings_by_entry[index]
+        concrete = binding.get("config", {}).get("action")
+        if concrete is not None:
+            from .typed_action_contract import action_bindings
+            contracts = action_bindings(typed_plan_ir or {})
+            owned = {row["id"]: row for row in contracts}
+            action_id = concrete.get("id")
+            if (action_id in ui_actions and action_id in owned
+                    and owned[action_id]["function"] == binding.get("function")
+                    and binding.get("function") in reachable_functions):
+                continue
+            issues.append(f"event.binding_without_entry_point:{index}")
+            continue
         function_id = f"uiAction{ordinal}_command"
         fn = functions_by_id.get(function_id, {})
         body = fn.get("body", ())

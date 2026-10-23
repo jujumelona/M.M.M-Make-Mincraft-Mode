@@ -154,7 +154,7 @@ def test_typed_state_backend_generates_state_owner_without_router(
             "variables": [
                 {
                     "name": "coins",
-                    "owner": "player",
+                    "owner": "server",
                     "type": "long",
                     "unit": "credits",
                     "default": "0",
@@ -475,8 +475,8 @@ def test_typed_state_store_generates_state_owner_and_persistence_bridge(
     bridge_text = bridge.read_text(encoding="utf-8")
     assert "// MMM:TYPED_STATE_PERSISTENCE_OWNER" in bridge_text
     assert 'MmmPersistentStore.namespace("player_state")' in bridge_text
-    assert 'AuthoredStateModel.getState("coins")' in bridge_text
-    assert 'AuthoredStateModel.setState("coins", data.get("coins"))' in bridge_text
+    assert 'AuthoredStateModel.exportState("coins")' in bridge_text
+    assert 'AuthoredStateModel.importState("coins", data.get("coins"))' in bridge_text
 
     main_source = next(
         path

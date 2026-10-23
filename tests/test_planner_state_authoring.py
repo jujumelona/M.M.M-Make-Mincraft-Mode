@@ -70,7 +70,7 @@ def test_mutation_page_preserves_canonical_typed_ir():
     )
 
     assert result == {"updates": [{"mutation": mutation}]}
-    assert 'setState("hull", Double.valueOf("100"));' == compile_mutation_ir(
+    assert 'setState("hull", Double.valueOf("100"), context);' == compile_mutation_ir(
         mutation,
         declared={"hull"},
     )

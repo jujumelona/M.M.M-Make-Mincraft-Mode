@@ -252,9 +252,15 @@ def _append_repaired_ui_bindings(
         })
 
 def repair_authored_ui_action_plan(
-    router: Any, plan: Any,
+    router: Any, plan: Any, *, minecraft_version: str = "",
 ) -> Any:
     """Retain saved design but add missing executable UI action bindings."""
+    from .typed_action_authoring import migrate_ui_action_plan
+    migrated = migrate_ui_action_plan(router, plan, minecraft_version=minecraft_version)
+    if migrated is not plan:
+        return migrated
+    if any("action" in b.get("config", {}) for b in plan.typed_plan_ir.get("event_bindings", ())):
+        return plan
     from dataclasses import replace
     from .typed_host_capabilities import typed_host_capability_contracts
     from .root_cause_trace import emit_root_cause

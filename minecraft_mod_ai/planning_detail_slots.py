@@ -15,6 +15,10 @@ DETAIL_RECORDS = detail_records()
 def record_field_schema(section: str, concern: str, field: str) -> dict:
     """Canonical authored-field type contract shared by storage and model paging."""
 
+    if (section, concern, field) == ("resources_and_ui", "interactions", "server_action"):
+        from .typed_action_authoring import action_metadata_schema
+        return {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 512}, action_metadata_schema()]}
+
     if section == "state_model":
         canonical = state_concern_schema(concern)
         properties = canonical.get("properties")

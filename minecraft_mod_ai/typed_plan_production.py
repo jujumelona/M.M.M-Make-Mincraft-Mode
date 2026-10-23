@@ -27,6 +27,7 @@ from .typed_host_generation_contract import (
 )
 from .typed_platform_ir import network_sync_requires_state
 from .typed_plan_java import render_typed_plan_java
+from .typed_state_context import bind_player_state_context
 
 
 def _typed_program_path(package_name: str) -> str:
@@ -35,6 +36,24 @@ def _typed_program_path(package_name: str) -> str:
         + str(package_name).replace(".", "/")
         + "/AuthoredProgram.java"
     )
+
+
+def _state_lifecycle_files(package_name: str) -> dict[str, str]:
+    path = f"src/main/java/{package_name.replace('.', '/')}/AuthoredStateLifecycle.java"
+    return {path: f'''package {package_name};
+
+// MMM:TYPED_STATE_LIFECYCLE_OWNER
+public final class AuthoredStateLifecycle {{
+    private static boolean registered;
+    private AuthoredStateLifecycle() {{}}
+    public static synchronized void register() {{
+        if (registered) return;
+        registered = true;
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPED.register(
+                server -> AuthoredStateModel.clearScopedState());
+    }}
+}}
+'''}
 
 
 
@@ -222,11 +241,11 @@ def _state_persistence_java(
         literal = json.dumps(name, ensure_ascii=True)
         restore_lines.extend([
             f"            if (data.containsKey({literal})) {{",
-            f"                AuthoredStateModel.setState({literal}, data.get({literal}));",
+            f"                AuthoredStateModel.importState({literal}, data.get({literal}));",
             "            }",
         ])
         persist_lines.extend([
-            f"            value = AuthoredStateModel.getState({literal});",
+            f"            value = AuthoredStateModel.exportState({literal});",
             f"            if (value != null) data.put({literal}, value);",
         ])
         transfer_lines.extend([
@@ -279,8 +298,9 @@ def _state_persistence_java(
             elif operation == "set_default":
                 operations.append(
                     f"                data.putIfAbsent({destination_key}, "
+                    + f"AuthoredStateModel.defaultStateSnapshot({destination_key}, "
                     + _java_object_literal(migration.get("value"))
-                    + ");"
+                    + "));"
                 )
             else:
                 raise ValueError(
@@ -899,6 +919,7 @@ def validate_typed_plan_generation_contract(
         if isinstance(raw_capabilities, Mapping)
         else {}
     )
+    raw_plan, capabilities = bind_player_state_context(raw_plan, config.get("typed_plan_state_section"), capabilities)
     files: dict[str, str] = {
         expected_path: render_typed_plan_java(
             raw_plan,
@@ -912,6 +933,10 @@ def validate_typed_plan_generation_contract(
         from .typed_action_java import render_action_dispatch_java
         files[f"src/main/java/{package_name.replace('.', '/')}/AuthoredActions.java"] = (
             render_action_dispatch_java(raw_plan, package=package_name))
+        from .typed_action_client import render_action_client_java
+        files[f"src/client/java/{package_name.replace('.', '/')}/AuthoredActionsClient.java"] = render_action_client_java(
+            raw_plan, package=package_name, mod_id=mod_id,
+            minecraft_version=str(config.get("minecraft_version") or ""))
 
     capability_ids = typed_plan_capability_ids(raw_plan)
     missing_capabilities = [
@@ -1002,6 +1027,7 @@ def validate_typed_plan_generation_contract(
             raw_state,
             package_name=package_name,
         )
+        files.update(_state_lifecycle_files(package_name))
 
     # Fail before Gradle's expensive compile/bootstrap if a typed HOST
     # renderer leaks Minecraft client-only classes into the common source set.
@@ -1079,6 +1105,7 @@ def generate_typed_plan_module(
         if isinstance(raw_capabilities, Mapping)
         else {}
     )
+    raw_plan, capabilities = bind_player_state_context(raw_plan, config.get("typed_plan_state_section"), capabilities)
     source = render_typed_plan_java(
         raw_plan,
         package=package_name,
@@ -1092,6 +1119,12 @@ def generate_typed_plan_module(
         action_path = f"src/main/java/{package_name.replace('.', '/')}/AuthoredActions.java"
         _assert_host_owned_or_absent(root, action_path, marker="// MMM:TYPED_ACTION_DISPATCH_OWNER")
         files[action_path] = render_action_dispatch_java(raw_plan, package=package_name)
+        from .typed_action_client import render_action_client_java
+        action_client_path = f"src/client/java/{package_name.replace('.', '/')}/AuthoredActionsClient.java"
+        _assert_host_owned_or_absent(root, action_client_path, marker="// MMM:TYPED_ACTION_CLIENT_OWNER")
+        files[action_client_path] = render_action_client_java(
+            raw_plan, package=package_name, mod_id=info.mod_id,
+            minecraft_version=str(config.get("minecraft_version") or ""))
 
     capability_ids = typed_plan_capability_ids(raw_plan)
     if capability_ids:
@@ -1266,12 +1299,23 @@ def generate_typed_plan_module(
             raw_state,
             package_name=package_name,
         )
+        lifecycle = _state_lifecycle_files(package_name)
+        for path in lifecycle:
+            _assert_host_owned_or_absent(root, path, marker="// MMM:TYPED_STATE_LIFECYCLE_OWNER")
+        files.update(lifecycle)
 
     patch_receipt = write_text_files(
         info,
         files,
         replace_existing=True,
     )
+    if action_bindings(raw_plan):
+        ensure_client_entrypoint(info, entrypoint=f"{package_name}.AuthoredActionsClient")
+    if _state_lifecycle_files(package_name).keys() <= files.keys():
+        ensure_main_initializer_call(
+            info, import_line=f"import {package_name}.AuthoredStateLifecycle",
+            call_line="AuthoredStateLifecycle.register()", marker="typed-state-lifecycle",
+        )
     if raw_state_store is not None:
         ensure_main_initializer_call(
             info,

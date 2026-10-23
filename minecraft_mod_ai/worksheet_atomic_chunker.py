@@ -401,6 +401,13 @@ def worksheet_chunk_schema(
             )
             for field in fields
         }
+        if key == "resources_and_ui" and concern == "interactions" and "server_action" in field_schemas:
+            # The worksheet first records intent. A separate per-action pass
+            # resolves count/type/bounds before executable ownership is built;
+            # do not ask a small model for a nested sixteen-input ABI here.
+            field_schemas["server_action"] = {
+                "type": "string", "minLength": 1,
+                "maxLength": PLANNER_RECORD_FIELD_MAX_CHARS}
         if key == "integration" and concern == "entry_points" and "trigger" in field_schemas:
             # The canonical worksheet may describe an arbitrary game action,
             # but a model-authored executable entry point must carry a real

@@ -3,6 +3,7 @@
 from copy import deepcopy
 import shutil
 import subprocess
+import os
 
 import pytest
 
@@ -91,6 +92,8 @@ def test_typed_action_signature_includes_real_input_arguments():
     assert "AuthoredActions.submitEncoded(" in source
     assert '"example"' in source
     assert "ui_action_dispatch" not in source
+    assert "context.getSource().getPlayerOrException();" in source
+    assert "context.getSource(), java.util.List.of(" in source
 
 
 @pytest.mark.parametrize("mutation", ["type", "name", "range", "duplicate", "object"])
@@ -118,6 +121,24 @@ def test_action_ids_and_transport_literals_are_unique():
     plan["event_bindings"].append(second)
     with pytest.raises(ValueError, match="ACTION_.*DUPLICATE"):
         validate_typed_plan_ir(plan)
+
+
+def test_complete_action_contract_must_fit_the_command_packet():
+    from minecraft_mod_ai.typed_action_contract import validate_action_contract
+
+    contract = action_plan()["event_bindings"][0]["config"]["action"]
+    contract["inputs"] = [
+        {
+            "name": f"text_{i}",
+            "type": "string",
+            "label": "Text",
+            "max_length": 4096,
+            "choices": [],
+        }
+        for i in range(2)
+    ]
+    with pytest.raises(ValueError, match="ACTION_COMMAND_TOO_LARGE"):
+        validate_action_contract(contract)
 
 
 def test_generated_action_transport_executes_distinct_inputs_and_rejects_invalid_before_writes(
@@ -151,6 +172,8 @@ public class Harness {
  public static void main(String[] args) {
   Object actor = new Object();
   String text = "한글 \\\" / ; \\n";
+  try { AuthoredActions.command("example", java.util.Map.of("amount", 3, "label", "\\ud800")); throw new AssertionError(); }
+  catch (IllegalArgumentException expected) {}
   var values = java.util.Map.<String,Object>of("amount", 3, "label", text);
   String command = AuthoredActions.command("example", values);
   check(command.split(" ").length == 3);
@@ -188,3 +211,196 @@ public class Harness {
         [java, "-cp", str(tmp_path), "test.Harness"], capture_output=True, text=True
     )
     assert executed.returncode == 0, executed.stderr
+
+
+def test_client_form_is_generated_from_the_same_action_contract():
+    from minecraft_mod_ai.typed_action_client import render_action_client_java
+
+    source = render_action_client_java(
+        action_plan(), package="test", mod_id="testmod", minecraft_version="26.2"
+    )
+    assert "AuthoredActions.commandFromText(" in source
+    assert "sendCommand(command)" in source
+    assert "getValue()" in source
+    assert '"amount"' in source and '"label"' in source
+    assert "AuthoredProgram.invoke" not in source
+    assert "AuthoredStateModel" not in source
+    assert "gui.setScreen(" in source
+    assert "extractRenderState(" in source
+
+
+def test_production_writes_both_sides_and_registers_the_client_form(tmp_path):
+    import json
+    from minecraft_mod_ai.complete_spec import ProductionModule
+    from minecraft_mod_ai.generator import FabricProjectGenerator
+    from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
+    from minecraft_mod_ai.typed_plan_production import (
+        generate_typed_plan_module,
+        validate_typed_plan_generation_contract,
+    )
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+    FabricProjectGenerator().generate(
+        ModSpec(
+            mod_id="actiontest",
+            mod_name="Actions",
+            package_name="test.actions",
+            version="1.0.0",
+            summary="Action contract test",
+            contents=(
+                ContentSpec(
+                    content_id="marker",
+                    kind=ContentKind.ITEM,
+                    display_name_en="Marker",
+                    display_name_ko="표시",
+                ),
+            ),
+        ),
+        tmp_path,
+    )
+    state = {
+        "constraint_evidence_refs": [],
+        "specification": {
+            **{key: [] for key in DETAIL_RECORDS["state_model"]},
+            "inapplicable_concerns": [],
+            "variables": [
+                {
+                    "name": "amount",
+                    "type": "int",
+                    "default": "0",
+                    "owner": "player",
+                    "domain": "count",
+                    "unit": "count",
+                },
+                {
+                    "name": "label",
+                    "type": "string",
+                    "default": "",
+                    "owner": "player",
+                    "domain": "text",
+                    "unit": "text",
+                },
+            ],
+        },
+    }
+    module = ProductionModule(
+        "authored_typed_plan",
+        "typed_host",
+        {
+            "typed_plan_ir": action_plan(),
+            "typed_plan_package": "test.actions",
+            "minecraft_version": "26.2",
+            "typed_plan_state_section": state,
+        },
+    )
+    dry = validate_typed_plan_generation_contract(
+        module, package_name="test.actions", mod_id="actiontest"
+    )
+    receipt = generate_typed_plan_module(tmp_path, module=module)
+    client = "src/client/java/test/actions/AuthoredActionsClient.java"
+    assert client in dry["paths"] and client in receipt["touched_paths"]
+    assert "src/main/java/test/actions/AuthoredActions.java" in receipt["touched_paths"]
+    fabric = json.loads((tmp_path / "src/main/resources/fabric.mod.json").read_text())
+    assert "test.actions.AuthoredActionsClient" in fabric["entrypoints"]["client"]
+    common = (tmp_path / "src/main/java/test/actions/AuthoredActions.java").read_text()
+    assert "net.minecraft.client" not in common
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MMM_ACTION_COMPILE_CLASSPATH"),
+    reason="Exact Minecraft/Fabric SDK classpath required",
+)
+def test_generated_client_and_server_compile_against_actual_minecraft_26_2(tmp_path):
+    from minecraft_mod_ai.typed_action_client import render_action_client_java
+    from minecraft_mod_ai.typed_action_java import render_action_dispatch_java
+    from minecraft_mod_ai.production_state_compiler import render_production_state_java
+    from minecraft_mod_ai.typed_host_capabilities import (
+        render_typed_host_capabilities_java,
+    )
+    from minecraft_mod_ai.typed_plan_production import (
+        _state_lifecycle_files,
+        _state_persistence_java,
+    )
+    from minecraft_mod_ai.system_templates_common import _persistent_store_java
+    from minecraft_mod_ai.typed_state_context import bind_player_state_context
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+    p = action_plan()
+    state = {
+        "specification": {
+            **{concern: [] for concern in DETAIL_RECORDS["state_model"]},
+            "inapplicable_concerns": [],
+            "variables": [
+                {
+                    "name": name,
+                    "type": kind,
+                    "owner": "player",
+                    "default": default,
+                    "unit": "value",
+                    "domain": "test",
+                }
+                for name, kind, default in (
+                    ("amount", "int", "0"),
+                    ("label", "string", ""),
+                )
+            ],
+        },
+        "constraint_evidence_refs": [],
+    }
+    p, caps = bind_player_state_context(p, state, {})
+    sources = {
+        "AuthoredProgram.java": render_typed_plan_java(
+            p, package="test", minecraft_version="26.2", capabilities=caps
+        ),
+        "AuthoredActions.java": render_action_dispatch_java(p, package="test"),
+        "AuthoredActionsClient.java": render_action_client_java(
+            p, package="test", mod_id="testmod", minecraft_version="26.2"
+        ),
+        "AuthoredStateModel.java": render_production_state_java(
+            state, package_name="test"
+        ),
+        "AuthoredHostCapabilities.java": render_typed_host_capabilities_java(
+            "test", minecraft_version="26.2"
+        ),
+        "AuthoredStateLifecycle.java": next(
+            iter(_state_lifecycle_files("test").values())
+        ),
+        "AuthoredStatePersistence.java": _state_persistence_java(
+            "test",
+            "actions",
+            ("amount", "label"),
+            {
+                "schema_version": "2",
+                "transfer_on_respawn": True,
+                "migrations": [
+                    {
+                        "from_version": "1",
+                        "to_version": "2",
+                        "operation": "set_default",
+                        "destination_key": "amount",
+                        "value": 2,
+                    }
+                ],
+            },
+            minecraft_version="26.2",
+        ),
+        "system/MmmPersistentStore.java": _persistent_store_java(
+            "test", "testmod", minecraft_version="26.2"
+        ),
+    }
+    for name, source in sources.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source)
+    compiled = subprocess.run(
+        [
+            shutil.which("javac"),
+            "-proc:none",
+            "-cp",
+            os.environ["MMM_ACTION_COMPILE_CLASSPATH"],
+            *map(str, tmp_path.rglob("*.java")),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert compiled.returncode == 0, compiled.stderr

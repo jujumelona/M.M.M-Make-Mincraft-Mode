@@ -355,6 +355,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                                  verified, rejected_compiler_member)
 
     statements, blocks, locals_ = [], [], []
+    semantic_statements = []
     verified_calls = verified_callback_choices(scoped, frame, predicate=False)
     receipt_name = "__mmmHostEffectApplied"
     while receipt_name in frame["prefix"]:
@@ -372,7 +373,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             choices.extend(["break", "continue"])
         if effects and not blocks:
             choices.append("complete")
-        context = {**correction, "accepted_host_statements": statements, "host_locals": locals_,
+        context = {**correction, "accepted_host_statements": semantic_statements, "host_locals": locals_,
                    "open_blocks": blocks, "next_operation": index}
         action = _ask(router, scoped, name=f"{data_name}_operation_{index}",
                       schema=_object({"action": {"type": "string", "enum": choices}}),
@@ -420,6 +421,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                 router, scoped, data_name, index, action, context, verified_calls,
                 frame, statements, blocks, new_local, lower_operation)
             statements.append(code)
+            semantic_statements.append(code)
             effect_attempted = action in {"call", "assign", "declare"} and _effect_operation(action, code)
             effects += int(effect_attempted)
             if effect_receipt and effect_attempted:
@@ -431,11 +433,14 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         elif action == "end":
             blocks.pop()
             statements.append("}")
+            semantic_statements.append("}")
         elif action == "else":
             blocks[-1] = "else"
             statements.append("} else {")
+            semantic_statements.append("} else {")
         else:
             statements.append(action + ";")
+            semantic_statements.append(action + ";")
     raise ValueError("CALLBACK_OPERATION_LIMIT: assigned effect requires decomposition")
 
 

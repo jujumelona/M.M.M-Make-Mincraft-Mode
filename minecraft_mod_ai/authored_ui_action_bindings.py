@@ -20,10 +20,19 @@ def _mutating_ui_actions(sections: Mapping[str, Any]) -> tuple[str, ...]:
         "interactions", ()
     )
     return tuple(dict.fromkeys(
-        str(row.get("server_action") or "").strip()
+        action_record_identity(row)
         for row in rows
-        if isinstance(row, Mapping) and str(row.get("server_action") or "").strip()
+        if isinstance(row, Mapping) and action_record_identity(row)
     ))
+
+
+def action_record_identity(row):
+    action = row.get("server_action")
+    if isinstance(action, Mapping):
+        from .typed_action_authoring import action_identity, validate_action_metadata
+        return action_identity({"contract": validate_action_metadata(action),
+                                "trigger": str(row.get("trigger") or "")})
+    return str(action or "").strip()
 
 
 

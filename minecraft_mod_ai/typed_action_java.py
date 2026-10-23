@@ -35,7 +35,7 @@ def _validate_input(row, raw):
     if kind == "boolean":
         return [f"if (!({raw} instanceof Boolean)) {error}",
                 f"normalized.put({_lit(name)}, {raw});"]
-    result = [f"if (!({raw} instanceof String text_{name}) || text_{name}.codePointCount(0, text_{name}.length()) > {row['max_length']}) {error}"]
+    result = [f"if (!({raw} instanceof String text_{name}) || text_{name}.codePointCount(0, text_{name}.length()) > {row['max_length']} || !java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(text_{name})) {error}"]
     if row["choices"]:
         choices = ", ".join(_lit(c) for c in row["choices"])
         result.append(f"if (!java.util.List.of({choices}).contains(text_{name})) {error}")
@@ -45,7 +45,7 @@ def _validate_input(row, raw):
 
 def render_action_dispatch_java(plan, *, package):
     actions = action_bindings(plan)
-    normalizers, invocations, commands, decoders = [], [], [], []
+    normalizers, invocations, commands, decoders, text_inputs = [], [], [], [], []
     for action in actions:
         identity = _lit(action["id"])
         normalizers.append(f"            case {identity}: {{")
@@ -66,16 +66,25 @@ def render_action_dispatch_java(plan, *, package):
                          f"                StringBuilder command = new StringBuilder({_lit(action['literal'])});"])
         for row in action["inputs"]:
             commands.append(f"                command.append(' ').append(encode(values.get({_lit(row['name'])}).toString()));")
-        commands.extend(["                return command.toString();", "            }"])
+        commands.extend(["                if (command.length() > 32767) throw new IllegalArgumentException(\"action command exceeds packet limit\");",
+                         "                return command.toString();", "            }"])
         decoders.extend([f"            case {identity}: {{",
                          f"                if (tokens.size() != {len(action['inputs'])}) throw new IllegalArgumentException(\"invalid action arity\");"])
+        text_inputs.append(f"            case {identity}: {{")
+        text_inputs.append(f"                if (!text.keySet().equals(java.util.Set.of({keys}))) throw new IllegalArgumentException(\"invalid action inputs\");")
         for index, row in enumerate(action["inputs"]):
             raw = f"decode(tokens.get({index}))"
             value = {"int": f"Integer.valueOf({raw})", "long": f"Long.valueOf({raw})",
                      "double": f"Double.valueOf({raw})", "boolean": f"parseBoolean({raw})",
                      "string": raw}[row["type"]]
             decoders.append(f"                values.put({_lit(row['name'])}, {value});")
+            raw_text = f"text.get({_lit(row['name'])})"
+            parsed_text = {"int": f"Integer.valueOf({raw_text})", "long": f"Long.valueOf({raw_text})",
+                           "double": f"Double.valueOf({raw_text})", "boolean": f"parseBoolean({raw_text})",
+                           "string": raw_text}[row["type"]]
+            text_inputs.append(f"                values.put({_lit(row['name'])}, {parsed_text});")
         decoders.extend([f"                return invoke({identity}, actor, values);", "            }"])
+        text_inputs.extend([f"                return command({identity}, values);", "            }"])
     return f'''package {package};
 
 // MMM:TYPED_ACTION_DISPATCH_OWNER
@@ -113,6 +122,16 @@ public final class AuthoredActions {{
         var values = new java.util.LinkedHashMap<String, Object>();
         switch (action) {{
 {chr(10).join(decoders)}
+            default: throw new IllegalArgumentException("unknown action");
+        }}
+    }}
+
+    public static String commandFromText(String action, java.util.Map<String, String> text) {{
+        if (action == null || text == null || text.values().stream().anyMatch(java.util.Objects::isNull))
+            throw new IllegalArgumentException("action inputs required");
+        var values = new java.util.LinkedHashMap<String, Object>();
+        switch (action) {{
+{chr(10).join(text_inputs)}
             default: throw new IllegalArgumentException("unknown action");
         }}
     }}
@@ -155,13 +174,15 @@ def render_action_command_registration(binding, *, minecraft_version, indent="  
         permission = ("LEVEL_ALL", "LEVEL_MODERATORS", "LEVEL_MODERATORS",
                       "LEVEL_GAMEMASTERS", "LEVEL_OWNERS")[config.get("permission_level", 0)]
         requirement = f"{commands}.hasPermission({commands}.{permission})"
+        require_player = "context.getSource().getPlayerOrException();"
     else:
         commands = "net.minecraft.server.command.CommandManager"
         requirement = f"source -> source.hasPermissionLevel({config.get('permission_level', 0)})"
+        require_player = "context.getSource().getPlayerOrThrow();"
     values = ", ".join(f"com.mojang.brigadier.arguments.StringArgumentType.getString(context, {_lit(r['name'])})"
                        for r in action["inputs"])
-    tail = (f".executes(context -> AuthoredActions.submitEncoded({_lit(action['id'])}, "
-            f"context.getSource(), java.util.List.of({values})))")
+    tail = (f".executes(context -> {{ {require_player} return AuthoredActions.submitEncoded({_lit(action['id'])}, "
+            f"context.getSource(), java.util.List.of({values})); }})")
     for row in reversed(action["inputs"]):
         tail = (f".then({commands}.argument({_lit(row['name'])}, "
                 f"com.mojang.brigadier.arguments.StringArgumentType.word()){tail})")

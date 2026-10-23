@@ -9,6 +9,17 @@ import re
 
 SCALARS = ("boolean", "int", "long", "double", "string")
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MAX_COMMAND_LENGTH = 32767
+
+
+def action_command_bound(inputs, *, literal_length=128):
+    """Upper bound for every valid input, including four-byte Unicode text."""
+    total = literal_length
+    for row in inputs:
+        raw_bytes = (row["max_length"] * 4 if row["type"] == "string"
+                     else {"int": 11, "long": 20, "double": 25, "boolean": 5}[row["type"]])
+        total += 2 + (raw_bytes * 4 + 2) // 3  # space, x marker, unpadded base64
+    return total
 
 
 def validate_action_contract(raw, *, parameters=None):
@@ -56,6 +67,14 @@ def validate_action_contract(raw, *, parameters=None):
                 raise ValueError("ACTION_INPUT_CHOICES_INVALID")
         if set(row) != fields:
             raise ValueError("ACTION_INPUT_FIELDS")
+        if kind == "string":
+            try:
+                for choice in row["choices"]:
+                    choice.encode("utf-8", errors="strict")
+            except UnicodeError as error:
+                raise ValueError("ACTION_INPUT_CHOICES_INVALID_UNICODE") from error
+    if action_command_bound(inputs) > MAX_COMMAND_LENGTH:
+        raise ValueError("ACTION_COMMAND_TOO_LARGE")
     if parameters is not None:
         expected = [{"name": row["name"], "type": row["type"]} for row in inputs]
         if (not isinstance(parameters, Sequence) or len(parameters) != len(inputs) + 1
@@ -79,6 +98,8 @@ def action_bindings(plan):
         if fn is None or fn.get("return_type") != "int":
             raise ValueError("ACTION_FUNCTION_TARGET_REQUIRED")
         action = validate_action_contract(config["action"], parameters=fn["parameters"])
+        if action_command_bound(action["inputs"], literal_length=len(config["literal"])) > MAX_COMMAND_LENGTH:
+            raise ValueError("ACTION_COMMAND_TOO_LARGE")
         if action["id"] in ids or literals.count(config.get("literal")) != 1:
             raise ValueError("ACTION_ID_OR_TRANSPORT_DUPLICATE")
         ids.add(action["id"])

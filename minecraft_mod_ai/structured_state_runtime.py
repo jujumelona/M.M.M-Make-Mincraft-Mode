@@ -608,13 +608,13 @@ def compile_mutation_ir(
         val = item.get("value")
         right = compile_state_expr_ir(val, declared=declared, context=context)
         if operator == "=":
-            rows.append(f"setState({_java_string(target)}, {right});")
+            rows.append(f"setState({_java_string(target)}, {right}, {context});")
         else:
             arithmetic = operator[0]
             rows.append(
                 f"setState({_java_string(target)}, "
                 f"$mmmArithmetic({_java_string(arithmetic)}, "
-                f"$mmmRead({_java_string(target)}, {context}), {right}));"
+                f"$mmmRead({_java_string(target)}, {context}), {right}), {context});"
             )
     return " ".join(rows)
 
@@ -1513,6 +1513,12 @@ def _default_value(record: Mapping[str, str]) -> str:
 _COMMON = r"""
 private static final java.util.Map<String, Object> $mmmState =
         new java.util.concurrent.ConcurrentHashMap<>();
+private static final java.util.Map<String, Object> $mmmDefaults =
+        new java.util.concurrent.ConcurrentHashMap<>();
+private static final java.util.Map<String, String> $mmmScopedOwners =
+        new java.util.concurrent.ConcurrentHashMap<>();
+private static final java.util.Map<String, java.util.Map<String, Object>> $mmmScopedState =
+        new java.util.concurrent.ConcurrentHashMap<>();
 
 @FunctionalInterface
 private interface $mmmGuard {
@@ -1554,12 +1560,18 @@ private static final java.util.List<String[]> $mmmConcurrency =
         new java.util.concurrent.CopyOnWriteArrayList<>();
 
 public static synchronized Object getState(String name) {
+    if ($mmmScopedOwners.containsKey(name)) {
+        throw new IllegalArgumentException("State owner context required: " + name);
+    }
     return $mmmState.get(name);
 }
 
 public static synchronized void setState(String name, Object value) {
     if (name == null || name.isBlank()) {
         return;
+    }
+    if ($mmmScopedOwners.containsKey(name)) {
+        throw new IllegalArgumentException("State owner context required: " + name);
     }
     if (value == null) {
         $mmmState.remove(name);
@@ -1580,26 +1592,108 @@ public static synchronized void setState(
         Object value,
         java.util.Map<String, Object> context
 ) {
-    setState(name, value);
-    if (context == null || name == null || name.isBlank()) {
+    if (name == null || name.isBlank()) {
         return;
     }
-    try {
-        if (value == null) {
-            context.remove(name);
-        } else {
-            context.put(name, value);
+    String owner = $mmmScopedOwners.get(name);
+    if (owner == null) {
+        setState(name, value);
+        if (context != null) {
+            try {
+                if (value == null) context.remove(name);
+                else context.put(name, value);
+            } catch (UnsupportedOperationException ignored) {
+                // Immutable event contexts are valid; the authoritative write is complete.
+            }
         }
-    } catch (UnsupportedOperationException ignored) {
-        // Immutable event contexts remain valid read overlays; persistent state
-        // was already committed above.
+        return;
     }
+    String identity = $mmmOwnerIdentity(name, owner, context);
+    var values = $mmmScopedState.computeIfAbsent(name, key -> new java.util.HashMap<>());
+    if (value == null) values.remove(identity);
+    else values.put(identity, value);
+}
+
+private static String $mmmOwnerIdentity(
+        String name, String owner, java.util.Map<String, Object> context
+) {
+    Object value = context == null ? null : context.get(owner);
+    if (!(value instanceof String || value instanceof java.util.UUID)
+            || value.toString().isBlank()) {
+        throw new IllegalArgumentException("State owner identity required: " + name + " (" + owner + ")");
+    }
+    return value.toString();
+}
+
+public static synchronized Object exportState(String name) {
+    String owner = $mmmScopedOwners.get(name);
+    if (owner == null) return getState(name);
+    return $mmmScopedSnapshot(name, $mmmState.get(name),
+            java.util.Map.copyOf($mmmScopedState.getOrDefault(name, java.util.Map.of())));
+}
+
+private static java.util.Map<String, Object> $mmmScopedSnapshot(
+        String name, Object defaultValue, java.util.Map<String, Object> values
+) {
+    var snapshot = new java.util.LinkedHashMap<String, Object>();
+    snapshot.put("__mmm_scoped", Boolean.TRUE);
+    snapshot.put("owner", $mmmScopedOwners.get(name));
+    snapshot.put("default", defaultValue);
+    snapshot.put("values", values);
+    return java.util.Collections.unmodifiableMap(snapshot);
+}
+
+public static synchronized Object defaultStateSnapshot(String name, Object value) {
+    return $mmmScopedOwners.containsKey(name)
+            ? $mmmScopedSnapshot(name, value, java.util.Map.of()) : value;
+}
+
+public static synchronized void clearScopedState() {
+    $mmmScopedState.clear();
+    for (String name : $mmmScopedOwners.keySet()) {
+        if ($mmmDefaults.containsKey(name)) $mmmState.put(name, $mmmDefaults.get(name));
+        else $mmmState.remove(name);
+    }
+}
+
+public static synchronized void importState(String name, Object value) {
+    String owner = $mmmScopedOwners.get(name);
+    if (owner == null) {
+        setState(name, value);
+        return;
+    }
+    if (!(value instanceof java.util.Map<?, ?> saved)
+            || !Boolean.TRUE.equals(saved.get("__mmm_scoped"))
+            || !owner.equals(saved.get("owner"))
+            || !(saved.get("values") instanceof java.util.Map<?, ?> entries)) {
+        throw new IllegalArgumentException("Scoped state snapshot required; legacy global value has no owner: " + name);
+    }
+    var restored = new java.util.HashMap<String, Object>();
+    for (var entry : entries.entrySet()) {
+        if (!(entry.getKey() instanceof String identity) || identity.isBlank()
+                || entry.getValue() == null) {
+            throw new IllegalArgumentException("Invalid scoped state snapshot: " + name);
+        }
+        restored.put(identity, entry.getValue());
+    }
+    if (saved.containsKey("default")) {
+        Object fallback = saved.get("default");
+        if (fallback == null) $mmmState.remove(name);
+        else $mmmState.put(name, fallback);
+    }
+    $mmmScopedState.put(name, restored);
 }
 
 private static Object $mmmRead(
         String name,
         java.util.Map<String, Object> context
 ) {
+    String owner = $mmmScopedOwners.get(name);
+    if (owner != null) {
+        String identity = $mmmOwnerIdentity(name, owner, context);
+        return $mmmScopedState.getOrDefault(name, java.util.Map.of())
+                .getOrDefault(identity, $mmmState.get(name));
+    }
     if (context != null && context.containsKey(name)) {
         return context.get(name);
     }
@@ -1865,10 +1959,16 @@ def render_state_model_concern(
                     f"STRUCTURED_STATE_VARIABLE_NAME: {name!r} is not a stable identifier"
                 )
             default = _default_value(record)
+            owner = str(record.get("owner") or "").strip()
+            if owner == "player":
+                lines.append(
+                    f"    $mmmScopedOwners.put({_java_string(name)}, {_java_string(owner)});"
+                )
             if default != "null":
                 lines.append(
                     f"    $mmmState.put({_java_string(name)}, {default});"
                 )
+        lines.append("    $mmmDefaults.putAll($mmmState);")
         lines.append("}")
         parts.append("\n".join(lines))
     elif concern == "transitions":

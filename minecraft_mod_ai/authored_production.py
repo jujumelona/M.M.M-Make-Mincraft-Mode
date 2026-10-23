@@ -1051,7 +1051,7 @@ def compile_authored_design(
 
     # Repair saved plans without re-authoring unrelated gameplay semantics.
     from .authored_ui_action_repair import repair_authored_ui_action_plan
-    plan = repair_authored_ui_action_plan(router, plan)
+    plan = repair_authored_ui_action_plan(router, plan, minecraft_version=adapter.minecraft_version)
     design["authored_plan"] = plan.to_dict()
 
     # The conversational plan preserves the user's source without making

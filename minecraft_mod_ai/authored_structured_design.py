@@ -87,6 +87,11 @@ def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, An
                     "AUTHORED_STRUCTURED_DESIGN: state_model is outside the "
                     f"host-compiled state DSL: {exc}"
                 ) from exc
+        if section == "resources_and_ui":
+            from .typed_action_authoring import validate_action_metadata
+            for row in value["specification"].get("interactions", ()):
+                if isinstance(row.get("server_action"), Mapping):
+                    validate_action_metadata(row["server_action"])
         normalized[section] = deepcopy(dict(value))
     return normalized
 

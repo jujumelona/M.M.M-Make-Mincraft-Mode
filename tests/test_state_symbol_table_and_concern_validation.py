@@ -177,8 +177,8 @@ def test_structured_ir_validation_and_compilation():
     ]
     validate_mutation_ir(mutations, symbols=symbols)
     java_mut = compile_mutation_ir(mutations, declared=set(symbols))
-    assert 'setState("ship_phase", Double.valueOf(1));' in java_mut
-    assert 'setState("player_currency", $mmmArithmetic("-", $mmmRead("player_currency", context), $mmmRead("cost", context)));' in java_mut
+    assert 'setState("ship_phase", Double.valueOf(1), context);' in java_mut
+    assert 'setState("player_currency", $mmmArithmetic("-", $mmmRead("player_currency", context), $mmmRead("cost", context)), context);' in java_mut
 
     # 4. Structured mutation with undeclared target fails
     invalid_mut = [

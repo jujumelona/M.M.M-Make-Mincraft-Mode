@@ -1,0 +1,565 @@
+"""A concrete UI action owns inputs and one typed server body."""
+
+from copy import deepcopy
+import json
+import shutil
+import subprocess
+
+import pytest
+
+from minecraft_mod_ai.typed_plan_ir import validate_typed_plan_ir
+from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contracts
+
+
+def sections(server_action=None):
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+    result = {
+        name: {
+            "constraint_evidence_refs": [],
+            "specification": {
+                **{key: [] for key in DETAIL_RECORDS[name]},
+                "inapplicable_concerns": [],
+            },
+        }
+        for name in ("resources_and_ui", "state_model", "integration", "algorithm")
+    }
+    result["resources_and_ui"]["specification"]["interactions"] = [
+        {
+            "trigger": "User submits the existing selection form",
+            "server_action": server_action
+            or {
+                "intent": "Record the requested amount",
+                "inputs": [
+                    {
+                        "name": "amount",
+                        "type": "int",
+                        "label": "Amount",
+                        "minimum": 1,
+                        "maximum": 10,
+                    }
+                ],
+            },
+            "client_feedback": "Show the current amount",
+        }
+    ]
+    result["state_model"]["specification"]["variables"] = [
+        {
+            "name": "amount",
+            "type": "int",
+            "default": "0",
+            "owner": "player",
+            "domain": "count",
+            "unit": "count",
+        }
+    ]
+    result["state_model"]["specification"]["updates"] = [
+        {
+            "owner": "player",
+            "trigger": "User submits the existing selection form",
+            "mutation": [
+                {
+                    "target": "amount",
+                    "operator": "=",
+                    "value": {"kind": "context_ref", "name": "amount"},
+                }
+            ],
+        }
+    ]
+    return result
+
+
+def state_body():
+    return [
+        {
+            "op": "state_set",
+            "key": {"op": "literal", "type": "string", "value": "amount"},
+            "value": {"op": "ref", "name": "amount"},
+            "context": {"op": "map", "entries": []},
+        },
+        {"op": "return", "value": {"op": "literal", "type": "int", "value": 1}},
+    ]
+
+
+def test_one_action_body_receives_typed_inputs_and_its_own_intent(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    seen = []
+
+    def body(author, scope, *, env, **kwargs):
+        current = author._scope_semantic_context(scope)
+        record = current["resources_and_ui"]["interactions"][0]
+        seen.append(record)
+        assert env["amount"] == "int"
+        assert record["server_action"]["inputs"][0]["name"] == "amount"
+        return state_body()
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body", body
+    )
+    functions, bindings = author_action_functions(
+        None,
+        "Use a selection form",
+        sections(),
+        typed_host_capability_contracts(),
+        first_index=2,
+    )
+    plan = validate_typed_plan_ir(
+        {
+            "schema_version": "mmm/typed-plan-ir-v1",
+            "source_sha256": "b" * 64,
+            "functions": functions,
+            "event_bindings": bindings,
+            "initialize": [],
+        },
+        capabilities=typed_host_capability_contracts(),
+    )
+    assert len(seen) == 1
+    assert functions[0]["parameters"][1] == {"name": "amount", "type": "int"}
+    assert bindings[0]["entry_point_index"] == 2
+    assert plan["event_bindings"][0]["function"] == functions[0]["id"]
+    assert "ui_action_dispatch" not in json.dumps(plan)
+
+
+@pytest.mark.parametrize("bad", ["message", "ignored_input", "wrong_state_type"])
+def test_bounded_author_cannot_complete_ui_action_with_unrelated_or_invalid_body(
+    monkeypatch, bad
+):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    def body(*args, **kwargs):
+        if bad == "message":
+            return [
+                {"op": "return", "value": {"op": "literal", "type": "int", "value": 1}}
+            ]
+        result = state_body()
+        if bad == "ignored_input":
+            result[0]["value"] = {"op": "literal", "type": "int", "value": 1}
+        if bad == "wrong_state_type":
+            result[0]["value"] = {"op": "literal", "type": "string", "value": "bad"}
+        return result
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body", body
+    )
+    with pytest.raises(ValueError, match="ACTION_"):
+        author_action_functions(
+            None,
+            "Use a selection form",
+            sections(),
+            typed_host_capability_contracts(),
+            first_index=0,
+        )
+
+
+def test_saved_prose_ui_migrates_single_action_and_preserves_non_ui_functions(
+    monkeypatch,
+):
+    from minecraft_mod_ai.authored_plan import AuthoredPlan
+    from minecraft_mod_ai.typed_action_authoring import migrate_ui_action_plan
+
+    old = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "b" * 64,
+        "initialize": [],
+        "event_bindings": [],
+        "functions": [
+            {
+                "id": "unrelated",
+                "parameters": [],
+                "return_type": "void",
+                "body": [],
+                "covers": [],
+            }
+        ],
+    }
+    design = sections("Record the selected amount on the server")
+    expected = sections()["resources_and_ui"]["specification"]["interactions"][0][
+        "server_action"
+    ]
+    calls = []
+
+    def metadata(router, record, **kwargs):
+        calls.append(record["server_action"])
+        return expected
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_action_authoring.author_action_metadata", metadata
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: state_body(),
+    )
+    saved = AuthoredPlan(
+        "Use a selection form",
+        "Use a selection form",
+        structured_sections=design,
+        typed_plan_ir=old,
+    )
+    before = deepcopy(saved.to_dict())
+    result = migrate_ui_action_plan(None, saved)
+    assert saved.to_dict() == before
+    assert result.typed_plan_ir["functions"][0] == old["functions"][0]
+    assert len(result.typed_plan_ir["event_bindings"]) == 1
+    assert (
+        result.structured_sections["resources_and_ui"]["specification"]["interactions"][
+            0
+        ]["server_action"]
+        == expected
+    )
+    assert calls == ["Record the selected amount on the server"]
+    assert migrate_ui_action_plan(None, result).to_dict() == result.to_dict()
+
+
+def test_migration_preserves_an_unrelated_alias_of_a_legacy_ui_function(monkeypatch):
+    from minecraft_mod_ai.authored_plan import AuthoredPlan
+    from minecraft_mod_ai.typed_action_authoring import migrate_ui_action_plan
+
+    ir = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "b" * 64,
+        "initialize": [],
+        "functions": [
+            {
+                "id": "uiAction1_command",
+                "parameters": [{"name": "source", "type": "object"}],
+                "return_type": "int",
+                "covers": [],
+                "body": [
+                    {
+                        "op": "return",
+                        "value": {"op": "literal", "type": "int", "value": 1},
+                    }
+                ],
+            }
+        ],
+        "event_bindings": [
+            {
+                "event": "command",
+                "function": "uiAction1_command",
+                "entry_point_index": i,
+                "config": {"literal": literal, "permission_level": 0},
+            }
+            for i, literal in enumerate(("mmm_action_1", "admin_existing"))
+        ],
+    }
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_action_authoring.author_action_metadata",
+        lambda *a, **k: sections()["resources_and_ui"]["specification"]["interactions"][
+            0
+        ]["server_action"],
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: state_body(),
+    )
+    saved = AuthoredPlan(
+        "Use form",
+        "Use form",
+        structured_sections=sections("Set selected amount"),
+        typed_plan_ir=ir,
+    )
+    migrated = migrate_ui_action_plan(None, saved)
+    assert "admin_existing" in [
+        b["config"]["literal"] for b in migrated.typed_plan_ir["event_bindings"]
+    ]
+    assert ir["functions"][0] in migrated.typed_plan_ir["functions"]
+
+
+def test_foreach_input_variable_is_admitted_in_its_nested_scope(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    body = state_body()
+    body[0]["value"] = {"op": "ref", "name": "item"}
+    loop = {
+        "op": "foreach",
+        "name": "item",
+        "type": "int",
+        "collection": {"op": "list", "items": [{"op": "ref", "name": "amount"}]},
+        "body": [body[0]],
+    }
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: [loop, body[1]],
+    )
+    functions, _ = author_action_functions(
+        None, "Use form", sections(), typed_host_capability_contracts(), first_index=0
+    )
+    assert functions[0]["body"][0]["op"] == "foreach"
+
+
+def test_action_context_cannot_be_an_imported_client_input():
+    from minecraft_mod_ai.typed_action_authoring import validate_action_metadata
+
+    metadata = sections()["resources_and_ui"]["specification"]["interactions"][0][
+        "server_action"
+    ]
+    metadata["inputs"][0]["name"] = "action_context"
+    with pytest.raises(ValueError, match="ACTION_INPUT_RESERVED"):
+        validate_action_metadata(metadata)
+
+
+def test_older_targets_preserve_legacy_ui_without_new_model_calls(monkeypatch):
+    from minecraft_mod_ai.authored_plan import AuthoredPlan
+    from minecraft_mod_ai.typed_action_authoring import (
+        migrate_ui_action_plan,
+        promote_action_sections,
+    )
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("unsupported target must be resolved before model calls")
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_action_authoring.author_action_metadata", unexpected
+    )
+    design = sections("Set selected amount")
+    plan = AuthoredPlan(
+        "Use form", "Use form", structured_sections=design, typed_plan_ir={}
+    )
+    for version in ("1.21.5", "26.1.2"):
+        assert (
+            promote_action_sections(None, design, minecraft_version=version) is design
+        )
+        assert migrate_ui_action_plan(None, plan, minecraft_version=version) is plan
+        with pytest.raises(ValueError, match="ACTION_CLIENT_TARGET_UNSUPPORTED"):
+            promote_action_sections(None, sections(), minecraft_version=version)
+
+
+def test_normal_typed_authoring_uses_action_function_as_the_ui_runtime_root(
+    monkeypatch,
+):
+    from minecraft_mod_ai.authored_ui_action_bindings import action_record_identity
+    from minecraft_mod_ai.typed_plan_authoring import author_typed_plan_ir
+    from minecraft_mod_ai.typed_plan_support import typed_plan_support_issues
+
+    design = sections()
+    owners = [
+        {
+            "feature_id": "__typed_ui__",
+            "owner_module": "authored_typed_plan",
+            "ui_action": action_record_identity(
+                design["resources_and_ui"]["specification"]["interactions"][0]
+            ),
+            "worksheet_record_refs": ["state_model.updates[0]"],
+        }
+    ]
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: state_body(),
+    )
+    plan = author_typed_plan_ir(
+        None,
+        "Use a selection form",
+        design,
+        typed_host_capability_contracts(),
+        runtime_owners=owners,
+    )
+    assert len(plan["event_bindings"]) == 1
+    assert "action" in plan["event_bindings"][0]["config"]
+    assert typed_plan_support_issues(design, plan, runtime_owners=owners) == ()
+
+
+def test_legacy_input_abi_is_authored_as_separate_bounded_decisions():
+    from minecraft_mod_ai.typed_action_authoring import author_action_metadata
+
+    responses = [
+        {"label": "Set quantity"},
+        {"count": 1},
+        {"type": "int", "label": "Quantity"},
+        {"minimum": 1, "maximum": 10},
+    ]
+    seen = []
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            payload = json.loads(messages[-1]["content"])
+            assert "interaction" in payload
+            assert len(parameters["properties"]) <= 2
+            seen.append(data_name)
+            return responses.pop(0)
+
+    metadata = author_action_metadata(
+        Router(),
+        {"trigger": "submit form", "server_action": "Set the selected quantity"},
+    )
+    assert metadata["inputs"] == [
+        {
+            "name": "input_1",
+            "type": "int",
+            "label": "Quantity",
+            "minimum": 1,
+            "maximum": 10,
+        }
+    ]
+    assert seen == [
+        "ui_action_label",
+        "ui_action_input_count",
+        "ui_action_input_type",
+        "ui_action_input_bounds",
+    ]
+
+
+def test_double_input_bounds_use_bounded_decimal_text_before_host_conversion():
+    from minecraft_mod_ai.typed_action_authoring import author_action_metadata
+
+    responses = [
+        {"label": "Set value"},
+        {"count": 1},
+        {"type": "double", "label": "Value"},
+        {"minimum": "-1.25e2", "maximum": "2.5e3"},
+    ]
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "ui_action_input_bounds":
+                assert parameters["properties"]["minimum"]["maxLength"] == 24
+            return responses.pop(0)
+
+    metadata = author_action_metadata(
+        Router(), {"trigger": "submit", "server_action": "Set supplied value"}
+    )
+    assert metadata["inputs"][0]["minimum"] == -125.0
+    assert metadata["inputs"][0]["maximum"] == 2500.0
+
+
+@pytest.mark.parametrize("read", [("missing", "int"), ("amount", "string")])
+def test_action_reads_must_match_declared_state_contract(monkeypatch, read):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    body = state_body()
+    body.insert(
+        0,
+        {
+            "op": "let",
+            "name": "snapshot",
+            "type": read[1],
+            "value": {
+                "op": "state_get",
+                "key": {"op": "literal", "type": "string", "value": read[0]},
+                "type": read[1],
+                "context": {"op": "map", "entries": []},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: body,
+    )
+    with pytest.raises(ValueError, match="ACTION_STATE_"):
+        author_action_functions(
+            None,
+            "Use form",
+            sections(),
+            typed_host_capability_contracts(),
+            first_index=0,
+        )
+
+
+def test_identical_repeated_ui_records_share_one_actual_server_binding(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    design = sections()
+    rows = design["resources_and_ui"]["specification"]["interactions"]
+    rows.append(deepcopy(rows[0]))
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: state_body(),
+    )
+    functions, bindings = author_action_functions(
+        None,
+        "Use a selection form",
+        design,
+        typed_host_capability_contracts(),
+        first_index=0,
+    )
+    assert len(functions) == len(bindings) == 1
+
+
+def test_host_supplies_authenticated_state_context_to_the_bounded_body(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    def body(author, scope, *, env, **kwargs):
+        assert env["action_context"] == "map"
+        return state_body()
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body", body
+    )
+    functions, _ = author_action_functions(
+        None, "Use form", sections(), typed_host_capability_contracts(), first_index=0
+    )
+    context = functions[0]["body"][0]["context"]
+    assert context["entries"][0]["key"]["value"] == "player"
+    assert context["entries"][0]["value"]["id"] == "player.uuid"
+    assert context["entries"][0]["value"]["args"] == [{"op": "ref", "name": "source"}]
+
+
+def test_encoded_action_mutates_the_real_player_state_owner(monkeypatch, tmp_path):
+    from minecraft_mod_ai.production_state_compiler import render_production_state_java
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+    from minecraft_mod_ai.typed_action_java import render_action_dispatch_java
+    from minecraft_mod_ai.typed_plan_java import render_typed_plan_java
+
+    javac, java = shutil.which("javac"), shutil.which("java")
+    if not javac or not java:
+        pytest.skip("JDK required")
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: state_body(),
+    )
+    design = sections()
+    functions, bindings = author_action_functions(
+        None, "Use form", design, typed_host_capability_contracts(), first_index=0
+    )
+    plan = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "a" * 64,
+        "functions": functions,
+        "event_bindings": bindings,
+        "initialize": [],
+    }
+    identity = bindings[0]["config"]["action"]["id"]
+    source_plan = {**plan, "event_bindings": []}
+    sources = {
+        "AuthoredProgram.java": render_typed_plan_java(
+            source_plan, package="proof", capabilities=typed_host_capability_contracts()
+        ),
+        "AuthoredActions.java": render_action_dispatch_java(plan, package="proof"),
+        "AuthoredStateModel.java": render_production_state_java(
+            design["state_model"], package_name="proof"
+        ),
+        "AuthoredHostCapabilities.java": "package proof; public class AuthoredHostCapabilities { public static String playerUuid(Object actor) { return actor.toString(); } }",
+        "Probe.java": '''package proof;
+public class Probe {
+ static void check(boolean value) { if (!value) throw new AssertionError(); }
+ public static void main(String[] args) {
+  String id = "'''
+        + identity
+        + """";
+  var a = java.util.Map.<String,Object>of("player", "player-a");
+  var b = java.util.Map.<String,Object>of("player", "player-b");
+  String command = AuthoredActions.commandFromText(id, java.util.Map.of("amount", "3"));
+  check(AuthoredActions.invokeEncoded(id, "player-a", java.util.List.of(command.split(" ")[1])) == 1);
+  AuthoredActions.invoke(id, "player-b", java.util.Map.of("amount", 7));
+  check(AuthoredStateModel.readState_amount(a) == 3 && AuthoredStateModel.readState_amount(b) == 7);
+  check(AuthoredActions.submitEncoded(id, "player-a", java.util.List.of("xMTE")) == 0);
+  check(AuthoredStateModel.readState_amount(a) == 3 && AuthoredStateModel.readState_amount(b) == 7);
+ }
+}""",
+    }
+    for name, source in sources.items():
+        (tmp_path / name).write_text(source)
+    compiled = subprocess.run(
+        [javac, "-d", str(tmp_path), *map(str, tmp_path.glob("*.java"))],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    executed = subprocess.run(
+        [java, "-cp", str(tmp_path), "proof.Probe"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert executed.returncode == 0, executed.stderr

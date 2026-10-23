@@ -78,6 +78,10 @@ def test_production_get_state_list_argument_is_rejected_before_compiler():
     assert caught.value.failed_source
 
 
+@pytest.mark.parametrize("call", ['clearScopedState()', 'exportState("label")', 'importState("label", "replacement")', 'defaultStateSnapshot("label", "replacement")'])
+def test_persistence_lifecycle_cannot_be_called_by_a_generated_behavior(call):
+    with pytest.raises(ValueError, match="JAVA_HOST_RAW_STATE_ACCESS"):
+        assemble_java_implementation(json.dumps({"implementation": f"AuthoredStateModel.{call}; return null;"}), _frame())
 def test_only_declared_typed_state_names_are_admitted():
     with pytest.raises(ValueError, match="JAVA_HOST_STATE_ACCESS_UNKNOWN"):
         assemble_java_implementation(json.dumps({"implementation": "return AuthoredStateModel.readState_selected_section();"}), _frame())

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import shutil
+import subprocess
 
 import pytest
 
@@ -183,7 +185,7 @@ def test_rendered_state_java_is_complete_host_owned_class() -> None:
     assert "// MMM:TYPED_PLAN_STATE_OWNER" in source
     assert "public final class AuthoredStateModel" in source
     assert "private AuthoredStateModel()" in source
-    assert 'setState("credits", Double.valueOf("0"));' in source
+    assert 'setState("credits", Double.valueOf("0"), context);' in source
     assert '$mmmArithmetic("+", $mmmRead("credits", context), Double.valueOf("1"))' in source
 
 
@@ -200,3 +202,51 @@ def test_invalid_java_symbol_or_package_fails_closed() -> None:
             _credits_section(),
             package_name="bad-package",
         )
+
+
+def test_generated_player_state_is_isolated_and_survives_persistence(tmp_path):
+    javac, java = shutil.which("javac"), shutil.which("java")
+    if not javac or not java:
+        pytest.skip("JDK required")
+    state = tmp_path / "AuthoredStateModel.java"
+    state.write_text(render_production_state_java(_credits_section(), package_name="proof"))
+    probe = tmp_path / "StateProbe.java"
+    probe.write_text('''package proof;
+public class StateProbe {
+ static void check(boolean value) { if (!value) throw new AssertionError(); }
+ static long read(java.util.Map<String,Object> c) { return ((Number)AuthoredStateModel.getState("credits",c)).longValue(); }
+ public static void main(String[] args) {
+  var a = java.util.Map.<String,Object>of("player", "player-a");
+  var b = java.util.Map.<String,Object>of("player", "player-b");
+  AuthoredStateModel.setState("credits", 7L, a);
+  check(read(a) == 7 && read(b) == 0);
+  AuthoredStateModel.applyUpdate("reward", b);
+  check(read(a) == 7 && read(b) == 1);
+  var forged = java.util.Map.<String,Object>of("player", "player-b", "credits", 999L);
+  check(read(forged) == 1);
+  Object saved = AuthoredStateModel.exportState("credits");
+  AuthoredStateModel.clearScopedState();
+  check(read(a) == 0 && read(b) == 0);
+  AuthoredStateModel.setState("credits", 50L, a);
+  AuthoredStateModel.importState("credits", saved);
+  check(read(a) == 7 && read(b) == 1);
+  AuthoredStateModel.initializeState("player_join", a);
+  check(read(a) == 0 && read(b) == 1);
+  try { AuthoredStateModel.setState("credits", 100L); throw new AssertionError(); }
+  catch (IllegalArgumentException expected) {}
+  AuthoredStateModel.importState("credits", AuthoredStateModel.defaultStateSnapshot("credits", 15L));
+  check(read(a) == 15 && read(b) == 15);
+  AuthoredStateModel.setState("credits", 30L, a);
+  check(read(a) == 30 && read(b) == 15);
+  AuthoredStateModel.clearScopedState();
+  check(read(a) == 0 && read(b) == 0);
+  try { AuthoredStateModel.setState("credits", 100L, java.util.Map.of()); throw new AssertionError(); }
+  catch (IllegalArgumentException expected) {}
+  try { AuthoredStateModel.importState("credits", 100L); throw new AssertionError(); }
+  catch (IllegalArgumentException expected) {}
+ }
+}''')
+    compiled = subprocess.run([javac, "-d", str(tmp_path), str(state), str(probe)], capture_output=True, text=True, timeout=30)
+    assert compiled.returncode == 0, compiled.stderr
+    executed = subprocess.run([java, "-cp", str(tmp_path), "proof.StateProbe"], capture_output=True, text=True, timeout=30)
+    assert executed.returncode == 0, executed.stderr

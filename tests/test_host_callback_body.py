@@ -106,6 +106,21 @@ def test_host_receipt_marks_only_executed_effects_and_is_not_model_writable():
         parse_expression("__mmmHostEffectApplied")
 
 
+def test_model_context_contains_semantic_operations_without_host_receipt_source():
+    router = OperationRouter([
+        {"action": "assign"}, {"target": "target.value", "operator": "=", "value": "1"},
+        {"action": "complete"},
+    ])
+    source = author_callback_body(router, [], data_name="receipt_boundary", frame=frame("boolean"), effect_receipt=True)
+    for _, _, messages in router.calls:
+        context = json.loads(messages[-1]["content"])
+        assert all("__mmmHostEffectApplied" not in statement for statement in context["accepted_host_statements"])
+    assert json.loads(router.calls[0][2][-1]["content"])["accepted_host_statements"] == []
+    assert json.loads(router.calls[-1][2][-1]["content"])["accepted_host_statements"] == ["target.value = 1;"]
+    assert "boolean __mmmHostEffectApplied = false;" in source
+    assert "__mmmHostEffectApplied = true;" in source
+
+
 def test_only_assigning_a_local_value_cannot_complete_a_gameplay_effect():
     router = OperationRouter([
         {"action": "declare"}, {"expression": "0"},
