@@ -76,3 +76,33 @@ def test_model_cannot_add_an_uninspected_site_to_the_candidate_set():
         choose_verified_source_site(Picker("invented#EVENT"), behavior, SYMBOLS)
     with pytest.raises(SourceHookUnavailable, match="custom_source_site_not_resolved"):
         choose_verified_source_site(Picker("SOURCE_REQUIRED"), behavior, SYMBOLS)
+
+
+def test_short_java_occurrence_verbs_remain_searchable():
+    # Attack/use/trading hooks are frequently three-letter methods.
+    # Excluding them meant the planner never even saw the real source site.
+    symbols = {
+        "c": {"kind": "CLASS", "owner": "example.PlayerInteractions"},
+        "use": {"kind": "METHOD", "owner": "example.PlayerInteractions",
+                "name": "useItem", "parameters": ["example.Item"], "return_type": "void",
+                "access": 1},
+        "hit": {"kind": "METHOD", "owner": "example.PlayerInteractions",
+                "name": "hitTarget", "parameters": ["example.Target"], "return_type": "void",
+                "access": 1},
+        "buy": {"kind": "METHOD", "owner": "example.PlayerInteractions",
+                "name": "buy", "parameters": ["int"], "return_type": "void",
+                "access": 1},
+    }
+    for verb, target in (("use", "use"), ("hit", "hit"), ("buy", "buy")):
+        sites = shortlist_verified_sites(
+            {"behavior_id": verb, "trigger": f"Player chooses to {verb} the target"},
+            symbols,
+        )
+        assert target in {row["ref"] for row in sites}
+    # Retaining a short word is candidate retrieval, not permission to invent a
+    # hook: source selection still requires the exact inspected method.
+    with pytest.raises(SourceHookUnavailable, match="custom_source_site_not_resolved"):
+        choose_verified_source_site(
+            Picker("SOURCE_REQUIRED"),
+            {"behavior_id": "buy", "trigger": "Player buys a module"}, symbols,
+        )
