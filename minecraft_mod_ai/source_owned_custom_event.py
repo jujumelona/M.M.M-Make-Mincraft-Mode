@@ -105,7 +105,6 @@ def plan_verified_custom_event(
     ).hexdigest()[:16]
     event_name, mixin_name = "MmmEvent" + digest, "MmmMixin" + digest
     event_owner = package + "." + event_name
-    mixin_owner = package + ".mixin." + mixin_name
     mixin_file = mod_id + ".mmm_" + digest + ".mixins.json"
     args = [site["owner"], *site["arguments"]]
     declarations = ", ".join(
