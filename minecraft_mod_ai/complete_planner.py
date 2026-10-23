@@ -196,7 +196,11 @@ class CompleteGameDesignPlanner:
         # Reject an unexecutable typed UI action before building the content
         # graph or spending hundreds of model calls on a nonexistent mutation.
         # Never replace a presentation-only screen with a fabricated command.
-        from .typed_action_authoring import preflight_ui_action_effects
+        from .typed_action_authoring import (
+            preflight_state_guard_semantics,
+            preflight_ui_action_effects,
+        )
+        preflight_state_guard_semantics(structured_sections)
         preflight_ui_action_effects(structured_sections)
         target_adapter = adapter or getattr(
             self.router, "_mmm_target_adapter", None,
