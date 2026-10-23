@@ -65,6 +65,33 @@ def preflight_state_guard_semantics(sections):
         for index, row in enumerate(model.get(collection, ())):
             visit(row, f"state_model.{collection}[{index}]")
 
+    # Reusing the same state ref on the right of a plain assignment leaves the
+    # world unchanged. Such rows used to pass the typed state schema and later
+    # masquerade as successful gameplay updates.
+    mutation_collections = {
+        "transitions": "mutation",
+        "updates": "mutation",
+        "initialization": "initial_state",
+        "cleanup": "action",
+    }
+    for collection, field in mutation_collections.items():
+        for index, row in enumerate(model.get(collection, ())):
+            if not isinstance(row, Mapping):
+                continue
+            for assignment in row.get(field, ()) or ():
+                if not isinstance(assignment, Mapping):
+                    continue
+                value = assignment.get("value")
+                if (assignment.get("operator", "=") == "="
+                        and isinstance(value, Mapping)
+                        and value.get("kind") == "state_ref"
+                        and value.get("name") == assignment.get("target")):
+                    raise ValueError(
+                        "STATE_IDENTITY_MUTATION: "
+                        f"state_model.{collection}[{index}].{field} "
+                        f"assigns {assignment.get('target')!r} to itself"
+                    )
+
 
 def preflight_ui_action_effects(sections):
     """Reject presentation-only command bodies without a source-owned effect.
