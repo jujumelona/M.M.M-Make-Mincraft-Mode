@@ -810,3 +810,36 @@ def test_production_direct_lowering_preserves_matched_input_effect(monkeypatch):
     assert functions[0]["body"][0]["value"] == {
         "op": "ref", "name": "amount",
     }
+
+
+def test_prose_action_keeps_server_semantics_instead_of_screen_title():
+    from minecraft_mod_ai.typed_action_authoring import author_action_metadata
+
+    original = "Resource_economy_service validates the purchase and changes credits"
+    answers = [{"label": "Ground-mode resource and ship-construction UI"}, {"count": 0}]
+    class Router:
+        def generate_structured_data(self, *args, **kwargs):
+            return answers.pop(0)
+
+    metadata = author_action_metadata(Router(), {
+        "trigger": "Purchase upgrade",
+        "server_action": original,
+        "client_feedback": "Show the shipyard screen",
+    })
+    assert metadata == {"intent": original, "inputs": []}
+    assert not answers
+
+
+def test_production_checks_all_ui_actions_for_source_owned_mutation():
+    from minecraft_mod_ai.typed_action_authoring import preflight_ui_action_effects
+
+    design = sections()
+    rows = design["resources_and_ui"]["specification"]["interactions"]
+    rows[0]["server_action"]["intent"] = "Purchase an upgrade from resource service"
+    preflight_ui_action_effects(design, strict_source=True)
+
+    # The logged design contains a real credits write, but at launch rather
+    # than when the purchase UI is submitted.
+    design["state_model"]["specification"]["updates"][0]["trigger"] = "launch_to_space"
+    with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
+        preflight_ui_action_effects(design, strict_source=True)
