@@ -482,7 +482,14 @@ def _host_lower_ui_action_body(
             if isinstance(row, Mapping):
                 available.append((f"state_model.{concern}[{index}]", row))
 
+    action_trigger = str(record.get("trigger") or "").strip().casefold()
     selected = [(ref, row) for ref, row in available if ref in owned_refs]
+    if any(str(row.get("trigger") or "").strip().casefold() != action_trigger
+           for _ref, row in selected):
+        raise ValueError(
+            "ACTION_HOST_OWNER_TRIGGER_MISMATCH: a runtime owner references "
+            "a state rule belonging to a different UI trigger"
+        )
     if not selected and not owned_refs:
         # Legacy single-action designs have no explicit runtime owner. Only
         # admit an exactly matching, unique state mutation in that case.
@@ -501,6 +508,17 @@ def _host_lower_ui_action_body(
         raise ValueError(
             "ACTION_HOST_LOWERING_UNAVAILABLE: no uniquely assigned canonical "
             "state mutation for this UI action"
+        )
+    # Charging or applying the same persisted transaction twice is never
+    # acceptable. Detect duplicate source rows before lowering.
+    signatures = [
+        json.dumps(row.get("mutation"), sort_keys=True, ensure_ascii=False)
+        for _ref, row in selected
+    ]
+    if len(signatures) != len(set(signatures)):
+        raise ValueError(
+            "ACTION_HOST_DUPLICATE_MUTATION: identical transaction records "
+            "were assigned to the same UI action"
         )
 
     def literal(typ, value):
