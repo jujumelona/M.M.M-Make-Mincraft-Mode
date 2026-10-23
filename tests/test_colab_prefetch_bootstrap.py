@@ -58,3 +58,23 @@ def test_prefetch_bootstrap_is_inert_without_colab_setup(monkeypatch) -> None:
     start(SimpleNamespace())
     assert "MMM_DISCOVERY_WORKERS" not in __import__("os").environ
     assert "MMM_RESEARCH_WORKERS" not in __import__("os").environ
+
+
+def test_discovery_daemon_logging_stops_before_interpreter_shutdown(
+    monkeypatch, capsys, caplog
+) -> None:
+    """A completed pytest process must not crash when a warmup daemon exits late."""
+    import logging
+    import threading
+
+    import minecraft_mod_ai.platform_live_discovery as discovery
+
+    shutdown = threading.Event()
+    monkeypatch.setattr(discovery, "_DISCOVERY_LOG_SHUTDOWN", shutdown)
+    discovery._stop_discovery_background_logs()
+    assert shutdown.is_set()
+
+    with caplog.at_level(logging.WARNING):
+        discovery._emit_discovery_log("late metadata result")
+    assert "late metadata result" not in capsys.readouterr().out
+    assert "late metadata result" not in caplog.text
