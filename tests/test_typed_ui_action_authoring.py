@@ -642,3 +642,102 @@ def test_structured_ui_enum_remains_explicit_and_is_never_replaced_by_model_valu
         "trigger": "Select ship section", "server_action": metadata,
     })
     assert got == metadata
+
+
+def test_repeated_nested_ast_recovers_only_exact_source_owned_ui_mutation(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    calls = []
+
+    def stuck_body(*args, **kwargs):
+        calls.append(kwargs["return_type"])
+        raise ValueError(
+            "TYPED_PLAN_REPEATED_NO_PROGRESS: "
+            "ui_action.action_sample.statement[0].then repeated after 2 statements"
+        )
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        stuck_body,
+    )
+    functions, bindings = author_action_functions(
+        None, "Use a selection form", sections(),
+        typed_host_capability_contracts(), first_index=0,
+    )
+    assert calls == ["int"]
+    assert len(functions) == len(bindings) == 1
+    body = functions[0]["body"]
+    assert body[0]["op"] == "state_set"
+    assert body[0]["key"]["value"] == "amount"
+    assert body[0]["value"] == {"op": "ref", "name": "amount"}
+    assert body[0]["context"]["op"] == "map"
+    assert body[-1] == {
+        "op": "return",
+        "value": {"op": "literal", "type": "int", "value": 1},
+    }
+    validate_typed_plan_ir({
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "0" * 64,
+        "functions": functions,
+        "event_bindings": bindings,
+        "initialize": [],
+    }, capabilities=typed_host_capability_contracts())
+
+
+def test_repeated_ast_never_guesses_missing_or_ambiguous_ui_effect(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+
+    def stuck_body(*args, **kwargs):
+        raise ValueError(
+            "TYPED_PLAN_REPEATED_NO_PROGRESS: ui_action.sample.then"
+        )
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        stuck_body,
+    )
+    for change in ("missing", "ambiguous", "unknown_input"):
+        design = sections()
+        updates = design["state_model"]["specification"]["updates"]
+        if change == "missing":
+            updates.clear()
+        elif change == "ambiguous":
+            updates.append(deepcopy(updates[0]))
+        else:
+            updates[0]["mutation"][0]["value"]["name"] = "not_a_client_input"
+        with pytest.raises(ValueError, match="ACTION_HOST_LOWERING_REQUIRED"):
+            author_action_functions(
+                None, "Use a selection form", design,
+                typed_host_capability_contracts(), first_index=0,
+            )
+
+
+def test_repeated_ast_recovery_preserves_explicit_ui_ownership(monkeypatch):
+    from minecraft_mod_ai.typed_action_authoring import author_action_functions
+    from minecraft_mod_ai.authored_ui_action_bindings import action_record_identity
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
+        lambda *a, **k: (_ for _ in ()).throw(
+            ValueError("TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED: ui_action")
+        ),
+    )
+    design = sections()
+    design["state_model"]["specification"]["updates"].append(
+        deepcopy(design["state_model"]["specification"]["updates"][0])
+    )
+    action = design["resources_and_ui"]["specification"]["interactions"][0]
+    owners = [{
+        "feature_id": "__typed_ui__",
+        "ui_action": action_record_identity(action),
+        "worksheet_record_refs": ["state_model.updates[1]"],
+    }]
+    functions, _ = author_action_functions(
+        None, "Use a selection form", design,
+        typed_host_capability_contracts(), first_index=0,
+        runtime_owners=owners,
+    )
+    assert len(functions) == 1
+    assert [row["op"] for row in functions[0]["body"]] == [
+        "state_set", "return",
+    ]
