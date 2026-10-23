@@ -1115,3 +1115,26 @@ def test_repeated_typed_statements_are_rejected_before_twelve_attempts():
     assert len(model.calls) == 4
     third_request = json.loads(model.calls[2][1][1]["content"])
     assert third_request["body_progress"]["completed_count"] == 1
+
+
+def test_ui_only_metadata_without_mutation_fails_closed():
+    from minecraft_mod_ai.typed_action_authoring import preflight_ui_action_effects
+    ui = {"resources_and_ui": {"specification": {"interactions": [{
+        "trigger": "Open builder screen",
+        "server_action": {"intent": "Ship construction UI", "inputs": []},
+        "client_feedback": "Show available sections",
+    }]}}}
+    ui["state_model"] = {"specification": {
+        "variables": [{"name": "credits", "type": "string"}],
+        "updates": [{"mutation": [{
+            "target": "credits", "operator": "=",
+            "value": {"kind": "state_ref", "name": "credits"},
+        }]}],
+    }}
+    with pytest.raises(ValueError, match="ACTION_DESIGN_NO_EXECUTABLE_EFFECT"):
+        preflight_ui_action_effects(ui)
+    ui["state_model"]["specification"]["updates"][0]["mutation"][0] = {
+        "target": "credits", "operator": "-=",
+        "value": {"kind": "literal", "type": "int", "value": 10},
+    }
+    preflight_ui_action_effects(ui)
