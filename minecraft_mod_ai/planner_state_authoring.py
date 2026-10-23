@@ -145,6 +145,27 @@ def _canonical_state_variable_name(
     )
 
 
+_NUMERIC_STATE_UNITS = frozenset({
+    "credits", "credit", "coins", "coin", "money", "currency",
+    "gold", "xp", "experience_points", "points",
+})
+
+
+def _requires_numeric_state_type(record: Mapping[str, Any]) -> bool:
+    """A declared counting/currency unit cannot be stored as opaque text."""
+    return str(record.get("unit") or "").strip().casefold() in _NUMERIC_STATE_UNITS
+
+
+def _numeric_variable_type_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    result = deepcopy(dict(schema))
+    allowed = tuple(x for x in ("int", "long", "double")
+                    if x in result.get("enum", ("int", "long", "double")))
+    if not allowed:
+        raise ValueError("STATE_VARIABLE_NUMERIC_TYPE_UNSUPPORTED")
+    result["enum"] = list(allowed)
+    return result
+
+
 def _state_scalar_schema(
     concern: str,
     field: str,
@@ -157,6 +178,9 @@ def _state_scalar_schema(
     if concern == "variables" and field == "default":
         family = str(current_row.get("type") or "").strip().casefold()
         return state_variable_default_schema(family)
+    if (concern == "variables" and field == "type"
+            and _requires_numeric_state_type(current_row)):
+        return _numeric_variable_type_schema(result)
     return result
 
 
@@ -380,6 +404,19 @@ def author_state_semantic_page(
                     if on_additional_call is not None:
                         on_additional_call()
                     row.update(author_scalar(field, {**fixed, **row}))
+        if (concern == "variables" and "type" in requested
+                and _requires_numeric_state_type({**fixed, **row})
+                and row.get("type") not in {"int", "long", "double"}):
+            # The unit is often authored on the same page as the type. A small
+            # model may therefore choose 'string' before it has disclosed
+            # 'credits'. Re-author only the now-constrained type rather than
+            # persisting an unusable currency contract.
+            if on_additional_call is not None:
+                on_additional_call()
+            corrected = author_fields(("type",), {**fixed, **row})
+            if corrected.get("type") not in {"int", "long", "double"}:
+                raise ValueError("STATE_VARIABLE_NUMERIC_TYPE_REQUIRED")
+            row["type"] = corrected["type"]
         rows.append(row)
 
     return {concern: rows}
@@ -540,7 +577,14 @@ def _author_condition_left(
     source = str(raw["source"])
     operator = str(raw["operator"])
     if source == "state":
-        left = {"kind": "state_ref", "name": str(raw["state"])}
+        left_name = str(raw["state"])
+        family = _state_variable_value_kind(symbols.variables.get(left_name))
+        if operator in {"<", "<=", ">", ">="} and family != "number":
+            raise ValueError(
+                "STATE_GUARD_NONNUMERIC_ORDERING: "
+                f"{concern}[{index}].{field} orders {left_name!r} ({family})"
+            )
+        left = {"kind": "state_ref", "name": left_name}
     elif source == "context":
         left = {"kind": "context_ref", "name": str(raw["context"])}
     elif source == "true":
@@ -564,10 +608,31 @@ def _author_condition_right(
     current: Mapping[str, Any],
     symbols: StateSymbolTable,
     term_index: int,
+    left: Mapping[str, Any],
+    operator: str,
 ) -> dict[str, Any]:
     declared = sorted(symbols.declared_names)
+    left_name = left.get("name") if left.get("kind") == "state_ref" else None
+    left_family = (
+        _state_variable_value_kind(symbols.variables.get(left_name))
+        if left_name else "unknown"
+    )
+    eligible_states = [
+        name for name in declared
+        if name != left_name
+        and (operator not in {"<", "<=", ">", ">="}
+             or _state_variable_value_kind(symbols.variables.get(name)) == "number")
+        and (left_family == "unknown"
+             or _state_variable_value_kind(symbols.variables.get(name)) == left_family)
+    ]
     sources = ["context", "number", "string", "true", "false", "null"]
-    if declared:
+    if operator in {"<", "<=", ">", ">="}:
+        sources = ["context", "number"]
+    elif left_family == "number":
+        sources.remove("string")
+    elif left_family == "string":
+        sources.remove("number")
+    if eligible_states:
         sources.insert(0, "state")
     kind_schema = {
         "type": "object",
@@ -603,7 +668,7 @@ def _author_condition_right(
     if source == "state":
         value_schema = {
             "type": "object",
-            "properties": {"value": _condition_state_schema(symbols)},
+            "properties": {"value": {"type": "string", "enum": eligible_states}},
             "required": ["value"],
             "additionalProperties": False,
         }
@@ -743,7 +808,14 @@ def _author_state_condition(
                 current=current,
                 symbols=symbols,
                 term_index=term_index,
+                left=left,
+                operator=operator,
             )
+            if left == right:
+                raise ValueError(
+                    "STATE_GUARD_TAUTOLOGY: "
+                    f"{concern}[{index}].{field} term {term_index + 1}"
+                )
             term = {
                 "kind": "compare",
                 "op": operator,
@@ -908,12 +980,15 @@ def _author_mutation_value(
     symbols: StateSymbolTable,
     assignment_index: int,
     target: str,
+    operator: str,
 ) -> dict[str, Any]:
     target_family = _mutation_target_family(symbols, target)
     compatible_states = _mutation_compatible_state_names(
         symbols,
         target_family,
     )
+    if operator == "=":
+        compatible_states = [name for name in compatible_states if name != target]
     sources = _mutation_value_source_choices(
         target_family,
         has_compatible_state=bool(compatible_states),
@@ -1153,6 +1228,7 @@ def _author_state_mutation(
             symbols=symbols,
             assignment_index=assignment_index,
             target=target,
+            operator=str(raw_operator["operator"]),
         )
         result.append(
             {
