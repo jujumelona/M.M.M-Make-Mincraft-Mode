@@ -2652,8 +2652,7 @@ def author_typed_plan_ir(
         typed_ui_functions, typed_ui_bindings = author_action_functions(
             router, source_text, structured_sections, capabilities,
             first_index=len(entry_points) + len(requested_actions),
-            budget=budget, runtime_owners=runtime_owners,
-            prefer_grounded=True)
+            budget=budget, runtime_owners=runtime_owners, prefer_grounded=True)
         event_bindings.extend(typed_ui_bindings)
 
     logic_refs = sorted(
