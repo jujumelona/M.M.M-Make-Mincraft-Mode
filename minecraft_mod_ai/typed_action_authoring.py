@@ -638,6 +638,7 @@ def author_action_functions(
     first_index,
     budget=None,
     runtime_owners=(),
+    prefer_grounded=False,
 ):
     from .authored_structured_design import active_concern_records
     from .authored_ui_action_bindings import action_record_identity
@@ -716,31 +717,42 @@ def author_action_functions(
                 }
             ],
         }
-        try:
-            body = author.body(
-                "ui_action." + identity,
-                env={**{p["name"]: p["type"] for p in parameters}, "action_context": "map"},
-                return_type="int",
-                max_statements=12,
-            )
-        except ValueError as exc:
-            if not str(exc).startswith((
-                "TYPED_PLAN_REPEATED_NO_PROGRESS:",
-                "TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED:",
-            )):
-                raise
-            # Do not re-prompt a stuck small model or silently discard the
-            # incomplete branch. Compile only an existing, unambiguous
-            # source-owned mutation, then apply the same admission checks.
+        body = None
+        if prefer_grounded:
+            # Production: deterministic source-owned mutation first. A scalar
+            # state update does not require hundreds of recursive model calls.
+            # If the owned contract cannot be lowered, retain the existing
+            # bounded authoring route and its strict admission checks.
             try:
                 body = _host_lower_ui_action_body(
                     record, metadata, owned_refs, sections, state_types,
                 )
-            except ValueError as lowering_error:
-                raise ValueError(
-                    "ACTION_HOST_LOWERING_REQUIRED: model AST did not progress; "
-                    + str(lowering_error)
-                ) from exc
+            except ValueError:
+                pass
+        if body is None:
+            try:
+                body = author.body(
+                    "ui_action." + identity,
+                    env={**{p["name"]: p["type"] for p in parameters}, "action_context": "map"},
+                    return_type="int",
+                    max_statements=12,
+                )
+            except ValueError as exc:
+                if not str(exc).startswith((
+                    "TYPED_PLAN_REPEATED_NO_PROGRESS:",
+                    "TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED:",
+                )):
+                    raise
+                # Never accept an incomplete model branch as a valid effect.
+                try:
+                    body = _host_lower_ui_action_body(
+                        record, metadata, owned_refs, sections, state_types,
+                    )
+                except ValueError as lowering_error:
+                    raise ValueError(
+                        "ACTION_HOST_LOWERING_REQUIRED: model AST did not progress; "
+                        + str(lowering_error)
+                    ) from exc
         for node in list(_nodes(body)):
             if node.get("op") == "set" and node.get("name") in {
                 "source",
