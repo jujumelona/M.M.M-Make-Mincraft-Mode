@@ -193,6 +193,11 @@ class CompleteGameDesignPlanner:
             # UI ownership must refer to concrete, stable action identities.
             prior_content_design.pop("_request_runtime_owners", None)
         structured_sections = promoted
+        # Reject an unexecutable typed UI action before building the content
+        # graph or spending hundreds of model calls on a nonexistent mutation.
+        # Never replace a presentation-only screen with a fabricated command.
+        from .typed_action_authoring import preflight_ui_action_effects
+        preflight_ui_action_effects(structured_sections)
         target_adapter = adapter or getattr(
             self.router, "_mmm_target_adapter", None,
         )
