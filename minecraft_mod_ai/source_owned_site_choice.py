@@ -28,8 +28,18 @@ def _words(text: object) -> set[str]:
     # Java occurrence methods include short but meaningful verbs such as
     # use, hit, buy and pay. The old four-character minimum dropped them,
     # making an actual inspected producer invisible to the selection step.
-    return {x for x in re.findall(r"[a-z][a-z0-9]{2,}", raw.lower())
-            if x not in _STOPWORDS and x not in {"the", "and", "for", "are"}}
+    words = {x for x in re.findall(r"[a-z][a-z0-9]{2,}", raw.lower())
+             if x not in _STOPWORDS and x not in {"the", "and", "for", "are"}}
+    # Preserve exact inspected spellings, but also match common inflections:
+    # an intent saying "buys" must not hide a real method called "buy".
+    variants = set(words)
+    for word in words:
+        if len(word) > 3 and word.endswith("s"):
+            variants.add(word[:-1])
+        if len(word) > 5 and word.endswith("ing"):
+            variants.add(word[:-3])
+            variants.add(word[:-3] + "e")
+    return variants
 
 
 def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24) -> list[dict]:
