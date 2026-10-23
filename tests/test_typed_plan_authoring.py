@@ -1152,6 +1152,10 @@ def test_ui_only_metadata_without_mutation_fails_closed(raw_semantic_concerns):
         "target": "credits", "operator": "-=",
         "value": {"kind": "literal", "type": "int", "value": 10},
     }
+    # A real write belonging to another trigger still cannot implement this UI.
+    with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
+        preflight_ui_action_effects(ui)
+    ui["state_model"]["specification"]["updates"][0]["trigger"] = "Open builder screen"
     preflight_ui_action_effects(ui)
 
 

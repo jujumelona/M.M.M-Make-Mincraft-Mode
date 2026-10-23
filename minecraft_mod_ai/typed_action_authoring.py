@@ -14,7 +14,7 @@ import json
 import re
 
 from .typed_action_contract import SCALARS, action_bindings, validate_action_contract
-from .ui_action_source_lowering import _host_lower_ui_action_body
+from .ui_action_source_lowering import _expression, _host_lower_ui_action_body
 
 
 def preflight_state_guard_semantics(sections):
@@ -300,11 +300,27 @@ def _complete_action_input(ask, row, *, count):
     return row
 
 
-def author_action_metadata(router, record, *, budget=None):
-    from .fixed_template_generation import _validate_native_arguments
+_ACTION_INPUT_DECISIONS = {
+    "label": "Name the action or screen. This is not an input field.",
+    "input_count": (
+        "Count only distinct player-supplied values needed by this action. "
+        "Opening a screen does not itself supply a value. Use zero when "
+        "there is no player choice or text/number entry."
+    ),
+    "input_type": (
+        "Define one player-supplied value at input_index. The label names "
+        "that value or choice, never the screen, service, action, displayed "
+        "balance or result. Choose the scalar type of the supplied value."
+    ),
+    "input_bounds": (
+        "Define the minimum and maximum for the one supplied numeric input, "
+        "using its declared type and the action's actual constraints."
+    ),
+}
 
-    if isinstance(record.get("server_action"), Mapping):
-        return validate_action_metadata(record["server_action"])
+
+def _action_input_asker(router, record, budget, state_context, requested_prompt):
+    from .fixed_template_generation import _validate_native_arguments
 
     def ask(name, properties, **context):
         if budget is not None:
@@ -325,12 +341,15 @@ def author_action_metadata(router, record, *, budget=None):
                         "Only values the user actually supplies are client inputs. Currency, prices, "
                         "permissions and world facts remain server-owned. Do not add a different "
                         "gameplay trigger, Java, new features, or a notification-only replacement."
+                        " Current decision: " + _ACTION_INPUT_DECISIONS[name]
                     ),
                 },
                 {
                     "role": "user",
                     "content": json.dumps(
-                        {"interaction": record, **context}, ensure_ascii=False
+                        {"decision": name, "interaction": record,
+                         "requested_prompt": requested_prompt,
+                         "state_context": state_context, **context}, ensure_ascii=False
                     ),
                 },
             ],
@@ -339,6 +358,11 @@ def author_action_metadata(router, record, *, budget=None):
         )
         return _validate_native_arguments(response, schema)
 
+
+    return ask
+
+
+def _author_prose_action_inputs(ask):
     title = ask(
         "label", {"label": {"type": "string", "minLength": 1, "maxLength": 160}}
     )["label"]
@@ -390,11 +414,32 @@ def author_action_metadata(router, record, *, budget=None):
         row = {"name": "input_" + str(len(inputs) + 1), **head}
         row = _complete_action_input(ask, row, count=count)
         inputs.append(row)
-    # The screen title is not the transaction. Preserve the authored
-    # server-side action, otherwise a purchase becomes a presentation-only UI.
-    source_intent = str(record.get("server_action") or "").strip()
+    return title, inputs
+
+
+def author_action_metadata(router, record, *, budget=None, source_sections=None,
+                           requested_prompt=""):
+    if isinstance(record.get("server_action"), Mapping):
+        return validate_action_metadata(record["server_action"])
+    state_context = {}
+    if source_sections is not None:
+        from .authored_structured_design import active_concern_records
+        from .ui_action_input_source import source_action_inputs
+
+        state_context = active_concern_records(source_sections, "state_model")
+        interactions = active_concern_records(source_sections, "resources_and_ui").get("interactions", ())
+        inputs = source_action_inputs(record, state_context, interactions,
+                                      validate_expression=_expression)
+        if inputs is not None:
+            return validate_action_metadata({
+                "intent": str(record.get("server_action") or "").strip(),
+                "inputs": inputs,
+            })
+    ask = _action_input_asker(router, record, budget, state_context, requested_prompt)
+    title, inputs = _author_prose_action_inputs(ask)
+    # The screen title is not the server transaction.
     return validate_action_metadata({
-        "intent": source_intent or title,
+        "intent": str(record.get("server_action") or "").strip() or title,
         "inputs": inputs,
     })
 
@@ -679,7 +724,10 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
     identities = {}
     for row in target_rows:
         old = row["server_action"]
-        row["server_action"] = author_action_metadata(router, row)
+        row["server_action"] = author_action_metadata(
+            router, row, source_sections=plan.structured_sections,
+            requested_prompt=plan.requested_prompt,
+        )
         identities[str(old)] = action_record_identity(row)
     content = deepcopy(plan.content_design)
     owners = content.get("_request_runtime_owners", ())
@@ -744,7 +792,8 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
     )
 
 
-def promote_action_sections(router, sections, *, budget=None, minecraft_version=""):
+def promote_action_sections(router, sections, *, budget=None, minecraft_version="",
+                            requested_prompt=""):
     """Resolve concrete inputs before runtime ownership and function authoring."""
     from .authored_ui_action_bindings import _mutating_ui_actions
 
@@ -767,5 +816,8 @@ def promote_action_sections(router, sections, *, budget=None, minecraft_version=
         .get("specification", {})
         .get("interactions", ())
     ):
-        record["server_action"] = author_action_metadata(router, record, budget=budget)
+        record["server_action"] = author_action_metadata(
+            router, record, budget=budget, source_sections=sections,
+            requested_prompt=requested_prompt,
+        )
     return result

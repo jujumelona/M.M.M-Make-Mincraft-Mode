@@ -6,7 +6,7 @@ SECTION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "behavior_contract": (),
     "state_model": ("behavior_contract",),
     "integration": ("behavior_contract",),
-    "resources_and_ui": ("behavior_contract", "integration"),
+    "resources_and_ui": ("behavior_contract", "integration", "state_model"),
     "algorithm": ("behavior_contract", "state_model"),
     "authority_and_network": ("behavior_contract", "state_model", "integration"),
     "persistence": ("state_model", "integration"),

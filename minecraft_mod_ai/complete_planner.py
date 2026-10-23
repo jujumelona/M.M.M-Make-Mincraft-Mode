@@ -187,7 +187,7 @@ class CompleteGameDesignPlanner:
         validate_typed_host_capability_contracts(capability_contracts)
         target_adapter = adapter or getattr(self.router, "_mmm_target_adapter", None)
         from .typed_action_authoring import promote_action_sections
-        promoted = promote_action_sections(self.router, structured_sections, budget=budget,
+        promoted = promote_action_sections(self.router, structured_sections, budget=budget, requested_prompt=prompt,
                                           minecraft_version=getattr(target_adapter, "minecraft_version", ""))
         if promoted != structured_sections:
             # UI ownership must refer to concrete, stable action identities.
