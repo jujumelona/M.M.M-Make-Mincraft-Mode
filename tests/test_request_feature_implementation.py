@@ -95,3 +95,58 @@ def test_explicit_gui_feature_uses_existing_screen_without_extra_server_class():
         content_jobs=(),
     )
     assert modules == jobs == ()
+
+
+def test_non_executable_context_heading_does_not_spawn_fake_mod_initializer():
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    from minecraft_mod_ai.host_version_catalog import host_target
+
+    plan = AuthoredPlan("Space mod with combat", "Saved", request_scope={
+        "requirements": [
+            {"requirement_id": "scope", "statement": "Space mod", "implementation_role": "gameplay"},
+            {"requirement_id": "combat", "statement": "Fight a hostile creature",
+             "implementation_role": "gameplay"},
+        ],
+        "behavior_requirements": [
+            {"behavior_id": "scope_behavior", "requirement_id": "scope",
+             "source_status": "source_preserved_unresolved",
+             "intent": "Space mod", "source_quote": "Space mod", "effects": "Space mod",
+             "trigger": "", "state_reads": [], "state_writes": []},
+            {"behavior_id": "fight_behavior", "requirement_id": "combat",
+             "source_status": "grounded", "intent": "Fight a hostile creature",
+             "source_quote": "Fight a hostile creature",
+             "trigger": "Player attacks a hostile creature",
+             "effects": "The creature takes damage", "state_reads": [], "state_writes": []},
+        ],
+    })
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=host_target("26.1.2"), mod_id="space", package_name="test.space",
+        content_modules=(), content_jobs=(),
+    )
+    assert len(modules) == len(jobs) == 1
+    assert modules[0].config["requirement_refs"] == ["combat"]
+    assert all("scope" not in module.module_id for module in modules)
+    # The context heading remains in request_scope; it is not a claimed
+    # implemented callback or a disguised gameplay success.
+    assert len(plan.request_scope["requirements"]) == 2
+
+
+def test_only_unresolved_context_is_not_misreported_as_executable():
+    import pytest
+
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    plan = AuthoredPlan("Space mod", "Saved", request_scope={
+        "requirements": [{"requirement_id": "scope", "statement": "Space mod",
+                          "implementation_role": "gameplay"}],
+        "behavior_requirements": [
+            {"behavior_id": "scope_behavior", "requirement_id": "scope",
+             "source_status": "source_preserved_unresolved",
+             "intent": "Space mod", "effects": "Space mod", "trigger": "",
+             "state_reads": [], "state_writes": []},
+        ],
+    })
+    with pytest.raises(ValueError, match="REQUEST_FEATURE_EXECUTABLE_BEHAVIOR_REQUIRED"):
+        compile_request_feature_jobs(
+            plan, adapter=object(), mod_id="space", package_name="test.space",
+            content_modules=(), content_jobs=(),
+        )
