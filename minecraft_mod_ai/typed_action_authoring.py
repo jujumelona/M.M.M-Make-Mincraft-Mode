@@ -11,8 +11,80 @@ from copy import deepcopy
 from dataclasses import replace
 import hashlib
 import json
+import re
 
 from .typed_action_contract import SCALARS, action_bindings, validate_action_contract
+
+
+def preflight_ui_action_effects(sections):
+    """Reject presentation-only command bodies without a source-owned effect.
+
+    A UI label and a typed text field do not define a purchase, craft, trade or
+    launch. The caller must supply an executable state transition or an
+    explicitly owned gameplay capability before the host can author a server
+    command. Reject fabricated self-writes before hundreds of model decisions.
+    """
+    from .authored_structured_design import active_concern_records
+
+    rows = active_concern_records(sections, "resources_and_ui").get(
+        "interactions", ()
+    )
+    state = active_concern_records(sections, "state_model")
+    state_vars = {
+        str(item.get("name")) for item in state.get("variables", ())
+        if isinstance(item, Mapping) and item.get("name")
+    }
+    actual_writes = set()
+    invalid_writes = []
+    for collection in ("updates", "transitions"):
+        for row in state.get(collection, ()):
+            if not isinstance(row, Mapping):
+                continue
+            for mutation in row.get("mutation", ()) or ():
+                if not isinstance(mutation, Mapping):
+                    continue
+                target = mutation.get("target")
+                value = mutation.get("value")
+                same_value = (
+                    mutation.get("operator") == "="
+                    and isinstance(value, Mapping)
+                    and value.get("kind") == "state_ref"
+                    and value.get("name") == target
+                )
+                if target in state_vars and not same_value:
+                    actual_writes.add(str(target))
+                elif same_value:
+                    invalid_writes.append(str(target))
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        action = row.get("server_action")
+        if not isinstance(action, Mapping):
+            continue
+        intent = str(action.get("intent") or "")
+        # A request to display a screen is not yet a server-side transaction.
+        # Keep gameplay commands with explicit action verbs eligible even when
+        # their UI title contains 'menu' or 'panel'.
+        display_noun = re.search(
+            r"\b(?:ui|menu|screen|interface|panel|dialog|window)\b",
+            intent, re.I,
+        )
+        gameplay_verb = re.search(
+            r"\b(?:buy|purchase|sell|trade|mine|craft|build|construct|"
+            r"upgrade|launch|collect|harvest|equip|claim|fight|attack|"
+            r"spawn|create|change|set|save|withdraw|deposit)\b",
+            intent, re.I,
+        )
+        if display_noun and not gameplay_verb and not actual_writes:
+            raise ValueError(
+                "ACTION_DESIGN_NO_EXECUTABLE_EFFECT: "
+                + intent[:160] + "; the server action only names a UI, "
+                "and the state plan has no non-identity mutation "
+                f"(identity_only={sorted(set(invalid_writes))}). "
+                "Regenerate a source-owned action contract with concrete "
+                "server preconditions, authorized target, state change and "
+                "observable result; do not invent a success command."
+            )
 
 
 def _checked_action_target(router, minecraft_version=""):
@@ -308,6 +380,7 @@ def author_action_functions(
     rows = active_concern_records(sections, "resources_and_ui").get("interactions", ())
     state = active_concern_records(sections, "state_model")
     state_types = _extract_state_variable_types(sections)
+    preflight_ui_action_effects(sections)
     functions, bindings = [], []
     for record in rows:
         if not isinstance(record.get("server_action"), Mapping):
