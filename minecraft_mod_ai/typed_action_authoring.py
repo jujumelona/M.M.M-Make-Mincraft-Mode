@@ -696,7 +696,7 @@ def author_action_functions(
                 return super().expression(scope, env, **kwargs)
 
         author = ActionAuthor(
-            router, source_text, sections, capabilities, budget=budget
+            router, source_text, sections, capabilities, budget=budget, max_calls=64
         )
         parameters = [
             {"name": "source", "type": "object"},
@@ -739,7 +739,7 @@ def author_action_functions(
                 )
             except ValueError as exc:
                 if not str(exc).startswith((
-                    "TYPED_PLAN_REPEATED_NO_PROGRESS:",
+                    "TYPED_PLAN_REPEATED_NO_PROGRESS:", "TYPED_PLAN_AUTHORING_LIMIT:",
                     "TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED:",
                 )):
                     raise
