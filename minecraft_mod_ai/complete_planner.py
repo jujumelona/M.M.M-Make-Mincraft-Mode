@@ -201,7 +201,7 @@ class CompleteGameDesignPlanner:
             preflight_ui_action_effects,
         )
         preflight_state_guard_semantics(structured_sections)
-        preflight_ui_action_effects(structured_sections)
+        preflight_ui_action_effects(structured_sections, strict_source=True)
         target_adapter = adapter or getattr(
             self.router, "_mmm_target_adapter", None,
         )
