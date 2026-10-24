@@ -95,6 +95,31 @@ def preflight_state_guard_semantics(sections):
                     )
 
 
+def _effective_state_mutation(mutation, declared):
+    """A source write must demonstrably change an owned canonical state."""
+    if not isinstance(mutation, Mapping) or mutation.get("target") not in declared:
+        return False
+    value = mutation.get("value")
+    if not isinstance(value, Mapping):
+        return False
+    op = mutation.get("operator", "=")
+    if (op == "=" and value.get("kind") == "state_ref"
+            and value.get("name") == mutation.get("target")):
+        return False
+    if op in {"+=", "-=", "*=", "/="} and value.get("kind") in {"literal", "number"}:
+        from decimal import Decimal, InvalidOperation
+        raw = value.get("value")
+        try:
+            numeric = Decimal(str(raw))
+        except (InvalidOperation, ValueError, TypeError):
+            return True  # Rejected separately by the typed state validator.
+        if (op in {"+=", "-="} and numeric == 0) or (
+            op in {"*=", "/="} and numeric == 1
+        ):
+            return False
+    return True
+
+
 def preflight_ui_action_effects(sections, *, strict_source=False):
     """Reject presentation-only command bodies without a source-owned effect.
 
@@ -131,7 +156,7 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
                     and value.get("kind") == "state_ref"
                     and value.get("name") == target
                 )
-                if target in state_vars and not same_value:
+                if _effective_state_mutation(mutation, state_vars):
                     actual_writes.add(str(target))
                 elif same_value:
                     invalid_writes.append(str(target))
@@ -170,7 +195,7 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
             if isinstance(change, Mapping)
             and same_action_source(change, row)
             for mutation in (change.get("mutation") or ())
-            if isinstance(mutation, Mapping)
+            if _effective_state_mutation(mutation, state_vars)
             and mutation.get("target") in actual_writes
         ]
         if not matching_writes and (strict_source or (display_noun and not gameplay_verb)):
