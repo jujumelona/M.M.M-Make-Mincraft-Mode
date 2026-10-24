@@ -116,3 +116,15 @@ def test_presentation_screen_does_not_steal_runtime_owner_for_empty_transition()
     )
     assert assigned == [("state_model.transitions[0]", "shipyard")]
     assert remaining == []
+
+
+def test_logged_completed_section_list_is_read_only_not_a_second_build():
+    design = sections("player opens the completed-section list and inspects the build result")
+    ui = design["resources_and_ui"]["specification"]["interactions"][0]
+    ui["trigger"] = ui["server_action"]
+    design["state_model"]["specification"]["updates"][0]["trigger"] = "craft_section"
+    assert is_presentation_only_interaction(
+        ui, design["state_model"]["specification"]
+    )
+    preflight_ui_action_effects(design, strict_source=True)
+    assert _mutating_ui_actions(design) == ()
