@@ -47,7 +47,7 @@ def test_required_state_write_is_lowered_with_exact_owner_and_before_receipt_ret
     writer = "example.AuthoredStateModel.writeState_credits(19L);"
     assert writer in source
     assert source.index(writer) < source.index("return __mmmHostEffectApplied;")
-    assert router.calls[-1] == "ship_purchase_required_state_credits"
+    assert router.calls[-1] == "ship_purchase_required_state_credits_try_0"
 
 
 def test_missing_declared_state_is_rejected_before_any_model_work():
@@ -83,5 +83,5 @@ def test_model_does_not_choose_writable_state_identifier():
     assert "example.AuthoredStateModel.writeState_credits(21L);" in source
     assert "example.AuthoredStateModel.writeState_ship_level(22L);" in source
     assert router.calls[-2:] == [
-        "two_state_required_state_credits", "two_state_required_state_ship_level",
+        "two_state_required_state_credits_try_0", "two_state_required_state_ship_level_try_0",
     ]
