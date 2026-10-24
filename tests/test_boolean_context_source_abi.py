@@ -87,13 +87,16 @@ def test_non_boolean_constant_is_never_implicitly_coerced():
 def test_nested_guards_migrate_only_reserved_boolean_identifiers():
     design = _design({"kind": "literal", "value": False})
     state = design["state_model"]["specification"]
-    state["updates"][0]["guard"] = {
-        "kind": "compare", "op": "==",
-        "left": {"kind": "state_ref", "name": "launch_to_space"},
-        "right": {"kind": "context_ref", "name": "true"},
-    }
+    state["invariants"] = [{
+        "condition": {
+            "kind": "compare", "op": "==",
+            "left": {"kind": "state_ref", "name": "launch_to_space"},
+            "right": {"kind": "context_ref", "name": "true"},
+        },
+        "enforcement": "Keep the launch flag consistent",
+    }]
     fixed = canonicalize_boolean_context_keywords(design)
-    assert fixed["state_model"]["specification"]["updates"][0]["guard"]["right"] == {
+    assert fixed["state_model"]["specification"]["invariants"][0]["condition"]["right"] == {
         "kind": "literal", "value": True,
     }
     preflight_ui_action_source_abi(fixed, typed_host_capability_contracts())
