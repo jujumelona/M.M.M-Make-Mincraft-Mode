@@ -450,8 +450,8 @@ def test_inspected_callback_never_offers_unverified_receiver_method_pair():
     with pytest.raises(RuntimeError, match="captured"):
         author_callback_body(router, message, data_name="runtime_effect",
                              frame={"kind": "method",
-                                    "prefix": "private void process(example.Target target) {\\n",
-                                    "suffix": "\\n}"})
+                                    "prefix": "private void process(example.Target target) {\n",
+                                    "suffix": "\n}"})
     assert "call" not in router.schema["properties"]["action"]["enum"]
 
 
@@ -470,6 +470,6 @@ def test_verified_fabric_event_registration_is_not_gameplay_effect():
         }],
     })}]
     frame = {"kind": "method",
-             "prefix": "private void run(net.fabricmc.fabric.api.event.Event evt) {\\n",
-             "suffix": "\\n}"}
+             "prefix": "private void run(net.fabricmc.fabric.api.event.Event evt) {\n",
+             "suffix": "\n}"}
     assert verified_callback_choices(evidence, frame) == []
