@@ -75,6 +75,11 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
     identifier(name)
     if not behaviors:
         raise ValueError("RULE_BEHAVIOR_COVERAGE_REQUIRED")
+    # Direct callers must obey the same native mutation routing contract as
+    # the production entrypoint: the rule IR currently proves read paths,
+    # not an actual write on the original Minecraft state owner.
+    if any(row.get("runtime_state_writes") for row in behaviors):
+        raise ValueError("RULE_RUNTIME_MUTATION_REQUIRES_CHECKED_SOURCE_OWNER")
     owner = package + "." + name
     from .construction_operation_context import task_context_bindings
     task_data, _ = task_context_bindings(context)
