@@ -118,15 +118,23 @@ def _unbound_request_actions(sections):
     """
     from .authored_ui_action_bindings import is_presentation_only_interaction
     from .request_record_ownership import SOURCE_REQUIREMENT, same_action_source
+    from .typed_action_authoring import _effective_state_mutation
 
     specs = design.normalize_structured_sections(sections)
     state = specs.get("state_model", {}).get("specification", {})
+    declared = {
+        row.get("name") for row in state.get("variables", ())
+        if isinstance(row, Mapping)
+    }
     interactions = specs.get("resources_and_ui", {}).get(
         "specification", {}).get("interactions", ())
     effects = [
         row for concern in ("updates", "transitions")
         for row in state.get(concern, ())
-        if isinstance(row, Mapping) and row.get("mutation")
+        if isinstance(row, Mapping) and any(
+            _effective_state_mutation(change, declared)
+            for change in (row.get("mutation") or ())
+        )
     ]
     missing = []
     for row in interactions:
