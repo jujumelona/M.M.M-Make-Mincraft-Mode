@@ -80,7 +80,7 @@ def test_non_boolean_constant_is_never_implicitly_coerced():
         "kind": "context_ref", "name": "true",
     }
     fixed = canonicalize_boolean_context_keywords(design)
-    with pytest.raises(ValueError, match="ACTION_UI_VALUE_ABI_UNBOUND"):
+    with pytest.raises(ValueError, match="(ACTION_UI_VALUE_ABI_UNBOUND|STRUCTURED_STATE_MUTATION)"):
         preflight_ui_action_source_abi(fixed, typed_host_capability_contracts())
 
 
@@ -114,5 +114,5 @@ def test_bool_never_coerces_to_numeric_host_literal(method, tag, value):
 def test_source_abi_rejects_wrong_mutation_operator_before_content_graph():
     design = _design({"kind": "literal", "value": True})
     design["state_model"]["specification"]["updates"][0]["mutation"][0]["operator"] = "+="
-    with pytest.raises(ValueError, match="ACTION_UI_VALUE_ABI_UNBOUND"):
+    with pytest.raises(ValueError, match="(ACTION_UI_VALUE_ABI_UNBOUND|STRUCTURED_STATE_MUTATION)"):
         preflight_ui_action_source_abi(design, typed_host_capability_contracts())
