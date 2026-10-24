@@ -66,6 +66,13 @@ def verified_callback_choices(messages, frame, *, predicate=False):
             name = method.get("name")
             if not isinstance(name, str) or re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name) is None:
                 continue
+            # Listener installation belongs to onInitialize. An already-fired
+            # event handler calling Event.register() is neither the requested
+            # gameplay mutation nor a valid execution owner, even if an ABI
+            # method with that name exists in the inspected classpath.
+            if (name == "register" and
+                    owner.startswith("net.fabricmc.fabric.api.")):
+                continue
             arguments = method.get("parameters")
             if not isinstance(arguments, list) or len(arguments) > 3:
                 continue
