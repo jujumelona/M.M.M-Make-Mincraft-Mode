@@ -109,3 +109,10 @@ def test_bool_never_coerces_to_numeric_host_literal(method, tag, value):
     from minecraft_mod_ai import typed_plan_authoring as typed
     with pytest.raises(ValueError, match=f"TYPED_PLAN_LITERAL_{tag}_INVALID"):
         getattr(typed, method)(value, scope="boolean-context-regression")
+
+
+def test_source_abi_rejects_wrong_mutation_operator_before_content_graph():
+    design = _design({"kind": "literal", "value": True})
+    design["state_model"]["specification"]["updates"][0]["mutation"][0]["operator"] = "+="
+    with pytest.raises(ValueError, match="ACTION_UI_VALUE_ABI_UNBOUND"):
+        preflight_ui_action_source_abi(design, typed_host_capability_contracts())
