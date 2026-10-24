@@ -36,6 +36,24 @@ def select_feature_execution_route(
         behavior_id = str(behavior.get("behavior_id") or "")
         if not behavior_id:
             raise ValueError("FEATURE_EXECUTION_BEHAVIOR_ID_REQUIRED")
+        # A native runtime mutation is not a read-only observation.  Typed
+        # Rule currently proves runtime inputs but does not prove that each
+        # requested world/entity/item mutation was emitted. Route the whole
+        # behavior to the host-owned mutation compiler instead of silently
+        # accepting a rule that merely logs or reads the target.
+        for state_name in dict.fromkeys(behavior.get("runtime_state_writes") or ()):
+            if not isinstance(state_name, str) or not state_name.strip():
+                raise ValueError("FEATURE_EXECUTION_RUNTIME_WRITE_NAME_INVALID")
+            obligations.append({
+                "behavior_id": behavior_id,
+                "name": state_name,
+                "reason": "runtime_mutation_requires_verified_effect",
+                "required_action": (
+                    "bind and execute a checked mutating method of the actual "
+                    "Minecraft runtime owner for this state; a host scalar, "
+                    "getter, local assignment or log is not a substitute"
+                ),
+            })
         explicit = str(behavior.get("event_binding") or "")
         if explicit and explicit not in event_ids:
             raise ValueError("FEATURE_EXECUTION_EXPLICIT_HOOK_NOT_INSPECTED: " + explicit)
