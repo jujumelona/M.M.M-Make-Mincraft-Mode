@@ -204,3 +204,39 @@ def test_unbound_non_scalar_parameter_cannot_be_invented_by_small_model():
             frame=verified_frame(), effect_receipt=True,
         )
     assert router.calls == []
+
+
+
+def test_compiler_repair_cannot_drop_a_checked_native_mutation():
+    import hashlib
+
+    from minecraft_mod_ai.runtime_mutation_author import (
+        verify_native_runtime_mutation_coverage,
+    )
+    identity = "native-proof"
+    method = "applyBehavior" + hashlib.sha256(
+        identity.encode("utf-8")).hexdigest()[:20]
+    behavior = [{"behavior_id": identity, "runtime_state_writes": ["Player health"]}]
+    receipt = [{
+        "behavior_id": identity, "state_name": "Player health",
+        "verified_signature": "example.Target#setHealth(float)",
+        "statement": "target.setHealth(6.0f);",
+    }]
+    source = (
+        "package example; class Bridge { private boolean " + method +
+        "(Target target) { target.setHealth(6.0f); return true; } }"
+    )
+    verify_native_runtime_mutation_coverage(source, behavior, receipt)
+    # This source still parses and can compile when Target has both methods,
+    # but it no longer implements the immutable state transition.
+    with pytest.raises(ValueError, match="NATIVE_MUTATION_PROOF_EFFECT_DROPPED"):
+        verify_native_runtime_mutation_coverage(
+            source.replace("target.setHealth(6.0f);", "target.getHealth();"),
+            behavior, receipt,
+        )
+    with pytest.raises(ValueError, match="NATIVE_MUTATION_PROOF_COVERAGE_MISSING"):
+        verify_native_runtime_mutation_coverage(source, behavior, [])
+    with pytest.raises(ValueError, match="NATIVE_MUTATION_PROOF_HANDLER_MISSING"):
+        verify_native_runtime_mutation_coverage(
+            source.replace(method, "otherMethod"), behavior, receipt,
+        )
