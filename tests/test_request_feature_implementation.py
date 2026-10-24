@@ -150,3 +150,88 @@ def test_only_unresolved_context_is_not_misreported_as_executable():
             plan, adapter=object(), mod_id="space", package_name="test.space",
             content_modules=(), content_jobs=(),
         )
+
+
+def test_feature_integration_receives_content_source_even_without_matching_requirement_refs():
+    """Log 34: shipyard GUI existed, but request-specific feature saw no site."""
+    import json
+    from types import SimpleNamespace
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    from minecraft_mod_ai.complete_spec import ProductionModule
+    from minecraft_mod_ai.host_version_catalog import host_target
+
+    plan = AuthoredPlan("Modular spacecraft construction", "Saved", request_scope={
+        "requirements": [{
+            "requirement_id": "ship_builder",
+            "statement": "Place ship sections into a spacecraft",
+            "implementation_role": "gameplay",
+        }],
+        "behavior_requirements": [{
+            "behavior_id": "build_section", "requirement_id": "ship_builder",
+            "intent": "Build modular spacecraft", "source_quote": "Place ship sections",
+            "trigger": "Player confirms ship section selection",
+            "effects": "Builds selected section", "state_reads": [],
+            "state_writes": [],
+        }],
+    })
+    # Content authored before feature decomposition may preserve an unrelated
+    # content entity ID and omit the request requirement_id association.
+    gui = ProductionModule("shipyard_ui", "gui", {
+        "requirement_refs": ["catalog_generated_shipyard"],
+    })
+    item = ProductionModule("spacecraft_parts", "item", {
+        "requirement_refs": [],
+    })
+    gui.validate()
+    item.validate()
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=host_target("26.1.2"), mod_id="space",
+        package_name="test.space",
+        content_modules=(gui, item),
+        content_jobs=(
+            SimpleNamespace(
+                owner_module=gui.module_id,
+                target_path="src/main/java/test/space/ShipyardScreen.java",
+                deterministic_inputs={}, canonical_leaf="",
+            ),
+            SimpleNamespace(
+                owner_module=item.module_id,
+                target_path="src/main/java/test/space/SpacecraftPart.java",
+                deterministic_inputs={}, canonical_leaf="",
+            ),
+        ),
+    )
+    assert set(modules[0].depends_on) == {"shipyard_ui", "spacecraft_parts"}
+    spec = jobs[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]
+    paths = json.loads(spec["bindings"]["content_dependency_paths_json"])
+    assert "src/main/java/test/space/ShipyardScreen.java" in paths
+    assert "src/main/java/test/space/SpacecraftPart.java" in paths
+
+
+def test_integration_source_dependencies_are_not_inferred_from_intent_text():
+    from minecraft_mod_ai.complete_spec import ProductionModule
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    from minecraft_mod_ai.host_version_catalog import host_target
+
+    plan = AuthoredPlan("Explore other dimensions", "Saved", request_scope={
+        "requirements": [{
+            "requirement_id": "explore",
+            "statement": "Explore another dimension",
+            "implementation_role": "gameplay",
+        }],
+        "behavior_requirements": [{
+            "behavior_id": "travel", "requirement_id": "explore",
+            "intent": "Travel", "source_quote": "Explore another dimension",
+            "trigger": "Player enters the portal",
+            "effects": "Player travels", "state_reads": [], "state_writes": [],
+        }],
+    })
+    content = ProductionModule("unrelated_named_owner", "block", {
+        "requirement_refs": ["different_requirement"],
+    })
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=host_target("26.1.2"), mod_id="mods",
+        package_name="test.mod", content_modules=(content,), content_jobs=(),
+    )
+    assert "unrelated_named_owner" in modules[0].depends_on
+    assert len(jobs) == 1
