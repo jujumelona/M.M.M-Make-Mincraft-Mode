@@ -49,7 +49,12 @@ def _callback_type_api(current: Mapping[str, Any]) -> tuple[list[dict], set[str]
         if not isinstance(record, Mapping):
             continue
         name = str(record.get("verified_class") or "")
-        if name not in owners:
+        bridge = record.get("verified_receiver_path")
+        if name not in owners and not (
+            isinstance(bridge, Mapping)
+            and bridge.get("source_type") in owners
+            and bridge.get("destination_type") == name
+        ):
             continue
         members = []
         for original in record.get("members", ()):
@@ -67,6 +72,8 @@ def _callback_type_api(current: Mapping[str, Any]) -> tuple[list[dict], set[str]
             "members": members,
             "member_count": record.get("member_count"),
             "members_truncated": record.get("members_truncated", False),
+            **({"verified_receiver_path": dict(bridge)}
+               if isinstance(bridge, Mapping) else {}),
         })
     return projected, owners
 
