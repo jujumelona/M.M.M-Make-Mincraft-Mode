@@ -32,9 +32,13 @@ INDEX = {
         "return_type": "net.minecraft.world.InteractionResult",
         "parameters": PARAMETERS,
     },
+    "player.class": {
+        "kind": "CLASS", "owner": PARAMETERS[0], "access": 1,
+        "name": "Player",
+    },
     "player.effect": {
         "kind": "METHOD", "owner": PARAMETERS[0], "access": 1,
-        "name": "markVisited", "static": False, "parameters": [],
+        "name": "assembleShipModules", "static": False, "parameters": [],
         "return_type": "void",
     },
 }
@@ -185,7 +189,7 @@ def test_method_reference_and_sam_compile_together(tmp_path):
              " net.minecraft.world.phys.BlockHitResult hit); }"),
         "net/minecraft/world/entity/player/Player.java":
             "package net.minecraft.world.entity.player; public class Player { "
-            "public void markVisited() {} }",
+            "public void assembleShipModules() {} }",
         "net/minecraft/world/level/Level.java":
             "package net.minecraft.world.level; public class Level {}",
         "net/minecraft/world/InteractionHand.java":
