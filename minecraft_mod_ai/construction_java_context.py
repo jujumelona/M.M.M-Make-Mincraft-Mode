@@ -16,7 +16,8 @@ from typing import Any
 _CURRENT_MEMBER_FIELDS = (
     "target_path", "class", "requirement", "side", "implementation_requirements",
     "member_role", "verified_event_callback", "handler_signature",
-    "current_unit_purpose", "assigned_behavior", "assigned_behaviors",
+    "current_unit_purpose", "observed_source_name", "observed_source_task_id",
+    "assigned_behavior", "assigned_behaviors",
     "class_declaration", "owner_type", "owner", "declaration_metadata",
     "host_signature", "declared_member_api", "callback_input_api",
     "host_state_work_order_scope",
