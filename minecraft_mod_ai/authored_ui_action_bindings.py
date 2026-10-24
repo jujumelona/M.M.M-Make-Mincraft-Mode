@@ -34,13 +34,13 @@ def is_presentation_only_interaction(record, state) -> bool:
         r"(?:opens?|views?|displays?|shows?)\s+",
         trigger, re.I,
     )
-    screen = re.search(r"\b(?:screen|menu|panel|window|interface|dialog|gui)\b",
+    screen = re.search(r"\b(?:screen|menu|panel|window|interface|dialog|gui|list|inventory|catalog|catalogue|overview|details)\b",
                        trigger, re.I)
     if not (navigation and screen):
         return False
     if not (intent.casefold() == trigger.casefold() or re.match(
         r"^(?:open|view|display|show)\s+(?:the\s+|a\s+)?"
-        r"(?:screen|menu|panel|window|interface|dialog|gui)\b",
+        r"(?:screen|menu|panel|window|interface|dialog|gui|list|inventory|catalog|catalogue|overview|details)\b",
         intent, re.I,
     )):
         return False
@@ -48,7 +48,7 @@ def is_presentation_only_interaction(record, state) -> bool:
     if re.search(
         r"\b(?:and|then)\s+(?:buy|buys|purchase|purchases|sell|sells|"
         r"craft|crafts|construct|constructs|upgrade|upgrades|"
-        r"launch|launches|equip|equips|change|changes|"
+        r"launch|launches|equip|equips|change|changes|confirm|confirms|"
         r"spend|spends|deduct|deducts|save|saves)\b",
         trigger + " " + intent, re.I,
     ):
