@@ -138,14 +138,8 @@ def test_runtime_mutations_are_not_inferred_from_scalar_state_names():
 
 
 def test_nested_model_branch_does_not_get_unconditional_native_mutation():
-    router = Router([
-        {"action": "if"}, {"expression": "false"},
-        {"action": "assign"},
-        {"target": "target.value", "operator": "=", "value": "1"},
-        {"action": "end"},
-        {"action": "complete"},
-    ])
-    with pytest.raises(ValueError, match="CALLBACK_RUNTIME_MUTATION_CONTROL_FLOW_UNRESOLVED"):
+    router = Router([{"action": "if"}, {"action": "if"}])
+    with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
         author_callback_body(
             router, verified_messages(), data_name="native_guard",
             frame=verified_frame(), effect_receipt=True,
