@@ -562,18 +562,44 @@ def compose_first_pass_java(
             if event:
                 condition = "matchesBehavior" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
                 effect = "applyBehavior" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
+                observer_units = []
+                if source_work_graph is not None:
+                    from .feature_source_work_graph import runtime_observer_methods
+                    for observer in runtime_observer_methods(source_work_graph, behavior_id):
+                        observer_units.append({
+                            "kind": "method", "name": observer["name"],
+                            "purpose": (
+                                "Resolve required runtime observation '"
+                                + observer["source_name"] + "' from the verified "
+                                "event receiver/API. Return true only if the "
+                                "actual observation and prerequisites are satisfied. "
+                                "Do not fabricate state or treat a placeholder "
+                                "null-check as evidence. Required work: "
+                                + observer["required_action"]
+                            ),
+                            "host_condition_behavior": behavior_id,
+                            "host_observer_source_task_id": observer["task_id"],
+                            "host_observer_source_name": observer["source_name"],
+                            "verified_event_callback": event,
+                        })
                 units.extend([
                     {"kind": "method", "name": condition,
                      "purpose": "Test only the original trigger and preconditions: "
                                 + str(row.get("trigger") or row["intent"])
                                 + ". Return boolean; perform no gameplay effects or state mutations.",
                      "host_condition_behavior": behavior_id, "verified_event_callback": event},
+                    *observer_units,
                     {"kind": "method", "name": effect,
-                     "purpose": "Apply only these effects after the host's trigger predicate passed: "
+                     "purpose": "Apply only these effects after all source observations "
+                                "and the host's trigger predicate passed: "
                                 + str(row.get("effects") or row["intent"]),
                      "host_effect_behavior": behavior_id, "verified_event_callback": event},
                 ])
-                dispatch = {"host_condition_method": condition, "host_effect_method": effect}
+                dispatch = {
+                    "host_condition_method": condition,
+                    "host_effect_method": effect,
+                    "host_observer_methods": [unit["name"] for unit in observer_units],
+                }
             units.append({
                 **dispatch,
                 "kind": "method", "name": handler,
@@ -777,6 +803,7 @@ def compose_first_pass_java(
             statement = render_callback_dispatch(
                 host_unit["host_condition_method"], host_unit["host_effect_method"],
                 arguments, results,
+                observers=host_unit.get("host_observer_methods", ()),
             )
             parts["source"] = frame["prefix"] + statement + frame["suffix"]
             return
@@ -819,6 +846,8 @@ def compose_first_pass_java(
                 if item["name"] == selected_host_unit.get("host_behavior_handler")
             ), None),
             "current_unit_purpose": purpose,
+            "observed_source_name": selected_host_unit.get("host_observer_source_name"),
+            "observed_source_task_id": selected_host_unit.get("host_observer_source_task_id"),
             "assigned_behavior": owned_behavior,
             "runtime_state_observations": {
                 key: value for key, value in json.loads(
