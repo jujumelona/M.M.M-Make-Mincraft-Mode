@@ -85,3 +85,23 @@ def test_model_does_not_choose_writable_state_identifier():
     assert router.calls[-2:] == [
         "two_state_required_state_credits_try_0", "two_state_required_state_ship_level_try_0",
     ]
+
+
+
+def test_late_required_state_writer_never_bypasses_an_effect_condition():
+    # Earlier host lowering appended the required mutation after the closing
+    # brace, so an effect hidden behind if(false) still changed canonical
+    # state. Reject the semantic ownership mismatch rather than silently
+    # converting a conditional effect into an unconditional one.
+    router = Router([
+        {"action": "if"}, {"expression": "false"},
+        {"action": "assign"},
+        {"target": "target.amount", "operator": "=", "value": "5"},
+        {"action": "end"}, {"action": "complete"},
+    ])
+    with pytest.raises(ValueError, match="CALLBACK_REQUIRED_STATE_WRITE_CONTROL_FLOW_UNRESOLVED"):
+        author_callback_body(
+            router, [], data_name="conditional_purchase",
+            frame=effect_frame(), effect_receipt=True,
+        )
+    assert not any("required_state_credits" in name for name in router.calls)
