@@ -210,6 +210,85 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
             )
 
 
+def preflight_ui_action_source_abi(sections, capabilities):
+    """Type-check source-owned UI effects before expensive content generation.
+
+    Earlier preflight verified ownership but only the late typed compiler
+    checked whether a purported context_ref really existed in the action's
+    input ABI. A model-generated `context_ref('true')` could therefore run
+    hundreds of unrelated planning calls before failing as a Java identifier.
+    No client field, state value or effect is inferred here.
+    """
+    from .authored_structured_design import active_concern_records
+    from .authored_ui_action_bindings import is_presentation_only_interaction
+    from .typed_plan_authoring import _extract_state_variable_types
+    from .typed_plan_ir import _Validator
+
+    state = active_concern_records(sections, "state_model")
+    state_types = _extract_state_variable_types(sections)
+    validator = _Validator({}, capabilities or {})
+    actions = active_concern_records(sections, "resources_and_ui").get(
+        "interactions", ()
+    )
+    source_rules = (
+        row
+        for concern in ("updates", "transitions")
+        for row in state.get(concern, ())
+        if isinstance(row, Mapping)
+    )
+    rules = tuple(source_rules)
+    for row in actions:
+        if not isinstance(row, Mapping):
+            continue
+        action = row.get("server_action")
+        if (not isinstance(action, Mapping)
+                or is_presentation_only_interaction(row, state)):
+            continue
+        metadata = validate_action_metadata(action)
+        inputs = {item["name"]: item["type"] for item in metadata["inputs"]}
+        for rule in rules:
+            if not same_action_source(rule, row):
+                continue
+            guard = rule.get("guard")
+            if guard is not None:
+                try:
+                    result = _expression(guard, "boolean", inputs, state_types)
+                    typ = validator.expression(
+                        result, inputs, "preflight.ui.guard", "ui_preflight"
+                    )
+                    if typ != "boolean":
+                        raise ValueError("guard must be boolean")
+                except ValueError as exc:
+                    raise ValueError(
+                        "ACTION_UI_GUARD_ABI_UNBOUND: " + str(exc)
+                    ) from exc
+            for mutation in rule.get("mutation", ()) or ():
+                target = mutation.get("target")
+                if target not in state_types:
+                    raise ValueError(
+                        "ACTION_UI_STATE_ABI_UNBOUND: " + str(target)
+                    )
+                try:
+                    expected = state_types[target]
+                    # This is the same expression lowering used for production.
+                    # It cannot turn a missing context field into a constant.
+                    expression = _expression(
+                        mutation.get("value"), expected, inputs, state_types,
+                    )
+                    typ = validator.expression(
+                        expression, inputs, "preflight.ui.value", "ui_preflight"
+                    )
+                    if typ != expected:
+                        raise ValueError(
+                            f"type mismatch: expected {expected}, got {typ}"
+                        )
+                except ValueError as exc:
+                    raise ValueError(
+                        "ACTION_UI_VALUE_ABI_UNBOUND: " + str(exc)
+                    ) from exc
+
+
+
 def _checked_action_target(router, minecraft_version=""):
     version = str(
         minecraft_version
