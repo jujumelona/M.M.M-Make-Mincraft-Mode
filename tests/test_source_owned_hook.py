@@ -122,3 +122,17 @@ def test_unobservable_world_change_requires_real_source_not_arbitrary_event():
             "event_id": "bad#DAMAGE", "parameters": [
                 "net.minecraft.world.entity.LivingEntity"],
         }])
+
+
+def test_explicit_world_transition_cannot_bind_unrelated_damage_abi():
+    behavior = {
+        "behavior_id": "colonize",
+        "trigger": "Player reaches another planet and initiates colonization",
+        "event_binding": "real#AFTER_DAMAGE",
+    }
+    bad = {
+        "event_id": "real#AFTER_DAMAGE",
+        "parameters": ["net.minecraft.world.entity.LivingEntity"],
+    }
+    with pytest.raises(SourceHookUnavailable, match="explicit_hook_cannot_observe_original_occurrence"):
+        choose_source_hook(HookPicker("real#AFTER_DAMAGE"), behavior, [bad])
