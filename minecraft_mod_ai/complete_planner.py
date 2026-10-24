@@ -195,6 +195,7 @@ class CompleteGameDesignPlanner:
         from .typed_action_authoring import (
             preflight_state_guard_semantics,
             preflight_ui_action_effects,
+            preflight_ui_action_source_abi,
             promote_action_sections,
         )
         # Validate executable ownership BEFORE inferring any UI input fields.
@@ -229,6 +230,11 @@ class CompleteGameDesignPlanner:
         # Never replace a presentation-only screen with a fabricated command.
         preflight_state_guard_semantics(structured_sections)
         preflight_ui_action_effects(structured_sections, strict_source=True)
+        # Fail before building a large content graph if the source-owned
+        # UI transaction references an absent/ill-typed player input.
+        preflight_ui_action_source_abi(
+            structured_sections, capability_contracts,
+        )
         target_adapter = adapter or getattr(
             self.router, "_mmm_target_adapter", None,
         )
