@@ -116,3 +116,27 @@ def test_entity_type_requires_concrete_supertype_and_constructor():
         "public AlienCombatHostileEntity(EntityType<?> type, Level level) {} }",
         context, name,
     )
+
+
+def test_feature_requires_materialized_prior_gui_producer_source(tmp_path):
+    from minecraft_mod_ai.request_runtime_records import generated_owner_source_context
+
+    relative = "src/main/java/example/space/ShipyardScreen.java"
+    spec = {"bindings": {
+        "content_dependency_paths_json": json.dumps([relative]),
+        "required_content_source_paths_json": json.dumps([relative]),
+    }}
+    with pytest.raises(ValueError, match="ARTIFACT_REQUIRED_JAVA_SOURCE_NOT_MATERIALIZED"):
+        generated_owner_source_context(tmp_path, spec)
+    file = tmp_path / relative
+    file.parent.mkdir(parents=True)
+    file.write_text(
+        "package example.space; public class ShipyardScreen {"
+        "public void placeSection() {} }",
+        encoding="utf-8",
+    )
+    sources = generated_owner_source_context(tmp_path, spec)
+    assert len(sources) == 1
+    assert sources[0]["path"] == relative
+    assert "placeSection" in sources[0]["public_declarations"]
+    assert sources[0]["authority"] == "materialized_prerequisite_source"
