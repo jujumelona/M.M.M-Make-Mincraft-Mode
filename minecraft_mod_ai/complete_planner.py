@@ -189,10 +189,27 @@ class CompleteGameDesignPlanner:
             preflight_ui_action_effects,
             promote_action_sections,
         )
-        # Do not spend model calls inferring UI form labels for an already
-        # invalid source design. Screen navigation is not a transaction.
+        # Validate executable ownership BEFORE inferring any UI input fields.
+        # When a request-scoped design has an unbound gameplay action, retry
+        # only the originating feature's canonical state rules. The accepted
+        # UI action ledger and all neighboring request features remain fixed.
         preflight_state_guard_semantics(structured_sections)
-        preflight_ui_action_effects(structured_sections, strict_source=True)
+        try:
+            preflight_ui_action_effects(structured_sections, strict_source=True)
+        except ValueError as exc:
+            if (not str(exc).startswith(("ACTION_UI_EFFECT_UNBOUND:",
+                                         "ACTION_DESIGN_NO_EXECUTABLE_EFFECT:"))
+                    or not request_scope.get("requirements")):
+                raise
+            from .request_structured_design import repair_request_action_effects
+
+            structured_sections = repair_request_action_effects(
+                self.router, structured_sections, request_scope,
+                requested_prompt=prompt, media_paths=media_paths,
+                budget=budget,
+            )
+            # The repaired state ledger must never reuse a stale owner.
+            prior_content_design.pop("_request_runtime_owners", None)
         promoted = promote_action_sections(self.router, structured_sections, budget=budget, requested_prompt=prompt,
                                           minecraft_version=getattr(target_adapter, "minecraft_version", ""))
         if promoted != structured_sections:
