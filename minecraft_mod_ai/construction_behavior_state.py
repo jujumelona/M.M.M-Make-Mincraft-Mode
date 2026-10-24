@@ -248,6 +248,62 @@ def _audit_saved_bindings(scope, variables):
         _validate_replayed_binding(reference, prior, variables)
 
 
+def _migrate_legacy_native_scalars(scope, sections):
+    """Repair previous model-authored native clones in saved plans, not just cache.
+
+    Earlier designs persisted health/durability/damage as arbitrary state_* fields.
+    Correct them only if they match the exact host-generated SHA identifier and
+    recorded scalar bytes; never silently delete an explicitly authored variable.
+    """
+    bindings = scope.get("behavior_state_bindings") or {}
+    if not isinstance(bindings, dict):
+        raise ValueError("BEHAVIOR_STATE_SAVED_BINDINGS_INVALID")
+    state = (sections.get("state_model") or {}).get("specification") or {}
+    variables = state.get("variables")
+    if not isinstance(variables, list):
+        return False
+    removed = False
+    for reference, binding in list(bindings.items()):
+        if not _runtime_owned_state_reference(reference):
+            continue
+        if not isinstance(binding, dict):
+            raise ValueError("BEHAVIOR_STATE_SAVED_BINDINGS_INVALID")
+        if binding.get("binding") == "world_state":
+            continue
+        expected_name = "state_" + hashlib.sha256(reference.encode()).hexdigest()[:20]
+        old_name = binding.get("state_name")
+        if (binding.get("binding") != "new_scalar_state"
+                or old_name != expected_name
+                or not isinstance(binding.get("variable"), dict)):
+            raise ValueError("BEHAVIOR_STATE_NATIVE_RUNTIME_OWNER_NOT_SCALAR: " + reference)
+        matching = [row for row in variables if row.get("name") == old_name]
+        if len(matching) != 1 or matching[0] != binding["variable"]:
+            raise ValueError("BEHAVIOR_STATE_NATIVE_SCALAR_MIGRATION_UNSAFE: " + reference)
+        if any(other != reference and record.get("state_name") == old_name
+               for other, record in bindings.items() if isinstance(record, dict)):
+            raise ValueError("BEHAVIOR_STATE_NATIVE_SCALAR_SHARED_OWNER: " + reference)
+        variables.remove(matching[0])
+        for behavior in scope.get("behavior_requirements", ()):
+            for field, runtime_field in (("state_reads", "runtime_state_reads"),
+                                         ("state_writes", "runtime_state_writes")):
+                original = list(behavior.get(field) or ())
+                if old_name not in original:
+                    continue
+                behavior[field] = [item for item in original if item != old_name]
+                behavior[runtime_field] = list(dict.fromkeys(
+                    [*(behavior.get(runtime_field) or ()), reference]))
+        bindings[reference] = {
+            "original_name": reference, "binding": "world_state",
+            "observation": reference,
+            "semantic_status": "host_migrated_native_runtime_owner",
+        }
+        removed = True
+    if removed:
+        validate_structured_state_section(state)
+        scope["behavior_state_bindings"] = bindings
+    return removed
+
+
 def reconcile_behavior_state(router, plan):
     """Return a resolved plan; never mutate the saved user design in place.
 
@@ -260,6 +316,11 @@ def reconcile_behavior_state(router, plan):
     if not behaviors:
         return plan
     sections = deepcopy(plan.structured_sections)
+    if _migrate_legacy_native_scalars(scope, sections):
+        # The original saved plan is left untouched. State-store schema
+        # and migration authority are rebuilt before the early-return path.
+        plan = replace(plan, request_scope=scope, structured_sections=sections,
+                       typed_plan_ir=_rebind_state_stores(plan, sections))
     section = sections.get("state_model") or {"specification": {"variables": []}}
     specification = section.get("specification")
     if not isinstance(specification, dict):
