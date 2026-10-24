@@ -272,7 +272,9 @@ def test_complete_multihop_source_skips_absent_receiver_then_reads_live_values(t
 
     source = compose_rule_feature(SourceRuleRouter(), {
         "side": "COMMON", "target_path": "src/main/java/example/Bridge.java",
-        "bindings": {"runtime_state_bindings_json": json.dumps({"reactor_ready": {"binding": "world_state"}})},
+        # Real materialized source signatures, not a speculative planner label,
+        # are the authority for this concrete receiver→observation path.
+        "bindings": {"runtime_state_bindings_json": "{}"},
     }, {"symbols": symbols, "project_root": str(tmp_path)}, package="example", name="Bridge",
         behaviors=[{"behavior_id": "multihop", "trigger": "Reactor is ready", "effects": "Increment effects",
                     "state_reads": [], "state_writes": [], "runtime_state_reads": ["reactor_ready"]}], state_access=[])
@@ -337,3 +339,43 @@ def test_two_world_inputs_offer_two_complete_entity_presence_sources():
     assert len(paths) == 2
     assert {path["input_index"] for path in paths} == {0, 1}
     assert all(path["entity_owner"] == ALIEN for path in paths)
+
+
+def test_missing_planner_binding_still_uses_inspected_receiver_producer():
+    from minecraft_mod_ai.host_rule_source_plan import (
+        RuntimeSourcePlanner, bind_runtime_sources,
+    )
+    symbols = production_index()
+    symbols["example.Controls"] = {
+        "kind": "CLASS", "owner": "example.Controls", "access": 1}
+    symbols["controls"] = {
+        "kind": "METHOD", "owner": WORLD, "name": "getControls",
+        "access": 1, "parameters": [], "return_type": "example.Controls",
+    }
+    symbols["ready"] = {
+        "kind": "METHOD", "owner": "example.Controls",
+        "name": "isReactorReady", "access": 1, "parameters": [],
+        "return_type": "boolean",
+    }
+    behavior = {"behavior_id": "ready", "runtime_state_reads": ["reactor_ready"]}
+    event = {"event_id": "world", "parameters": [WORLD]}
+    eligible, sources = bind_runtime_sources(
+        behavior, {}, RuntimeSourcePlanner(symbols), [event])
+    assert eligible == [event]
+    assert sources["world"]["reactor_ready"][0]["symbol_refs"] == [
+        "controls", "ready",
+    ]
+
+
+def test_contradictory_explicit_runtime_binding_never_authorizes_a_producer():
+    from minecraft_mod_ai.host_rule_source_plan import (
+        RuntimeSourcePlanner, bind_runtime_sources,
+    )
+    from minecraft_mod_ai.host_rule_provenance import RuleMissingRuntimeProducer
+    with pytest.raises(RuleMissingRuntimeProducer, match="runtime_binding_namespace_conflict"):
+        bind_runtime_sources(
+            {"behavior_id": "conflict", "runtime_state_reads": ["reactor_ready"]},
+            {"reactor_ready": {"binding": "canonical_state"}},
+            RuntimeSourcePlanner(production_index()),
+            [{"event_id": "world", "parameters": [WORLD]}],
+        )
