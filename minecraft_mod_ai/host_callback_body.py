@@ -155,7 +155,7 @@ def _effect_operation(action, code):
     pending = [root]
     while pending:
         node = pending.pop()
-        if node.type == "method_invocation" and action in {"call", "declare"}:
+        if node.type == "method_invocation" and action == "call":
             name_node = node.child_by_field_name("name")
             name = _text(_, name_node) if name_node is not None else ""
             expression = _text(_, node)
@@ -477,7 +477,11 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                 raise
             statements.append(code)
             semantic_statements.append(code)
-            effect_attempted = action in {"call", "assign", "declare"} and _effect_operation(action, code)
+            # A local declaration is an intermediate value, never a
+            # gameplay write. Previously `var temp = player.someMethod()`
+            # could set the host success receipt and terminate the feature
+            # without mutating its requested game state.
+            effect_attempted = action in {"call", "assign"} and _effect_operation(action, code)
             effects += int(effect_attempted)
             if effect_receipt and effect_attempted:
                 statements.append(f"{receipt_name} = true;")
