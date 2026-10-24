@@ -996,6 +996,12 @@ def author_state_repair_section(
     counts = _generate_section_record_counts(
         router, prompt, section="state_model", completed=completed,
     )
+    # The caller retains all original invariants/lifecycle/cleanup records.
+    # Reauthoring and discarding them consumed dozens of model decisions with
+    # no effect on the accepted execution contract.
+    for concern in counts:
+        if concern not in {"variables", "transitions", "updates"}:
+            counts[concern] = 0
     if fixed_state_trigger:
         if not 1 <= len(fixed_state_trigger) <= 128:
             raise ValueError("ACTION_REPAIR_TRIGGER_ABI_INVALID")
