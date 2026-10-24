@@ -53,11 +53,44 @@ def verified_callback_choices(messages, frame, *, predicate=False):
     for kind, name in params:
         inputs.setdefault(kind, []).append(name)
     choices, seen = [], set()
+    api = {
+        row.get("verified_class"): row
+        for row in task["callback_input_api"]
+        if isinstance(row, dict) and isinstance(row.get("verified_class"), str)
+    }
+    # Source owners are discovered by walking *inspected* signatures only.
+    # Do not ask the 9B model to write `player.getWorld()` as an arbitrary
+    # receiver expression. A callback input may provide a verified one-hop
+    # receiver into a Level/inventory/project controller.
     for record in task["callback_input_api"]:
         if not isinstance(record, dict):
             continue
         owner = record.get("verified_class")
-        receivers = inputs.get(owner, ())
+        receivers = list(inputs.get(owner, ()))
+        if not receivers:
+            bridge = record.get("verified_receiver_path")
+            if not isinstance(bridge, dict) or bridge.get("destination_type") != owner:
+                continue
+            source_type, method_name = bridge.get("source_type"), bridge.get("source_method")
+            origin = api.get(source_type, {})
+            if not isinstance(method_name, str) or re.fullmatch(
+                    r"[A-Za-z_$][A-Za-z0-9_$]*", method_name) is None:
+                continue
+            verified = any(
+                row.get("kind") == "METHOD" and row.get("name") == method_name
+                and row.get("return_type") == owner
+                and not row.get("parameters") and not row.get("static")
+                for row in origin.get("members", ())
+                if isinstance(row, dict)
+            )
+            if not verified:
+                continue
+            receivers = [
+                expression + "." + method_name + "()"
+                for expression in inputs.get(source_type, ())
+            ]
+            if receivers:
+                inputs[owner] = receivers
         if not receivers:
             continue
         for method in record.get("members", ()):
