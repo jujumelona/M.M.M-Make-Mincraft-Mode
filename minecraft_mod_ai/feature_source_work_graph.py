@@ -111,6 +111,7 @@ def build_source_work_graph(
         for row in owner_obligations:
             if row.get("reason") in {
                 "occurrence_hook_not_owned", "no_inspected_callback",
+                "runtime_mutation_requires_verified_effect",
                 *before_hook_reasons,
             }:
                 continue
@@ -122,10 +123,34 @@ def build_source_work_graph(
                                       "reason": row.get("reason"),
                                       "required_action": row.get("required_action"),
                                   }))
-        effect = task("gameplay_effect", owner, depends=(hook, *producers), evidence={
+        # Mutations are not runtime *observers*: they must execute in the
+        # effect phase, after occurrence/guard evaluation, on a checked
+        # Minecraft runtime owner. Assign a separate obligation per target
+        # rather than letting a generic successful method call cover all.
+        mutations = []
+        declared_writes = tuple(dict.fromkeys(behavior.get("runtime_state_writes") or ()))
+        for state_name in declared_writes:
+            if not isinstance(state_name, str) or not state_name.strip():
+                raise ValueError("FEATURE_WORK_RUNTIME_MUTATION_NAME_INVALID")
+            obligation = next((
+                row for row in owner_obligations
+                if row.get("reason") == "runtime_mutation_requires_verified_effect"
+                and row.get("name") == state_name
+            ), None)
+            if obligation is None:
+                raise ValueError("FEATURE_WORK_RUNTIME_MUTATION_UNROUTED: " + state_name)
+            mutations.append(task("runtime_mutation", owner, name=state_name,
+                                  depends=(hook, *producers), evidence={
+                                      "state_name": state_name,
+                                      "reason": obligation["reason"],
+                                      "required_action": obligation["required_action"],
+                                      "runtime_verified": False,
+                                  }))
+        effect = task("gameplay_effect", owner, depends=(hook, *producers, *mutations), evidence={
             "intent": str(behavior.get("intent") or ""),
             "effects": str(behavior.get("effects") or ""),
             "source_quote": str(behavior.get("source_quote") or ""),
+            "required_runtime_mutations": list(declared_writes),
         })
         task("event_registration", owner, depends=(hook, effect))
     unknown = set(by_behavior) - behavior_ids
@@ -222,10 +247,10 @@ def member_source_work(graph: Mapping[str, Any], behavior_id: str, *, member_rol
     if role == "register_callback":
         active = {"custom_event_source", "occurrence_hook", "event_registration"}
     elif role in {"implement_callback_effects", "test_callback_condition"}:
-        active = {"custom_event_source", "occurrence_hook", "runtime_producer", "gameplay_effect"}
+        active = {"custom_event_source", "occurrence_hook", "runtime_producer", "runtime_mutation", "gameplay_effect"}
     else:
         active = {"custom_event_source", "occurrence_hook", "runtime_producer",
-                  "gameplay_effect", "event_registration"}
+                  "runtime_mutation", "gameplay_effect", "event_registration"}
     return {
         "schema": "mmm/member-source-work-v1",
         "behavior_id": behavior_id,
