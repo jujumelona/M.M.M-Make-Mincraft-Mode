@@ -26,6 +26,7 @@ def select_feature_execution_route(
         raise ValueError("FEATURE_EXECUTION_BEHAVIORS_REQUIRED")
     from .host_rule_source_plan import RuntimeSourcePlanner, bind_runtime_sources
     from .host_rule_provenance import RuleMissingRuntimeProducer
+    from .source_owned_hook import _event_candidates_for_occurrence
 
     event_ids = {str(row.get("event_id") or "") for row in callbacks}
     planner = RuntimeSourcePlanner(symbols)
@@ -43,8 +44,35 @@ def select_feature_execution_route(
                                 "reason": "no_inspected_callback",
                                 "required_action": "implement and register an actual callback/mixin hook"})
             continue
+        # A real callback that exposes a player or world is not automatically
+        # the occurrence of the requested action. In the captured production
+        # failure, a damage event supplied a world object but never meant
+        # 'player arrives at a new planet'. Apply the same original-trigger
+        # admissibility to Typed Rule and source-owned Java routing.
+        occurrence_callbacks = _event_candidates_for_occurrence(
+            behavior, callbacks,
+        )
+        if explicit and explicit not in {
+            str(event.get("event_id") or "") for event in occurrence_callbacks
+        }:
+            raise ValueError(
+                "FEATURE_EXECUTION_EXPLICIT_HOOK_SEMANTIC_MISMATCH: " + explicit
+            )
+        if not occurrence_callbacks:
+            obligations.append({
+                "behavior_id": behavior_id,
+                "reason": "occurrence_hook_not_owned",
+                "required_action": (
+                    "implement a source-owned occurrence from materialized "
+                    "player interaction/world lifecycle source, not a "
+                    "semantically unrelated Fabric callback"
+                ),
+            })
+            continue
         try:
-            eligible, _ = bind_runtime_sources(behavior, runtime_bindings, planner, callbacks)
+            eligible, _ = bind_runtime_sources(
+                behavior, runtime_bindings, planner, occurrence_callbacks,
+            )
         except RuleMissingRuntimeProducer as error:
             for missing in error.missing:
                 obligations.append({"behavior_id": behavior_id, **dict(missing)})
