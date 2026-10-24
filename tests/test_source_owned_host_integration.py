@@ -95,5 +95,11 @@ def test_source_owned_runtime_producer_work_reaches_typed_handler(monkeypatch):
     assert event["event_owner"] + "." + event["event_field"] + ".register(" in source
     assert "matchesBehavior" in source
     assert "applyBehavior" in source
-    assert len(work_seen) == 2
+    # The host now authors a separate typed method for the missing runtime
+    # observation. Event registration alone cannot satisfy that obligation.
+    from minecraft_mod_ai.feature_source_work_graph import runtime_observer_methods
+    observer_name = runtime_observer_methods(graph, behavior["behavior_id"])[0]["name"]
+    assert observer_name in source
+    assert "this." + observer_name + "(minecraftServer)" in source
+    assert len(work_seen) == 3  # original predicate, observer, gameplay effect
     assert graph["completion_verified"] is False
