@@ -622,7 +622,9 @@ def compose_first_pass_java(
                     {"kind": "method", "name": effect,
                      "purpose": "Apply only these effects after all source observations "
                                 "and the host's trigger predicate passed: "
-                                + str(row.get("effects") or row["intent"]),
+                                + str(row.get("effects") or row["intent"])
+                                + "; required runtime mutations: "
+                                + ", ".join(row.get("runtime_state_writes") or ()),
                      "host_effect_behavior": behavior_id, "verified_event_callback": event},
                 ])
                 dispatch = {
