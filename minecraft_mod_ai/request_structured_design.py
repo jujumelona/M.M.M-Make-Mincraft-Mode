@@ -173,9 +173,7 @@ def repair_request_action_effects(
     keeping all existing UI commands and unrelated request records intact.
     If the result still cannot execute, reject it rather than forging success.
     """
-    from .request_record_ownership import (
-        SOURCE_REQUIREMENT, bind_request_records, source_trigger_identity,
-    )
+    from .request_record_ownership import SOURCE_REQUIREMENT, bind_request_records
     from .typed_action_authoring import (
         preflight_state_guard_semantics, preflight_ui_action_effects,
     )
