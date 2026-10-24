@@ -100,3 +100,33 @@ def test_valid_purchase_requires_no_additional_model_generation(monkeypatch):
     monkeypatch.setattr(design, "author_state_repair_section", forbidden)
     result = repair_request_action_effects(None, source, scope())
     assert result == source
+
+
+@pytest.mark.parametrize("operator,value", [
+    ("+=", "0"), ("-=", "0"), ("*=", "1"), ("/=", "1"),
+])
+def test_noop_cannot_count_as_purchase_effect(operator, value):
+    source = fixture()
+    state = source["state_model"]["specification"]
+    state["updates"][0].update(
+        trigger="buy_ship_component", source_requirement_id="ship",
+    )
+    state["updates"][0]["mutation"][0].update(
+        operator=operator,
+        value={"kind": "number", "value": value},
+    )
+    with pytest.raises(ValueError, match="ACTION_DESIGN_NO_EXECUTABLE_EFFECT"):
+        preflight_ui_action_effects(source, strict_source=True)
+
+
+def test_unrelated_meaningful_write_cannot_hide_same_target_noop():
+    source = fixture()
+    state = source["state_model"]["specification"]
+    state["updates"].append({
+        "owner": "player", "trigger": "buy_ship_component",
+        "source_requirement_id": "ship",
+        "mutation": [{"target": "amount", "operator": "+=",
+                      "value": {"kind": "number", "value": "0"}}],
+    })
+    with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
+        preflight_ui_action_effects(source, strict_source=True)
