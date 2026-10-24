@@ -69,6 +69,18 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24,
         flags = int(row.get("access") or 0)
         if row.get("static") or flags & (8 | 256 | 1024 | 4096):
             continue
+        # A method used to READ an observation is not necessarily the
+        # occurrence that produces it. In production, keyword matching
+        # selected getAvailableSpaceBelow and LWJGL sampleLocationsEnable as
+        # candidate colonization hooks. Restrict occurrence injection to
+        # actual target-game/project methods with action-like signatures.
+        if re.match(r"^(?:get|is|has|can|read|peek)[A-Z_]", name):
+            continue
+        source_path = str(row.get("source_path") or row.get("source_file") or "")
+        if (source_path and not source_path.startswith(
+                ("src/main/java/", "src/client/java/"))
+                and not owner.startswith("net.minecraft.")):
+            continue
         method_words = _words(name)
         owner_words = _words(owner.rsplit(".", 1)[-1])
         method_matches = method_words & words
@@ -81,7 +93,7 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24,
         score = len(method_matches) * 4 + len(owner_matches)
         if score < 4:
             continue
-        source = str(row.get("source_path") or row.get("source_file") or "")
+        source = source_path
         if source.startswith(("src/main/java/", "src/client/java/")):
             score += 3
         matches.append((score, str(ref), {
