@@ -39,7 +39,7 @@ def _event_candidates_for_occurrence(behavior, candidates):
     transition = bool(re.search(
         r"\b(?:reach(?:es|ed)?|arriv(?:es|ed|ing)?|enter(?:s|ed|ing)?|"
         r"travel(?:s|ed|ing)?|chang(?:es|ed|ing)?|switch(?:es|ed|ing)?)\b"
-        r".{0,96}\\b(?:planet|dimension|world|level|location)\b",
+        r".{0,96}\b(?:planet|dimension|world|level|location)\b",
         trigger,
     ))
     if not transition:
