@@ -42,7 +42,8 @@ def _words(text: object) -> set[str]:
     return variants
 
 
-def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24) -> list[dict]:
+def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24,
+                            side="COMMON") -> list[dict]:
     """Include relevant *existing* Java methods, never an invented source owner."""
     words = _words(" ".join(str(behavior.get(key) or "") for key in (
         "trigger", "intent", "source_quote", "effects")))
@@ -56,6 +57,9 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24) -
     matches = []
     for ref, row in symbols.items():
         if not isinstance(row, Mapping) or row.get("kind") != "METHOD":
+            continue
+        # Source-only client screens cannot become COMMON server Mixins.
+        if str(row.get("side") or "COMMON").upper() == "CLIENT" and str(side).upper() != "CLIENT":
             continue
         owner, name = row.get("owner"), row.get("name")
         if (not isinstance(owner, str) or owner not in classes
@@ -90,9 +94,9 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24) -
     return [row for _, _, row in matches[:limit]]
 
 
-def choose_verified_source_site(router, behavior: Mapping, symbols: Mapping) -> str:
+def choose_verified_source_site(router, behavior: Mapping, symbols: Mapping, *, side="COMMON") -> str:
     behavior_id = str(behavior.get("behavior_id") or "")
-    candidates = shortlist_verified_sites(behavior, symbols)
+    candidates = shortlist_verified_sites(behavior, symbols, side=side)
     if not candidates:
         raise SourceHookUnavailable(
             behavior_id, reason="no_relevant_inspected_source_site", inspected=0)
