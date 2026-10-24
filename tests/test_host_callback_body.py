@@ -423,3 +423,53 @@ def test_repeated_model_authored_receipt_switches_to_a_real_effect_operation():
     assert "declare" not in router.calls[3][1]["properties"]["action"]["enum"]
     assert json.loads(router.calls[3][2][-1]["content"])[
         "blocked_non_effect_operations"] == ["declare"]
+
+
+def test_inspected_callback_never_offers_unverified_receiver_method_pair():
+    """Log 34 attempted to fabricate ItemEvents.register(UseOnCallback, ...)."""
+    message = [{"role": "user", "content": json.dumps({
+        "verified_event_callback": {
+            "event_owner": "net.fabricmc.fabric.api.event.player.FakeItemEvents",
+            "parameters": ["example.Target"],
+            "return_type": "void",
+        },
+        # No signed callable mutation from that receiver.
+        "callback_input_api": [{
+            "verified_class": "example.Target",
+            "members": [{"kind": "METHOD", "name": "getValue",
+                         "static": False, "return_type": "int",
+                         "parameters": []}],
+        }],
+    })}]
+    class Capture:
+        schema = None
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            self.schema = parameters
+            raise RuntimeError("captured the host-owned allowed operation enum")
+    router = Capture()
+    with pytest.raises(RuntimeError, match="captured"):
+        author_callback_body(router, message, data_name="runtime_effect",
+                             frame={"kind": "method",
+                                    "prefix": "private void process(example.Target target) {\\n",
+                                    "suffix": "\\n}"})
+    assert "call" not in router.schema["properties"]["action"]["enum"]
+
+
+def test_verified_fabric_event_registration_is_not_gameplay_effect():
+    from minecraft_mod_ai.host_verified_callback_ops import verified_callback_choices
+
+    evidence = [{"role": "user", "content": json.dumps({
+        "verified_event_callback": {"parameters": [
+            "net.fabricmc.fabric.api.event.Event"
+        ]},
+        "callback_input_api": [{
+            "verified_class": "net.fabricmc.fabric.api.event.Event",
+            "members": [{"kind": "METHOD", "name": "register",
+                         "static": False, "return_type": "void",
+                         "parameters": []}],
+        }],
+    })}]
+    frame = {"kind": "method",
+             "prefix": "private void run(net.fabricmc.fabric.api.event.Event evt) {\\n",
+             "suffix": "\\n}"}
+    assert verified_callback_choices(evidence, frame) == []
