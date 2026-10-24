@@ -957,9 +957,54 @@ def author_structured_sections(
     return normalize_structured_sections(completed)
 
 
+def author_state_repair_section(
+    router: Any, prompt: str, *, behavior_contract: Mapping[str, Any],
+    required_action_count: int, shared_state_variables: Sequence[Mapping[str, Any]],
+    budget: Any = None, media_paths: Sequence[str | Path] = (),
+) -> dict[str, Any]:
+    """Reauthor only the failing feature's state worksheet, not nine sections.
+
+    This uses the same bounded state templates as ordinary design generation.
+    The caller retains the approved UI/action ledger and all other sections.
+    """
+    from .model_concurrency import router_native_model_parallelism
+    from .worksheet_atomic_chunker import pack_section_concerns
+
+    if not 1 <= required_action_count <= PLANNER_CONCERN_MAX_RECORDS:
+        raise ValueError(
+            "ACTION_REPAIR_FEATURE_SPLIT_REQUIRED: feature contains "
+            + str(required_action_count)
+            + " unbound commands; decompose the requested actions"
+        )
+    completed = {"behavior_contract": deepcopy(dict(behavior_contract))}
+    if budget is not None:
+        budget.consume("structured.state_model.repair_cardinality")
+    counts = _generate_section_record_counts(
+        router, prompt, section="state_model", completed=completed,
+    )
+    if counts.get("updates", 0) + counts.get("transitions", 0) < required_action_count:
+        # The model cannot silently erase player actions by selecting zero
+        # state rules. Assign the minimum executable rule slots without
+        # choosing their payloads or state semantics for it.
+        counts["updates"] = max(
+            counts.get("updates", 0),
+            required_action_count - counts.get("transitions", 0),
+        )
+    request = _PlannerSectionRequest(
+        router=router, prompt=prompt, section="state_model",
+        completed=completed, media_paths=media_paths,
+        chunks=pack_section_concerns("state_model", record_counts=counts),
+        slots=max(1, router_native_model_parallelism(router, role="planner")),
+        budget=budget, record_counts=counts,
+        shared_state_variables=shared_state_variables,
+    )
+    return {"state_model": _author_section(request, allow_parallel=True)}
+
+
 __all__ = [
     "active_concern_records",
     "author_structured_sections",
+    "author_state_repair_section",
     "normalize_structured_sections",
     "render_structured_sections",
 ]
