@@ -109,6 +109,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     })
     checkpoint = root / ".mmm" / "construction_host_files" / (identifier + ".json")
     candidate = root / ".mmm" / "construction_host_candidates" / (identifier + ".json")
+    proof_path = root / ".mmm" / "construction_host_mutations" / (identifier + ".json")
+    from .runtime_mutation_author import verify_native_runtime_mutation_coverage
+    required_native = any(row.get("runtime_state_writes") for row in behaviors)
+    mutation_receipts = []
     with _claim_checkpoint(checkpoint):
         saved = _read_checkpoint(checkpoint, identifier)
         if saved:
@@ -117,6 +121,14 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             try:
                 _verify_full_source(saved["source"], spec, context,
                     package=package, name=name, source_context=source_context)
+                if required_native:
+                    saved_proof = _read_checkpoint(proof_path, identifier)
+                    if saved_proof.get("source_sha256") != hashlib.sha256(
+                            saved["source"].encode()).hexdigest():
+                        raise ValueError("NATIVE_MUTATION_CHECKPOINT_SOURCE_MISMATCH")
+                    verify_native_runtime_mutation_coverage(
+                        saved["source"], behaviors,
+                        json.loads(saved_proof.get("receipts_json") or "null"))
             except (RuntimeError, ValueError, OSError):
                 # Do not certify an old source after a prerequisite change.
                 pass
@@ -236,6 +248,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         effective_spec["requirement"] = requirement
         try:
             pending = _read_checkpoint(candidate, identifier)
+            if required_native:
+                # A compiler candidate saved before successful source proof is
+                # never trusted to own real mutations on resume. Reconstruct
+                # the checked calls and receipt together, not separately.
+                pending = {}
             if pending:
                 if set(pending) != {"source", "diagnostic"}:
                     raise HostJavaConstructionError("JAVA_HOST_CANDIDATE_INVALID")
@@ -277,6 +294,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             "host_source_owned": bool(
                                 feature_route and feature_route["route"] == "source_owned_java"),
                             "source_owned_work_graph": source_work,
+                            "runtime_mutation_receipts": mutation_receipts,
                         },
                         behaviors=behavior_rows,
                     )
@@ -323,6 +341,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         attempt=attempt + 1,
                     )
                 else:
+                    # A compiler-valid edit may still delete a mandatory
+                    # checked mutation. Re-prove final source after every
+                    # repair and fail closed if a receipt's call disappeared.
+                    if required_native:
+                        verify_native_runtime_mutation_coverage(
+                            source, behavior_rows, mutation_receipts)
                     break
         except (RuntimeError, ValueError, OSError) as exc:
             trace = root / ".mmm" / "construction_host_failures"
@@ -336,6 +360,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         from .construction_coverage import record_authored_source_calls
         record_authored_source_calls(
             root, spec["target_path"], source, source_kind="direct")
+        if required_native:
+            _save_checkpoint(proof_path, identifier, {
+                "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                "receipts_json": json.dumps(
+                    mutation_receipts, ensure_ascii=False, sort_keys=True),
+            })
         _save_checkpoint(checkpoint, identifier, {"source": source})
         candidate.unlink(missing_ok=True)
         print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
