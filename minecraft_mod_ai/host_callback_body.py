@@ -361,6 +361,16 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     statements, blocks, locals_ = [], [], []
     semantic_statements = []
     verified_calls = verified_callback_choices(scoped, frame, predicate=False)
+    # An inspected callback already has a concrete receiver/argument ABI.
+    # Free-form receiver+method JSON cannot be trusted as a gameplay call:
+    # production log 34 invented ItemEvents.register(... UseOnCallback ...).
+    # In this mode only host-assembled, bytecode-indexed call IDs are admitted.
+    evidence_bound = any(
+        isinstance(row, dict) and isinstance(row.get("verified_event_callback"), dict)
+        for message in scoped if message.get("role") == "user"
+        for row in [__import__("json").loads(message.get("content") or "{}")]
+        if isinstance(row, dict)
+    )
     receipt_name = "__mmmHostEffectApplied"
     while receipt_name in frame["prefix"]:
         receipt_name += "_"
@@ -370,7 +380,8 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     blocked_operations: set[str] = set()
     for index in range(64):
         choices = [kind for kind in ("call", "assign", "declare", "if", "while", "foreach")
-                   if kind not in blocked_operations]
+                   if kind not in blocked_operations
+                   and (kind != "call" or verified_calls or not evidence_bound)]
         if blocks:
             choices.append("end")
             if blocks[-1] == "if":
