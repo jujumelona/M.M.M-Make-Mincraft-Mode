@@ -77,9 +77,18 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24,
         if re.match(r"^(?:get|is|has|can|read|peek)[A-Z_]", name):
             continue
         source_path = str(row.get("source_path") or row.get("source_file") or "")
-        if (source_path and not source_path.startswith(
-                ("src/main/java/", "src/client/java/"))
-                and not owner.startswith("net.minecraft.")):
+        provenance = str(row.get("provenance") or "")
+        is_project_method = source_path.startswith(
+            ("src/main/java/", "src/client/java/")
+        )
+        # For custom gameplay, matching a random vanilla/library method name
+        # is not evidence of the original occurrence. Autodiscovery is only
+        # for code actually authored into this project; an explicitly bound,
+        # separately verified vanilla Mixin remains possible through its
+        # precise source_site_ref, never via full-classpath keyword search.
+        if source_path and not is_project_method:
+            continue
+        if provenance and provenance != "materialized_source":
             continue
         method_words = _words(name)
         owner_words = _words(owner.rsplit(".", 1)[-1])
