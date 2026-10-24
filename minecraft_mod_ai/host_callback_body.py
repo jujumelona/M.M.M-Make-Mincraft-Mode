@@ -547,10 +547,22 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     # Resolve the mandatory state ABI before asking the model for ANY
     # free-form operations. Unmaterialized state is a planning defect, not
     # something 64 more small-model attempts can fix.
-    state_slots = _required_state_write_slots(frame)
+    # Only the host-owned effect method is responsible for state mutation.
+    # Observer and predicate helpers for the same behavior must never be
+    # forced to write a state just to finish their own scoped task.
+    state_slots = _required_state_write_slots(frame) if effect_receipt else {}
+    from .runtime_mutation_author import mutation_targets
+    runtime_targets = (mutation_targets(frame.get("host_behavior_contract"))
+                       if effect_receipt else ())
     statements, blocks, locals_ = [], [], []
     semantic_statements = []
     verified_calls = verified_callback_choices(scoped, frame, predicate=False)
+    if runtime_targets and not verified_calls:
+        # This is missing implementation authority, NOT permission to infer
+        # arbitrary Java source or claim success with a disconnected scalar.
+        raise ValueError(
+            "CALLBACK_RUNTIME_MUTATION_VERIFIED_API_UNAVAILABLE: "
+            + ", ".join(runtime_targets))
     # An inspected callback already has a concrete receiver/argument ABI.
     # Free-form receiver+method JSON cannot be trusted as a gameplay call:
     # production log 34 invented ItemEvents.register(... UseOnCallback ...).
@@ -585,7 +597,7 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                 choices.append("else")
         if any(b in {"while", "foreach"} for b in blocks):
             choices.extend(["break", "continue"])
-        if effects and not blocks:
+        if (effects or state_slots or runtime_targets) and not blocks:
             choices.append("complete")
         context = {**correction, "accepted_host_statements": semantic_statements, "host_locals": locals_,
                    "open_blocks": blocks, "next_operation": index,
@@ -602,12 +614,34 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                     receipt_name=receipt_name, effect_receipt=effect_receipt,
                     slots=state_slots,
                 )
+            if runtime_targets:
+                # Appending mutations after an authored branch would silently
+                # execute writes even when its condition was false. This must
+                # become a separate host-authored guarded effect work item,
+                # not a source repair through unconditional invocation.
+                if any(
+                    statement.lstrip().startswith((
+                        "if (", "while (", "for (", "} else", "switch ("))
+                    for statement in semantic_statements
+                ):
+                    raise ValueError(
+                        "CALLBACK_RUNTIME_MUTATION_CONTROL_FLOW_UNRESOLVED: "
+                        + ", ".join(runtime_targets))
+                from .runtime_mutation_author import author_runtime_mutation_calls
+                author_runtime_mutation_calls(
+                    router, scoped, data_name=data_name, frame=frame,
+                    verified_calls=verified_calls, targets=runtime_targets,
+                    statements=completed,
+                    semantic_statements=semantic_statements,
+                    effect_receipt=effect_receipt, receipt_name=receipt_name,
+                )
             if effect_receipt:
                 completed.append(f"return {receipt_name};")
             source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
             if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
                 raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
-            _require_canonical_state_effects(source, frame)
+            if state_slots:
+                _require_canonical_state_effects(source, frame)
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         new_local = f"mmmValue{len(locals_)}"
 
