@@ -50,6 +50,42 @@ def _canonical_targets(reference, variables):
 _BINDING_KINDS = frozenset({"canonical_state", "new_scalar_state", "world_state"})
 
 
+def _runtime_owned_state_reference(reference):
+    """Identify native Minecraft state that MUST stay on its runtime owner.
+
+    Generic state planners previously created independent boolean/number
+    variables for actual health, combat damage, durability, positions and
+    inventories. Those scalars compile yet cannot change a living entity,
+    item stack or server level. This intentionally conservative classifier
+    covers explicit native owner/field pairs, not mod-defined upgrade levels.
+    Unknown concepts still follow the existing semantic binding protocol.
+    """
+    words = set(_identifier_parts(reference))
+    if not words:
+        return False
+    if "hunger" in words or "durability" in words:
+        return True
+    if "position" in words and ({"player", "entity", "world"} & words):
+        return True
+    if "health" in words and ({"player", "alien", "entity", "mob", "living"} & words):
+        return True
+    if "damage" in words and ({"combat", "weapon", "player", "entity", "alien"} & words):
+        return True
+    if "inventory" in words and ({"player", "entity", "weapon"} & words):
+        return True
+    if "mode" in words and "game" in words:
+        return True
+    if "world" in words and ({"current", "active", "resource", "nodes"} & words):
+        return True
+    if "alive" in words and ({"alien", "entity", "mob"} & words):
+        return True
+    if "particles" in words and "combat" in words:
+        return True
+    if "available" in words and "planets" in words:
+        return True
+    return False
+
+
 def _valid_state_owner(owner):
     """Only named runtime identities may own a scalar, not planner/UI prose."""
     return (
@@ -67,6 +103,8 @@ def _validate_replayed_binding(reference, binding, variables):
     if not isinstance(binding, dict) or binding.get("original_name") != reference:
         raise ValueError("BEHAVIOR_STATE_BINDING_SOURCE_MISMATCH")
     kind = binding.get("binding")
+    if _runtime_owned_state_reference(reference) and kind != "world_state":
+        raise ValueError("BEHAVIOR_STATE_NATIVE_RUNTIME_OWNER_NOT_SCALAR: " + reference)
     if kind == "canonical_state":
         targets = _canonical_targets(reference, variables)
         if len(targets) != 1 or binding.get("state_name") != targets[0]:
@@ -139,6 +177,11 @@ def _declare_missing_scalar(router, name, context, variables):
 
 
 def _resolve_unbound_state(router, name, uses, context, variables):
+    if _runtime_owned_state_reference(name):
+        # The owner is a live Minecraft object, not another host-created
+        # scalar. Preserve reads AND writes as explicit runtime obligations.
+        return {"original_name": name, "binding": "world_state",
+                "observation": name, "semantic_status": "host_native_runtime_owner"}
     if not any(use["access"] == "state_writes" for use in uses):
         # Without a canonical declaration or writer, a read-only reference has
         # no source for a fabricated stored value. Preserve it as an explicit
@@ -245,7 +288,7 @@ def reconcile_behavior_state(router, plan):
 
     from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
     checkpoint = BehaviorPlanningCheckpoint(scope, router)
-    identity = _digest({"schema": "mmm/behavior-state-bindings-v4",
+    identity = _digest({"schema": "mmm/behavior-state-bindings-v5",
                         "variables": variables, "behaviors": behaviors})
     path = (checkpoint.root / "state-bindings" / (identity + ".json")
             if checkpoint.enabled else None)
