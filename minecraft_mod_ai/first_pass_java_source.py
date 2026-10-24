@@ -862,6 +862,12 @@ def compose_first_pass_java(
             # admission gate. Compiler-valid writes to another behavior's
             # storage are never an acceptable syntax "repair".
             frame["host_behavior_contract"] = owned_behavior
+            if selected_host_unit.get("host_effect_behavior"):
+                collector = (construction_context or {}).get("runtime_mutation_receipts")
+                if collector is not None:
+                    if not isinstance(collector, list):
+                        raise ValueError("NATIVE_MUTATION_RECEIPT_COLLECTOR_INVALID")
+                    frame["host_runtime_mutation_receipts"] = collector
         body_task = {
             "target_path": task["target_path"],
             "class": class_name,
