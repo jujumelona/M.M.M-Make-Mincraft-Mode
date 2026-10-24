@@ -193,15 +193,21 @@ def test_feature_integration_receives_content_source_even_without_matching_requi
                 owner_module=gui.module_id,
                 target_path="src/main/java/test/space/ShipyardScreen.java",
                 deterministic_inputs={}, canonical_leaf="",
+                produces=("shipyard_ui.source_artifact",),
             ),
             SimpleNamespace(
                 owner_module=item.module_id,
                 target_path="src/main/java/test/space/SpacecraftPart.java",
                 deterministic_inputs={}, canonical_leaf="",
+                produces=("spacecraft_parts.source_artifact",),
             ),
         ),
     )
     assert set(modules[0].depends_on) == {"shipyard_ui", "spacecraft_parts"}
+    # The actual executor uses job.requires; module.depends_on is insufficient.
+    assert set(jobs[0].requires) == {
+        "shipyard_ui.source_artifact", "spacecraft_parts.source_artifact",
+    }
     spec = jobs[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]
     paths = json.loads(spec["bindings"]["content_dependency_paths_json"])
     required = json.loads(spec["bindings"]["required_content_source_paths_json"])
