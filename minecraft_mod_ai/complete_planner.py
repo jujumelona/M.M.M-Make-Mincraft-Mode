@@ -244,6 +244,12 @@ class CompleteGameDesignPlanner:
             target_loader=target_loader,
             source_revision=str(repository_revision().get("git_commit", "")),
         )
+        # A corrected design is durable across interrupted Colab production
+        # attempts. Persist only after both admission checks have passed.
+        # The checkpoint fingerprint includes the source revision and request.
+        if structured_sections != plan.structured_sections:
+            checkpoint.save_sections(structured_sections)
+            print("ACTION_SOURCE_REPAIR_CHECKPOINT: validated design persisted", flush=True)
 
         # Production consumes the authored plan without injecting new features,
         # commands, resources or gameplay mechanics into the user's design.
