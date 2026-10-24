@@ -204,3 +204,21 @@ def member_source_work(graph: Mapping[str, Any], behavior_id: str, *, member_rol
         "source_tasks": [row for row in rows if row.get("kind") in active],
         "require_real_observer_and_registration": True,
     }
+
+
+def requires_original_occurrence_site(graph: Mapping[str, Any], behavior_id: str) -> bool:
+    """Do not confuse missing runtime *data* with a missing occurrence *event*.
+
+    A runtime producer derives data (e.g. visible planets, prerequisites)
+    from a real receiver after an occurrence hook has been selected. A
+    custom Mixin is mandatory only when the occurrence itself has no
+    observed source. Otherwise demanding an arbitrary source-site method
+    conflates two different dependencies and hides legitimate Fabric event
+    receiver types from the author.
+    """
+    return any(
+        task.get("kind") == "custom_event_source"
+        and task.get("behavior_id") == behavior_id
+        and task.get("status") != "verified"
+        for task in graph.get("tasks", ())
+    )
