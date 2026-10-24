@@ -152,3 +152,20 @@ def test_required_state_write_rejects_context_only_overload():
     }]
     with pytest.raises(ValueError, match="CALLBACK_REQUIRED_STATE_ACCESSOR_UNDECLARED"):
         _required_state_write_slots(frame)
+
+
+
+def test_real_prerequisite_header_without_method_body_is_accepted():
+    # java_api_declarations strips bodies and persists a semicolon signature,
+    # not a hand-written full Java method as in most synthetic tests.
+    from minecraft_mod_ai.host_callback_body import _required_state_write_slots
+    frame = effect_frame()
+    frame["host_state_access"][0]["methods"] = [
+        {"name": "writeState_credits",
+         "signature": "public static synchronized void writeState_credits(long value);"},
+        {"name": "writeState_credits",
+         "signature": "public static synchronized void writeState_credits(long value, java.util.Map<String,Object> context);"},
+    ]
+    slots = _required_state_write_slots(frame)
+    assert slots["credits"]["value_type"] == "long"
+    assert slots["credits"]["signature"].endswith("(long value);")
