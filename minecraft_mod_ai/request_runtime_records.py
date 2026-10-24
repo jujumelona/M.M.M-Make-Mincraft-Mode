@@ -94,9 +94,15 @@ def ui_record_action_guards(sections, owners):
 def generated_owner_source_context(project_root, spec, *, required_paths=()):
     """Read only materialized approved sources; required graph edges never vanish."""
     root = Path(project_root).resolve()
-    optional_paths = json.loads(spec.get("bindings", {}).get("content_dependency_paths_json", "[]"))
-    paths = [*optional_paths, *required_paths]
-    required = set(required_paths)
+    bindings = spec.get("bindings", {})
+    optional_paths = json.loads(bindings.get("content_dependency_paths_json", "[]"))
+    source_required = json.loads(bindings.get("required_content_source_paths_json", "[]"))
+    if not isinstance(source_required, list) or any(
+        not isinstance(path, str) for path in source_required
+    ):
+        raise ValueError("RUNTIME_OWNER_REQUIRED_SOURCE_LIST_INVALID")
+    paths = [*optional_paths, *source_required, *required_paths]
+    required = {*source_required, *required_paths}
     readable = []
     for relative in dict.fromkeys(paths):
         path = (root / relative).resolve()
