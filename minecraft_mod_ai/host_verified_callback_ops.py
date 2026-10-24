@@ -61,6 +61,9 @@ def verified_callback_choices(messages, frame, *, predicate=False):
                     and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name)
                     for typ, name in authored_params)
             and [typ for typ, _ in authored_params] == declared):
+        parsed = _callback_parameters(frame)
+        if parsed and parsed != authored_params:
+            return []  # A disagreement with the actual frame is not authority.
         params = authored_params
     else:
         params = _callback_parameters(frame)
