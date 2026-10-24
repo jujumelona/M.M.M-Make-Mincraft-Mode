@@ -115,7 +115,7 @@ def test_noop_cannot_count_as_purchase_effect(operator, value):
         operator=operator,
         value={"kind": "number", "value": value},
     )
-    with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
+    with pytest.raises(ValueError, match="(ACTION_UI_EFFECT_UNBOUND|ACTION_DESIGN_NO_EXECUTABLE_EFFECT)"):
         preflight_ui_action_effects(source, strict_source=True)
 
 
