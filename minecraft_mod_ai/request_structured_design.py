@@ -108,3 +108,156 @@ def author_request_structured_sections(
             checkpoint.save_request_design(feature, variables, sections)
         print("REQUEST_DESIGN: accepted " + str(feature["requirement_id"]), flush=True)
     return completed
+
+
+def _unbound_request_actions(sections):
+    """Find author-owned server operations without a same-trigger state effect.
+
+    UI presentation is not a transaction. Namesake triggers from other
+    requirements are never acceptable evidence of ownership.
+    """
+    from .authored_ui_action_bindings import is_presentation_only_interaction
+    from .request_record_ownership import SOURCE_REQUIREMENT, same_action_source
+
+    specs = design.normalize_structured_sections(sections)
+    state = specs.get("state_model", {}).get("specification", {})
+    interactions = specs.get("resources_and_ui", {}).get(
+        "specification", {}).get("interactions", ())
+    effects = [
+        row for concern in ("updates", "transitions")
+        for row in state.get(concern, ())
+        if isinstance(row, Mapping) and row.get("mutation")
+    ]
+    missing = []
+    for row in interactions:
+        action = row.get("server_action")
+        if not isinstance(action, (str, Mapping)) or not action:
+            continue
+        if is_presentation_only_interaction(row, state):
+            continue
+        if any(same_action_source(effect, row) for effect in effects):
+            continue
+        requirement = row.get(SOURCE_REQUIREMENT)
+        if not isinstance(requirement, str) or not requirement:
+            raise ValueError(
+                "ACTION_REPAIR_SOURCE_UNKNOWN: non-presentation action has "
+                "no original request owner"
+            )
+        missing.append({
+            "source_requirement_id": requirement,
+            "trigger": row.get("trigger", ""),
+            "server_action": deepcopy(action),
+        })
+    return missing
+
+
+def repair_request_action_effects(
+    router, sections, request_scope, *, requested_prompt="", budget=None,
+    media_paths=(),
+):
+    """One bounded, source-preserving semantic repair before code generation.
+
+    The host never supplies or guesses a mutation. It asks the planner to
+    reauthor the *state_model* for each deficient request feature while
+    keeping all existing UI commands and unrelated request records intact.
+    If the result still cannot execute, reject it rather than forging success.
+    """
+    from .request_record_ownership import SOURCE_REQUIREMENT, bind_request_records
+    from .typed_action_authoring import (
+        preflight_state_guard_semantics, preflight_ui_action_effects,
+    )
+
+    original = design.normalize_structured_sections(sections)
+    missing = _unbound_request_actions(original)
+    if not missing:
+        preflight_state_guard_semantics(original)
+        preflight_ui_action_effects(original, strict_source=True)
+        return original
+    features = {
+        row.get("requirement_id"): row
+        for row in request_scope.get("requirements", ())
+        if isinstance(row, Mapping)
+    }
+    unresolved = sorted({row["source_requirement_id"] for row in missing})
+    for requirement_id in unresolved:
+        if requirement_id not in features:
+            raise ValueError(
+                "ACTION_REPAIR_REQUIREMENT_MISSING: " + requirement_id
+            )
+
+    current = deepcopy(original)
+    for requirement_id in unresolved:
+        feature = features[requirement_id]
+        subset = [row for row in missing
+                  if row["source_requirement_id"] == requirement_id]
+        current_state = current.get("state_model", {}).get("specification", {})
+        shared = deepcopy(current_state.get("variables", []))
+        focused = _feature_prompt(
+            str(request_scope.get("requested_prompt") or requested_prompt),
+            feature, shared,
+        )
+        focused += (
+            "\n\nMANDATORY EXECUTION CONTRACT REPAIR (one attempt):\n"
+            "These EXACT pre-existing UI actions were already approved. "
+            "Do not omit, rename, replace, or create commands for them. "
+            "For each non-presentation action, author an actual canonical "
+            "state_model.update or transition with precisely the same "
+            "trigger and source requirement. Define genuinely necessary "
+            "state variables and all guards/atomic mutations. Currency, "
+            "resources, upgrades and inventory must be server-authoritative. "
+            "An unrelated launch/mining update, an identity assignment or "
+            "a zero-valued effect is not an implementation. Opening a UI "
+            "screen alone requires no state mutation. Do not introduce "
+            "unrequested mechanics. Failed inputs:\n"
+            + json.dumps(subset, ensure_ascii=False, sort_keys=True)
+            + "\nExisting canonical request state:\n"
+            + json.dumps(current_state, ensure_ascii=False, sort_keys=True)
+        )
+        print(
+            "ACTION_SOURCE_REPAIR: request=" + requirement_id
+            + " unbound_actions=" + str(len(subset)), flush=True,
+        )
+        candidate = design.author_structured_sections(
+            router, focused, media_paths=media_paths, budget=budget,
+            shared_state_variables=shared,
+        )
+        candidate = bind_request_records(candidate, requirement_id)
+        candidate_state = candidate.get("state_model", {}).get(
+            "specification", {})
+        repaired = deepcopy(current)
+        if "state_model" not in repaired:
+            repaired["state_model"] = {
+                "constraint_evidence_refs": [], "specification": {
+                    **{name: [] for name in DETAIL_RECORDS["state_model"]},
+                    "inapplicable_concerns": [],
+                },
+            }
+        target = repaired["state_model"]["specification"]
+        target["variables"] = merge_state_definitions(
+            target.get("variables", []), candidate_state.get("variables", []),
+        )
+        for concern in ("transitions", "updates"):
+            target[concern] = [
+                row for row in target.get(concern, ())
+                if row.get(SOURCE_REQUIREMENT) != requirement_id
+            ] + deepcopy(candidate_state.get(concern, []))
+        repaired = design.normalize_structured_sections(repaired)
+        # Do not silently accept a regenerated feature that omitted a
+        # previously approved command. We never modify the UI ledger.
+        current = repaired
+
+    try:
+        preflight_state_guard_semantics(current)
+        preflight_ui_action_effects(current, strict_source=True)
+    except ValueError as error:
+        raise ValueError(
+            "ACTION_SOURCE_REPAIR_EXHAUSTED: the model failed to author "
+            "the source-owned state effects after one attempt per "
+            "requirement; no unrelated state writes accepted. "
+            + str(error)
+        ) from error
+    print(
+        "ACTION_SOURCE_REPAIR: validated requirements="
+        + ",".join(unresolved), flush=True,
+    )
+    return current
