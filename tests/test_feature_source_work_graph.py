@@ -180,3 +180,29 @@ def test_real_missing_occurrence_requires_source_even_when_data_is_known():
         inspected_hooks=[{"event_id": "verified#OTHER"}],
     )
     assert requires_original_occurrence_site(graph, "build")
+
+
+def test_observer_slots_are_deterministic_distinct_and_keep_source_concepts():
+    from minecraft_mod_ai.feature_source_work_graph import runtime_observer_methods
+    behaviors = [{
+        "behavior_id": "colonize",
+        "trigger": "Player reaches a planet and initiates colonization",
+    }]
+    obligations = [
+        {"behavior_id": "colonize", "name": "Available planets",
+         "reason": "no_inspected_semantic_source"},
+        {"behavior_id": "colonize", "name": "Colonization prerequisites",
+         "reason": "no_inspected_semantic_source"},
+    ]
+    graph = build_source_work_graph(
+        behaviors, producer_obligations=obligations,
+        inspected_hooks=[{"event_id": "real#AFTER_PLAYER_CHANGE_LEVEL"}],
+    )
+    slots = runtime_observer_methods(graph, "colonize")
+    assert {row["source_name"] for row in slots} == {
+        "Available planets", "Colonization prerequisites"}
+    assert len({row["name"] for row in slots}) == 2
+    assert all(row["name"].startswith("observeRuntime") and
+               row["name"].isidentifier() for row in slots)
+    assert slots == runtime_observer_methods(graph, "colonize")
+    assert runtime_observer_methods(graph, "other") == []
