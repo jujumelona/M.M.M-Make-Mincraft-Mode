@@ -160,6 +160,7 @@ def compile_request_feature_jobs(
         bindings["target_contract_json"] = json.dumps(adapter.version_context.to_dict().get("target", {}), separators=(",", ":"))
         declarations = []
         source_paths = []
+        java_producer_paths = []
         producer_ports = []
         if runtime_modules:
             source_paths.extend(f"src/main/java/{package_name.replace('.', '/')}/{name}.java"
@@ -170,6 +171,7 @@ def compile_request_feature_jobs(
             target_path = getattr(job, "target_path", "")
             if target_path.endswith(".java"):
                 source_paths.append(target_path)
+                java_producer_paths.append(target_path)
                 producer_ports.extend(getattr(job, "produces", ()) or ())
                 relative = target_path.split("/java/", 1)[-1]
                 path = PurePosixPath(relative)
@@ -183,25 +185,16 @@ def compile_request_feature_jobs(
                 specification = canonical_specification_input(job.canonical_leaf, canonical_inputs)
                 if specification.get("language") == "java":
                     source_paths.append(specification["target_path"])
+                    java_producer_paths.append(specification["target_path"])
                     producer_ports.extend(getattr(job, "produces", ()) or ())
                     known = specification.get("bindings", {})
                     declarations.append({key: known[key] for key in (
                         "package_name", "class_name", "registry_path", "fact_type",
                     ) if key in known})
-        # These are concrete completed Java artifact dependencies, not
-        # optional "nearby" files. A missing source means a scheduling/port
-        # handoff defect; silently continuing would force the small model
-        # to invent an API or nonexistent Fabric callback.
+        # Concrete producer paths include generator canonical inputs, whose
+        # ArtifactJob.target_path is often intentionally empty.
         bindings["required_content_source_paths_json"] = json.dumps(
-            list(dict.fromkeys(
-                str(getattr(job, "target_path", ""))
-                for job in content_jobs
-                if job.owner_module in module.depends_on
-                and str(getattr(job, "target_path", "")).startswith(
-                    ("src/main/java/", "src/client/java/")
-                )
-                and str(getattr(job, "target_path", "")).endswith(".java")
-            )), separators=(",", ":"),
+            list(dict.fromkeys(java_producer_paths)), separators=(",", ":"),
         )
         artifact_owners = {job.owner_module for job in content_jobs}
         for owner in prerequisite_modules:
