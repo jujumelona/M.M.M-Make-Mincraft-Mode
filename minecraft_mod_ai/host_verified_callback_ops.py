@@ -152,3 +152,132 @@ def verified_callback_choices(messages, frame, *, predicate=False):
                     "return_type": method.get("return_type"),
                 })
     return choices[:32]
+
+
+def verified_runtime_mutation_candidates(messages, frame):
+    """Expose grounded receiver+method ABIs with typed *value* holes.
+
+    A Fabric callback rarely provides `float damage` or `int amount` as a
+    direct parameter. The old bound-call-only menu silently lost methods like
+    `setHealth(float)` even if indexed on the real callback's player receiver.
+    This catalog lets a separate host slot author such scalar values while
+    keeping method identity, receiver and argument count immutable.
+    """
+    task = None
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        try:
+            row = json.loads(message.get("content") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(row, dict) and isinstance(row.get("verified_event_callback"), dict):
+            task = row
+    if task is None or not isinstance(task.get("callback_input_api"), list):
+        return []
+    declared = task["verified_event_callback"].get("parameters", [])
+    metadata = task.get("declaration_metadata") or {}
+    typed = metadata.get("parameters") or ()
+    authoritative = [
+        (row.get("type"), row.get("name"))
+        for row in typed if isinstance(row, dict)
+    ]
+    parsed = _callback_parameters(frame)
+    if (len(authoritative) == len(declared)
+            and [kind for kind, _ in authoritative] == declared
+            and all(isinstance(name, str) and re.fullmatch(
+                r"[A-Za-z_$][A-Za-z0-9_$]*", name) for _, name in authoritative)):
+        if parsed and parsed != authoritative:
+            return []
+        params = authoritative
+    else:
+        params = parsed
+    if [kind for kind, _ in params] != declared:
+        return []
+
+    inputs: dict[str, list[str]] = {}
+    for kind, name in params:
+        inputs.setdefault(kind, []).append(name)
+    apis = {
+        row.get("verified_class"): row
+        for row in task["callback_input_api"]
+        if isinstance(row, dict) and isinstance(row.get("verified_class"), str)
+    }
+    scalar_types = {
+        "boolean", "byte", "short", "char", "int", "long", "float", "double",
+        "java.lang.String", "String",
+        "java.lang.Boolean", "java.lang.Integer", "java.lang.Long",
+        "java.lang.Float", "java.lang.Double",
+    }
+    forbidden = {
+        "equals", "hashCode", "toString", "compareTo", "contains",
+        "containsKey", "containsValue", "size", "length", "iterator",
+        "stream", "spliterator", "clone", "copy", "matches",
+    }
+    candidates, seen = [], set()
+    for record in task["callback_input_api"]:
+        if not isinstance(record, dict):
+            continue
+        owner = record.get("verified_class")
+        if not isinstance(owner, str):
+            continue
+        receivers = list(inputs.get(owner, ()))
+        if not receivers:
+            bridge = record.get("verified_receiver_path")
+            if isinstance(bridge, dict) and bridge.get("destination_type") == owner:
+                start, method = bridge.get("source_type"), bridge.get("source_method")
+                declared_owner = apis.get(start, {})
+                if isinstance(method, str) and re.fullmatch(
+                    r"[A-Za-z_$][A-Za-z0-9_$]*", method
+                ) and any(
+                    isinstance(row, dict) and row.get("kind") == "METHOD"
+                    and row.get("name") == method
+                    and row.get("return_type") == owner
+                    and not row.get("parameters") and not row.get("static")
+                    for row in declared_owner.get("members", ())
+                ):
+                    receivers = [
+                        source + "." + method + "()"
+                        for source in inputs.get(start, ())
+                    ]
+                    if receivers:
+                        inputs[owner] = receivers
+        if not receivers:
+            continue
+        for row in record.get("members", ()):
+            if not isinstance(row, dict) or row.get("kind") != "METHOD" or row.get("static"):
+                continue
+            name = row.get("name")
+            if (not isinstance(name, str) or not re.fullmatch(
+                    r"[A-Za-z_$][A-Za-z0-9_$]*", name)
+                    or name.startswith(("get", "is", "has", "can", "should", "read", "peek"))
+                    or name in forbidden):
+                continue
+            if name == "register" and owner.startswith("net.fabricmc.fabric.api."):
+                continue
+            arguments = row.get("parameters")
+            if not isinstance(arguments, list) or len(arguments) > 4:
+                continue
+            # Non-scalar parameters must already be real callback inputs.
+            # Scalar value slots are bounded and type checked at compilation.
+            if any(kind not in inputs and kind not in scalar_types for kind in arguments):
+                continue
+            args = [
+                {"type": kind, "expression": (inputs[kind][0] if inputs.get(kind) else None)}
+                for kind in arguments
+            ]
+            signature = owner + "#" + name + "(" + ", ".join(arguments) + ")"
+            for receiver in receivers:
+                identity = (receiver, signature)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                candidates.append({
+                    "id": "m" + str(len(candidates)),
+                    "receiver": receiver, "name": name, "signature": signature,
+                    "arguments": args,
+                    "return_type": row.get("return_type"),
+                })
+                if len(candidates) >= 64:
+                    return candidates
+    return candidates
