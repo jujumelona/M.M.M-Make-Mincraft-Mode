@@ -14,7 +14,7 @@ import json
 import re
 
 from .typed_action_contract import SCALARS, action_bindings, validate_action_contract
-from .ui_action_source_lowering import _expression, _host_lower_ui_action_body
+from .ui_action_source_lowering import _expression, _host_lower_ui_action_body, _mutation_writes
 from .request_record_ownership import same_action_source
 
 
@@ -270,13 +270,14 @@ def preflight_ui_action_source_abi(sections, capabilities):
                     )
                 try:
                     expected = state_types[target]
-                    # This is the same expression lowering used for production.
-                    # It cannot turn a missing context field into a constant.
-                    expression = _expression(
-                        mutation.get("value"), expected, inputs, state_types,
-                    )
+                    # Validate the COMPLETE production write, including its
+                    # operator, rather than checking just the right-hand value.
+                    # This cannot silently invent an input or bypass a bad op.
+                    write = _mutation_writes(
+                        "preflight.ui", [mutation], inputs, state_types,
+                    )[0]
                     typ = validator.expression(
-                        expression, inputs, "preflight.ui.value", "ui_preflight"
+                        write["value"], inputs, "preflight.ui.value", "ui_preflight"
                     )
                     if typ != expected:
                         raise ValueError(
