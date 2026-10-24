@@ -89,3 +89,31 @@ def test_unknown_runtime_source_cannot_use_rule_even_if_trigger_is_present():
     assert result["route"] == "source_owned_java"
     assert any(row.get("name") == "selected_section"
                for row in result["producer_obligations"])
+
+
+def test_planet_colonization_not_routed_through_damage_event_even_with_world_data():
+    """The source itself must produce the occurrence, not merely a world handle."""
+    from minecraft_mod_ai.feature_execution_route import select_feature_execution_route
+    player = "net.minecraft.server.level.ServerPlayer"
+    world = "net.minecraft.server.level.ServerLevel"
+    damage = {
+        "event_id": "net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents#AFTER_DAMAGE",
+        "parameters": [player, world],
+    }
+    symbols = {
+        player: {"kind": "CLASS", "owner": player, "access": 1},
+        world: {"kind": "CLASS", "owner": world, "access": 1},
+        "read": {"kind": "METHOD", "owner": world, "name": "getAvailablePlanets",
+                 "access": 1, "parameters": [], "return_type": "int"},
+    }
+    behavior = {
+        "behavior_id": "colonization",
+        "trigger": "Player reaches a planet and initiates colonization",
+        "runtime_state_reads": ["available_planets"],
+    }
+    choice = select_feature_execution_route(
+        [behavior], {}, symbols, [damage])
+    assert choice["route"] == "source_owned_java"
+    assert any(row["reason"] == "occurrence_hook_not_owned"
+               for row in choice["producer_obligations"])
+    assert not choice["verified_behavior_ids"]
