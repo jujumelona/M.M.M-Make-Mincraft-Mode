@@ -139,3 +139,29 @@ def test_exact_context_preflight_projects_member_before_budget_is_exhausted(monk
     assert result.messages != request.messages
     task = json.loads(result.messages[-1]["content"])
     assert len(task["host_state_access"][0]["methods"]) == 2
+
+
+def test_observer_source_identity_survives_bounded_java_prompt_projection():
+    frame = {
+        "kind": "method", "prefix": "private boolean observeRuntimeabcd(Player player) {\n",
+        "suffix": "\n}",
+    }
+    source = {"kind": "runtime_producer", "name": "Available planets",
+              "status": "pending"}
+    task = {
+        "response_source_frame": frame,
+        "member_role": "test_callback_condition",
+        "observed_source_name": "Available planets",
+        "observed_source_task_id": "runtime_producer:abcd",
+        "source_owned_work": {"source_tasks": [source]},
+        "assigned_behavior": {"behavior_id": "colonize", "state_reads": [],
+                              "state_writes": []},
+        "declaration_metadata": {"parameters": [
+            {"name": "player", "type": "Player"}]},
+    }
+    messages = scoped_java_member_messages(
+        [{"role": "user", "content": json.dumps(task)}], frame)
+    projected = json.loads(messages[-1]["content"])
+    assert projected["observed_source_name"] == "Available planets"
+    assert projected["observed_source_task_id"] == "runtime_producer:abcd"
+    assert projected["source_owned_work"]["source_tasks"] == [source]
