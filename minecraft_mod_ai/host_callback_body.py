@@ -365,12 +365,19 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     # Free-form receiver+method JSON cannot be trusted as a gameplay call:
     # production log 34 invented ItemEvents.register(... UseOnCallback ...).
     # In this mode only host-assembled, bytecode-indexed call IDs are admitted.
-    evidence_bound = any(
-        isinstance(row, dict) and isinstance(row.get("verified_event_callback"), dict)
-        for message in scoped if message.get("role") == "user"
-        for row in [__import__("json").loads(message.get("content") or "{}")]
-        if isinstance(row, dict)
-    )
+    evidence_bound = False
+    for message in scoped:
+        if message.get("role") != "user":
+            continue
+        try:
+            payload = json.loads(message.get("content") or "{}")
+        except (ValueError, TypeError):
+            continue
+        if isinstance(payload, dict) and isinstance(
+            payload.get("verified_event_callback"), dict
+        ):
+            evidence_bound = True
+            break
     receipt_name = "__mmmHostEffectApplied"
     while receipt_name in frame["prefix"]:
         receipt_name += "_"
