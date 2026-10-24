@@ -557,7 +557,12 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     statements, blocks, locals_ = [], [], []
     semantic_statements = []
     verified_calls = verified_callback_choices(scoped, frame, predicate=False)
-    if runtime_targets and not verified_calls:
+    from .host_verified_callback_ops import verified_runtime_mutation_candidates
+    typed_mutation_candidates = (
+        verified_runtime_mutation_candidates(scoped, frame)
+        if runtime_targets else []
+    )
+    if runtime_targets and not (verified_calls or typed_mutation_candidates):
         # This is missing implementation authority, NOT permission to infer
         # arbitrary Java source or claim success with a disconnected scalar.
         raise ValueError(
@@ -640,7 +645,9 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                 from .runtime_mutation_author import author_runtime_mutation_calls
                 author_runtime_mutation_calls(
                     router, scoped, data_name=data_name, frame=frame,
-                    verified_calls=verified_calls, targets=runtime_targets,
+                    verified_calls=verified_calls,
+                    typed_candidates=typed_mutation_candidates,
+                    targets=runtime_targets,
                     statements=completed,
                     semantic_statements=semantic_statements,
                     effect_receipt=effect_receipt, receipt_name=receipt_name,
