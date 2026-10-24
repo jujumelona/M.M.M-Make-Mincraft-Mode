@@ -86,11 +86,14 @@ def test_purchase_hidden_in_screen_open_is_not_dropped():
 
 
 def test_navigation_with_source_owned_mutation_remains_executable():
-    design = sections(SHIPYARD_OPEN)
+    # Canonical state event IDs are limited to 128 characters. The UI's
+    # display description may be longer but state triggers must be short.
+    trigger = "player opens spacecraft construction screen"
+    design = sections(trigger)
     interaction = design["resources_and_ui"]["specification"]["interactions"][0]
-    interaction["trigger"] = SHIPYARD_OPEN
+    interaction["trigger"] = trigger
     state = design["state_model"]["specification"]
-    state["updates"][0]["trigger"] = SHIPYARD_OPEN
+    state["updates"][0]["trigger"] = trigger
     assert not is_presentation_only_interaction(interaction, state)
     assert _mutating_ui_actions(design)
 
