@@ -80,3 +80,25 @@ def test_unresolved_source_signature_cannot_become_mixin_target():
         row.get("kind") == "METHOD" and row.get("name") == "placeSection"
         for row in result.values()
     )
+
+
+def test_common_server_cannot_inject_client_only_gui_source():
+    import pytest
+    data = {"screen": [
+        _unit("class", name="ShipyardController", side="CLIENT",
+              path="src/client/java/example/ShipyardController.java"),
+        _unit("method", name="placeSection", side="CLIENT",
+              path="src/client/java/example/ShipyardController.java"),
+    ]}
+    symbols = merge_materialized_source_sites(data, {})
+    behavior = {"trigger": "player places a spacecraft section",
+                "intent": "placeSection"}
+    assert shortlist_verified_sites(behavior, symbols, side="COMMON") == []
+    assert len(shortlist_verified_sites(behavior, symbols, side="CLIENT")) == 1
+    with pytest.raises(ValueError, match="SOURCE_SITE_SIDE_MISMATCH"):
+        plan_verified_custom_event(
+            symbols=symbols,
+            source_site_ref="example.ShipyardController#placeSection()",
+            behavior_id="place_section", package="example.generated",
+            mod_id="shipyard", side="COMMON",
+        )
