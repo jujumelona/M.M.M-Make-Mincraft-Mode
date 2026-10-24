@@ -217,9 +217,16 @@ def repair_request_action_effects(
             "ACTION_SOURCE_REPAIR: request=" + requirement_id
             + " unbound_actions=" + str(len(subset)), flush=True,
         )
-        candidate = design.author_structured_sections(
-            router, focused, media_paths=media_paths, budget=budget,
-            shared_state_variables=shared,
+        behavior = current.get("behavior_contract")
+        if not isinstance(behavior, Mapping):
+            raise ValueError(
+                "ACTION_SOURCE_REPAIR_BEHAVIOR_MISSING: " + requirement_id
+            )
+        candidate = design.author_state_repair_section(
+            router, focused, behavior_contract=behavior,
+            required_action_count=len(subset),
+            shared_state_variables=shared, media_paths=media_paths,
+            budget=budget,
         )
         candidate = bind_request_records(candidate, requirement_id)
         candidate_state = candidate.get("state_model", {}).get(
