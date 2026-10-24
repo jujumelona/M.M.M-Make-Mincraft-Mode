@@ -121,7 +121,16 @@ def _source_runtime_owner(ref, record, feature_ids, interactions):
 
 def _partition_source_owners(records, features, sections):
     feature_ids = {row["requirement_id"] for row in features}
-    interactions = sections.get("resources_and_ui", {}).get("specification", {}).get("interactions", ())
+    from .authored_ui_action_bindings import is_presentation_only_interaction
+
+    # Display-only navigation must never take exclusive ownership of state
+    # records. A distinct gameplay action can own its own same-trigger writes.
+    state = sections.get("state_model", {}).get("specification", {})
+    interactions = [
+        row
+        for row in sections.get("resources_and_ui", {}).get("specification", {}).get("interactions", ())
+        if not is_presentation_only_interaction(row, state)
+    ]
     assigned, remaining = [], []
     for ref, record in records:
         owner = _source_runtime_owner(ref, record, feature_ids, interactions)
