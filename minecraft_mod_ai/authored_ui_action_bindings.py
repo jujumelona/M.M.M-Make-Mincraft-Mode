@@ -2,8 +2,67 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 from typing import Any
-from .request_record_ownership import action_identity_payload
+from .request_record_ownership import action_identity_payload, same_action_source
+
+
+def is_presentation_only_interaction(record, state) -> bool:
+    """Identify a *pure* screen-open request, never a gameplay transaction.
+
+    A button displayed on the resulting screen is not the action of pressing
+    that button. A screen-open operation has no typed server command body; a
+    later purchase/upgrade/launch must have its own source-owned state rule.
+
+    This is deliberately conservative. Ambiguous actions still fail the
+    executable-effect preflight rather than silently disappearing.
+    """
+    if not isinstance(record, Mapping):
+        return False
+    action = record.get("server_action")
+    if not isinstance(action, (str, Mapping)):
+        return False
+    trigger = str(record.get("trigger") or "").strip()
+    intent = str(action.get("intent") if isinstance(action, Mapping) else action).strip()
+    if not trigger or not intent:
+        return False
+
+    # Navigation is a specific player event, not merely the presence of the
+    # word "screen" in a transaction such as "purchase from upgrade screen".
+    navigation = re.match(
+        r"^(?:(?:the )?(?:player|user|client)\s+)?"
+        r"(?:opens?|views?|displays?|shows?)\s+",
+        trigger, re.I,
+    )
+    screen = re.search(r"\b(?:screen|menu|panel|window|interface|dialog|gui)\b",
+                       trigger, re.I)
+    if not (navigation and screen):
+        return False
+    if not (intent.casefold() == trigger.casefold() or re.match(
+        r"^(?:open|view|display|show)\s+(?:the\s+|a\s+)?"
+        r"(?:screen|menu|panel|window|interface|dialog|gui)\b",
+        intent, re.I,
+    )):
+        return False
+    # Never classify an explicit multi-step purchase/launch as read-only.
+    if re.search(
+        r"\b(?:and|then)\s+(?:buy|buys|purchase|purchases|sell|sells|"
+        r"craft|crafts|construct|constructs|upgrade|upgrades|"
+        r"launch|launches|equip|equips|change|changes|"
+        r"spend|spends|deduct|deducts|save|saves)\b",
+        trigger + " " + intent, re.I,
+    ):
+        return False
+
+    for concern in ("updates", "transitions"):
+        for change in state.get(concern, ()):
+            if (isinstance(change, Mapping)
+                    and same_action_source(change, record)
+                    and change.get("mutation")):
+                # Even an "open screen" verb is executable when the source
+                # explicitly assigns it a state transition.
+                return False
+    return True
 
 
 def _mutating_ui_actions(sections: Mapping[str, Any]) -> tuple[str, ...]:
@@ -23,7 +82,8 @@ def _mutating_ui_actions(sections: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         action_record_identity(row)
         for row in rows
-        if isinstance(row, Mapping) and action_record_identity(row)
+        if (isinstance(row, Mapping) and action_record_identity(row)
+            and not is_presentation_only_interaction(row, state))
     ))
 
 
