@@ -97,3 +97,15 @@ def test_nested_guards_migrate_only_reserved_boolean_identifiers():
         "kind": "literal", "value": True,
     }
     preflight_ui_action_source_abi(fixed, typed_host_capability_contracts())
+
+
+@pytest.mark.parametrize("method,tag", [
+    ("_decode_int_literal", "INT"),
+    ("_decode_long_literal", "LONG"),
+    ("_decode_double_literal", "DOUBLE"),
+])
+@pytest.mark.parametrize("value", [True, False])
+def test_bool_never_coerces_to_numeric_host_literal(method, tag, value):
+    from minecraft_mod_ai import typed_plan_authoring as typed
+    with pytest.raises(ValueError, match=f"TYPED_PLAN_LITERAL_{tag}_INVALID"):
+        getattr(typed, method)(value, scope="boolean-context-regression")
