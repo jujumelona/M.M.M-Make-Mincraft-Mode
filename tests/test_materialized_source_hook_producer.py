@@ -50,7 +50,9 @@ def test_real_new_gui_method_is_available_to_source_site_adapter():
         mod_id="shipyard",
     )
     assert custom["callback"]["provenance"] == "verified_source_site_mixin"
-    assert "placeSection()V" in custom["source_descriptor"]
+    assert custom["source_descriptor"] == "()V"
+    assert any("placeSection()V" in value for value in custom["files"].values()
+               if "injection" in value or "@org.spongepowered.asm.mixin.injection.Inject" in value)
 
 
 def test_materialized_source_cannot_replace_existing_verified_class():
