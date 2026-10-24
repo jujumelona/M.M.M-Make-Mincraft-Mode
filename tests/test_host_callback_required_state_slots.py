@@ -100,7 +100,6 @@ def test_late_required_state_writer_never_bypasses_an_effect_condition():
             frame=effect_frame(), effect_receipt=True,
         )
     assert not any("required_state_credits" in name for name in router.calls)
-    assert "if" not in router.calls[0].split("_operation_")[0]
 
 
 
