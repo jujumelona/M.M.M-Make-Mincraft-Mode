@@ -32,6 +32,11 @@ INDEX = {
         "return_type": "net.minecraft.world.InteractionResult",
         "parameters": PARAMETERS,
     },
+    "player.effect": {
+        "kind": "METHOD", "owner": PARAMETERS[0], "access": 1,
+        "name": "markVisited", "static": False, "parameters": [],
+        "return_type": "void",
+    },
 }
 SPEC = {
     "language": "java", "side": "COMMON",
@@ -68,8 +73,10 @@ class EventRouter:
             assert "Level level" in member["immutable_signature"]["prefix"]
         if "_predicate_try_" in data_name:
             return {"expression": "player != null"}
-        if "_operation_0_call_try_" in data_name:
-            return {"receiver": "player", "method": "setPos", "arguments": ["0.0", "0.0", "0.0"]}
+        if "_operation_0_verified_call_try_" in data_name:
+            ids = parameters["properties"]["verified_call_id"]["enum"]
+            assert ids == ["v0"]
+            return {"verified_call_id": "v0"}
         if "_operation_0_try_" in data_name:
             return {"action": "call"}
         if "_operation_1_try_" in data_name:
@@ -105,7 +112,7 @@ def test_host_registers_callback_with_method_reference_and_exact_abi():
         "select_verified_fabric_event",
         "submit_java_implementation_1_predicate_try_0",
         "submit_java_implementation_2_operation_0_try_0",
-        "submit_java_implementation_2_operation_0_call_try_0",
+        "submit_java_implementation_2_operation_0_verified_call_try_0",
         "submit_java_implementation_2_operation_1_try_0",
         "select_callback_result_unhandled",
         "select_callback_result_handled",
@@ -178,7 +185,7 @@ def test_method_reference_and_sam_compile_together(tmp_path):
              " net.minecraft.world.phys.BlockHitResult hit); }"),
         "net/minecraft/world/entity/player/Player.java":
             "package net.minecraft.world.entity.player; public class Player { "
-            "public void setPos(double x, double y, double z) {} }",
+            "public void markVisited() {} }",
         "net/minecraft/world/level/Level.java":
             "package net.minecraft.world.level; public class Level {}",
         "net/minecraft/world/InteractionHand.java":
