@@ -204,8 +204,13 @@ def test_feature_integration_receives_content_source_even_without_matching_requi
     assert set(modules[0].depends_on) == {"shipyard_ui", "spacecraft_parts"}
     spec = jobs[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]
     paths = json.loads(spec["bindings"]["content_dependency_paths_json"])
+    required = json.loads(spec["bindings"]["required_content_source_paths_json"])
     assert "src/main/java/test/space/ShipyardScreen.java" in paths
     assert "src/main/java/test/space/SpacecraftPart.java" in paths
+    assert set(required) == {
+        "src/main/java/test/space/ShipyardScreen.java",
+        "src/main/java/test/space/SpacecraftPart.java",
+    }
 
 
 def test_integration_source_dependencies_are_not_inferred_from_intent_text():
