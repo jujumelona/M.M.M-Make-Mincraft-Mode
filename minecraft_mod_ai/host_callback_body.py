@@ -185,6 +185,94 @@ def _require_canonical_state_effects(source, frame):
         )
 
 
+def _required_state_write_slots(frame):
+    """Resolve exact, already-materialized typed writers before coding starts.
+
+    A planner label is not a Java API. Never infer a state accessor from the
+    model's prose or silently redirect a write to a different state owner.
+    """
+    behavior = frame.get("host_behavior_contract") or {}
+    required = sorted(set(behavior.get("state_writes") or ()))
+    if not required:
+        return {}
+    contracts = frame.get("host_state_access") or ()
+    slots = {}
+    for name in required:
+        matches = []
+        for contract in contracts:
+            owner = str(contract.get("owner") or "")
+            if not owner:
+                continue
+            for method in contract.get("methods") or ():
+                if method.get("name") == "writeState_" + name:
+                    matches.append((owner, str(method.get("signature") or "")))
+        if not matches:
+            raise ValueError("CALLBACK_REQUIRED_STATE_ACCESSOR_UNDECLARED: " + name)
+        if len({owner for owner, _ in matches}) != 1:
+            raise ValueError("CALLBACK_REQUIRED_STATE_OWNER_AMBIGUOUS: " + name)
+        owner, signature = matches[0]
+        slots[name] = {"owner": owner, "signature": signature}
+    return slots
+
+
+def _complete_required_state_effects(
+    router, scoped, *, data_name, frame, statements, semantic_statements,
+    receipt_name, effect_receipt, slots,
+):
+    """Lower each missing mandatory write through one verified typed-value slot.
+
+    The author chooses only a value expression; the host owns state identity,
+    receiver, invocation, order and Java syntax. Missing coverage never sends
+    the model back to its unbounded free-form operation chooser.
+    """
+    existing = frame["prefix"] + "\n".join(statements) + frame["suffix"]
+    try:
+        _require_canonical_state_effects(existing, frame)
+        return
+    except ValueError as exc:
+        prefix = "CALLBACK_CANONICAL_STATE_WRITES_MISSING: "
+        if not str(exc).startswith(prefix):
+            raise
+        missing = [part.strip() for part in str(exc)[len(prefix):].split(",") if part.strip()]
+    for name in missing:
+        slot = slots[name]
+        owner = slot["owner"]
+        def lower(row, *, state_name=name, state_owner=owner):
+            expression = parse_expression(row["expression"])
+            # Reading a variable and writing it back is a semantic no-op;
+            # it cannot satisfy a requested gameplay state transition.
+            if expression in {
+                state_owner + ".readState_" + state_name + "()",
+                state_owner.rsplit(".", 1)[-1] + ".readState_" + state_name + "()",
+            }:
+                raise ValueError("CALLBACK_CANONICAL_STATE_WRITE_NOOP: " + state_name)
+            operation = state_owner + ".writeState_" + state_name + "(" + expression + ");"
+            trial = frame["prefix"] + "\n".join([*statements, operation]) + frame["suffix"]
+            validate_generated_java_source(trial, frame, frame["prefix"], frame["suffix"])
+            _validate_state(trial, frame)
+            return operation
+        statement = _ask(
+            router, scoped, name=data_name + "_required_state_" + name,
+            schema=_EXPRESSION_SCHEMA,
+            context={
+                "instruction": (
+                    "Produce ONLY the value expression for this exact required "
+                    "canonical state write. The host owns the call, state name "
+                    "and receiver. Use current verified callback or state values "
+                    "to implement the original assigned behavior, not a no-op."
+                ),
+                "state_name": name, "verified_writer": slot["signature"],
+                "verified_writer_owner": owner,
+                "assigned_behavior": frame.get("host_behavior_contract"),
+                "accepted_host_statements": semantic_statements,
+            }, lower=lower,
+        )
+        statements.append(statement)
+        semantic_statements.append(statement)
+        if effect_receipt:
+            statements.append(receipt_name + " = true;")
+
+
 def _effect_operation(action, code):
     """Only a possible external mutation can satisfy an effect receipt.
 
@@ -418,6 +506,10 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         return _author_predicate(router, scoped, data_name, frame, correction,
                                  verified, rejected_compiler_member)
 
+    # Resolve the mandatory state ABI before asking the model for ANY
+    # free-form operations. Unmaterialized state is a planning defect, not
+    # something 64 more small-model attempts can fix.
+    state_slots = _required_state_write_slots(frame)
     statements, blocks, locals_ = [], [], []
     semantic_statements = []
     verified_calls = verified_callback_choices(scoped, frame, predicate=False)
@@ -470,6 +562,14 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
             source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
             if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
                 raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
+            if state_slots:
+                _complete_required_state_effects(
+                    router, scoped, data_name=data_name, frame=frame,
+                    statements=completed, semantic_statements=semantic_statements,
+                    receipt_name=receipt_name, effect_receipt=effect_receipt,
+                    slots=state_slots,
+                )
+                source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
             _require_canonical_state_effects(source, frame)
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         new_local = f"mmmValue{len(locals_)}"
