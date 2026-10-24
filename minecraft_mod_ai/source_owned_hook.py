@@ -8,6 +8,7 @@ and effect generation. Real compilation and runtime verification still follow.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -22,6 +23,42 @@ class SourceHookUnavailable(ValueError):
             "required_action": "materialize a custom event/mixin source owner "
                                "or bind a real observable Fabric callback before effects",
         }, ensure_ascii=False))
+
+
+
+def _event_candidates_for_occurrence(behavior, candidates):
+    """Narrow only unambiguous Minecraft occurrence classes.
+
+    A callback being a *real* Fabric event does not make it relevant:
+    AFTER_DAMAGE can never report that a player changed dimensions. The
+    semantic vocabulary used here covers observable lifecycle categories,
+    not arbitrary feature or theme names. Unknown occurrences deliberately
+    retain the complete inspected ABI rather than guessing.
+    """
+    trigger = str(behavior.get("trigger") or "").casefold()
+    transition = bool(re.search(
+        r"\\b(?:reach(?:es|ed)?|arriv(?:es|ed|ing)?|enter(?:s|ed|ing)?|"
+        r"travel(?:s|ed|ing)?|chang(?:es|ed|ing)?|switch(?:es|ed|ing)?)\\b"
+        r".{0,96}\\b(?:planet|dimension|world|level|location)\\b",
+        trigger,
+    ))
+    if not transition:
+        return list(candidates)
+    relevant = []
+    for row in candidates:
+        event = str(row.get("event_id") or "").casefold().replace("_", "")
+        parameters = tuple(str(p) for p in row.get("parameters", ()) or ())
+        has_player = any(
+            p.endswith(("ServerPlayer", "ServerPlayerEntity"))
+            for p in parameters
+        )
+        if (has_player and ("afterplayerchangelevel" in event
+                            or "afterplayerchangeworld" in event
+                            or "playerchangedimension" in event)):
+            relevant.append(row)
+    # No matching event is evidence that we need an original occurrence
+    # source, not permission to use a damage/respawn/sleep callback.
+    return relevant
 
 
 def choose_source_hook(
@@ -39,6 +76,13 @@ def choose_source_hook(
         return by_id[explicitly_bound]
     if not by_id:
         raise SourceHookUnavailable(behavior_id, reason="no_inspected_callback", inspected=0)
+    relevant = _event_candidates_for_occurrence(behavior, list(by_id.values()))
+    if not relevant:
+        raise SourceHookUnavailable(
+            behavior_id, reason="no_matching_original_occurrence_callback",
+            inspected=len(by_id),
+        )
+    by_id = {str(row["event_id"]): dict(row) for row in relevant}
     # A model can decline inspected hooks, but it cannot invent an event owner.
     # Keep the event index compact: no 872K-symbol classpath in the 9B prompt.
     ordered = sorted(by_id.values(), key=lambda e: e["event_id"])
