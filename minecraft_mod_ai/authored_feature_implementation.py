@@ -185,6 +185,21 @@ def compile_request_feature_jobs(
                     declarations.append({key: known[key] for key in (
                         "package_name", "class_name", "registry_path", "fact_type",
                     ) if key in known})
+        # These are concrete completed Java artifact dependencies, not
+        # optional "nearby" files. A missing source means a scheduling/port
+        # handoff defect; silently continuing would force the small model
+        # to invent an API or nonexistent Fabric callback.
+        bindings["required_content_source_paths_json"] = json.dumps(
+            list(dict.fromkeys(
+                str(getattr(job, "target_path", ""))
+                for job in content_jobs
+                if job.owner_module in module.depends_on
+                and str(getattr(job, "target_path", "")).startswith(
+                    ("src/main/java/", "src/client/java/")
+                )
+                and str(getattr(job, "target_path", "")).endswith(".java")
+            )), separators=(",", ":"),
+        )
         artifact_owners = {job.owner_module for job in content_jobs}
         for owner in prerequisite_modules:
             if owner.module_id in artifact_owners:
