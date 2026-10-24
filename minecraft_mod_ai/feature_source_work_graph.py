@@ -79,16 +79,22 @@ def build_source_work_graph(
                 "reasons": sorted({str(row["reason"]) for row in missing_occurrence}),
             })
             source_dep = (source_id,)
-        # An observation that cannot be read from ANY inspected event must
-        # be implemented on its actual producing owner *before* choosing an
-        # event listener. Otherwise the 9B picker is asked to derive an
-        # undefined UI/world value from 112 unrelated Fabric callback ABIs.
+        # An absent observation is a separate data-production task. The
+        # occurrence hook must be selected first to establish real typed
+        # receivers; then observers may be implemented against those inputs
+        # before gameplay effects run. Only an absent occurrence itself
+        # requires a separate source owner before hook selection.
         before_hook_reasons = {
             "no_inspected_semantic_source",
             "missing_world_observer_binding",
             "no_single_callback_supplies_required_sources",
         }
-        producers, before_hook = [], []
+        hook = task("occurrence_hook", owner,
+                    depends=source_dep,
+                    status="verified" if owner in verified and explicit and not source_dep else "pending",
+                    evidence={"event_binding": explicit or None,
+                              "available_inspected_event_ids": available_ids})
+        producers = []
         for row in owner_obligations:
             if row.get("reason") not in before_hook_reasons:
                 continue
@@ -96,18 +102,12 @@ def build_source_work_graph(
             if not name:
                 raise ValueError("FEATURE_WORK_PRODUCER_OBLIGATION_UNNAMED")
             producer = task("runtime_producer", owner, name=name,
-                            depends=source_dep, evidence={
+                            depends=(hook,), evidence={
                                 "reason": row.get("reason"),
                                 "required_action": row.get("required_action"),
-                                "source_order": "before_occurrence_hook",
+                                "source_order": "after_occurrence_hook_before_effect",
                             })
             producers.append(producer)
-            before_hook.append(producer)
-        hook = task("occurrence_hook", owner,
-                    depends=(*source_dep, *before_hook),
-                    status="verified" if owner in verified and explicit and not (source_dep or before_hook) else "pending",
-                    evidence={"event_binding": explicit or None,
-                              "available_inspected_event_ids": available_ids})
         for row in owner_obligations:
             if row.get("reason") in {
                 "occurrence_hook_not_owned", "no_inspected_callback",
