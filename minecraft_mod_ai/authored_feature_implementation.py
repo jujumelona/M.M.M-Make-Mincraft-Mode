@@ -97,6 +97,18 @@ def compile_request_feature_jobs(
         owners = [module for module in content_modules if rid in module.config.get("requirement_refs", ())]
         if feature.get("implementation_role") == "interface" and any(m.kind == "gui" for m in owners):
             continue
+        # Runtime behavior may be implemented by a GUI, item, entity or other
+        # content owner whose catalog provenance was not mapped to this exact
+        # request requirement ID. The content graph is produced *before* these
+        # feature integration nodes, so the owning source closure must be a
+        # dependency regardless of free-text requirement matching.
+        # This is a build-order/data-flow edge, never permission to invent
+        # an event from a class name. Exact installed Java method signatures
+        # are still inspected before a custom event producer can be created.
+        prerequisite_modules = [
+            item for item in content_modules
+            if item.module_id != feature_module_id(rid)
+        ]
         leaf = "minecraft/event/callback"
         binding = require_registered_leaf_binding(adapter.version_context, leaf)
         implementation = binding["implementation"]
@@ -106,7 +118,9 @@ def compile_request_feature_jobs(
         module = ProductionModule(subject, "integration", {
             "integration_type": "artifact_graph_owned", "requirement_refs": [rid],
             "implementation_obligations": [feature["statement"]],
-        }, depends_on=tuple(dict.fromkeys(m.module_id for m in (*owners, *runtime_modules))))
+        }, depends_on=tuple(dict.fromkeys(
+            m.module_id for m in (*prerequisite_modules, *runtime_modules)
+        )))
         module.validate()
         inputs = _canonical_candidate_inputs(
             None, canonical_leaf=leaf, mod_id=mod_id, package_name=package_name,
@@ -172,7 +186,7 @@ def compile_request_feature_jobs(
                         "package_name", "class_name", "registry_path", "fact_type",
                     ) if key in known})
         artifact_owners = {job.owner_module for job in content_jobs}
-        for owner in owners:
+        for owner in prerequisite_modules:
             if owner.module_id in artifact_owners:
                 continue
             from .extended_content_generator import (
