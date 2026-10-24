@@ -100,6 +100,12 @@ def plan_verified_custom_event(
     if type(java_version) is not int or java_version not in {17, 21, 25}:
         raise ValueError("SOURCE_SITE_JAVA_COMPATIBILITY_INVALID")
     site = _verified_method(symbols, source_site_ref)
+    if (str(site.get("side") or "COMMON").upper() == "CLIENT"
+            and side != "CLIENT"):
+        raise ValueError(
+            "SOURCE_SITE_SIDE_MISMATCH: client-only method cannot be "
+            "injected from a common server Mixin"
+        )
     digest = hashlib.sha256(
         (behavior_id + "\0" + source_site_ref + "\0" + at).encode()
     ).hexdigest()[:16]
