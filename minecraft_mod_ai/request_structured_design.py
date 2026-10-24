@@ -117,7 +117,9 @@ def _unbound_request_actions(sections):
     requirements are never acceptable evidence of ownership.
     """
     from .authored_ui_action_bindings import is_presentation_only_interaction
-    from .request_record_ownership import SOURCE_REQUIREMENT, same_action_source
+    from .request_record_ownership import (
+        SOURCE_REQUIREMENT, same_action_source, source_trigger_identity,
+    )
     from .typed_action_authoring import _effective_state_mutation
 
     specs = design.normalize_structured_sections(sections)
@@ -154,6 +156,7 @@ def _unbound_request_actions(sections):
         missing.append({
             "source_requirement_id": requirement,
             "trigger": row.get("trigger", ""),
+            "canonical_state_trigger": source_trigger_identity(row),
             "server_action": deepcopy(action),
         })
     return missing
@@ -170,7 +173,9 @@ def repair_request_action_effects(
     keeping all existing UI commands and unrelated request records intact.
     If the result still cannot execute, reject it rather than forging success.
     """
-    from .request_record_ownership import SOURCE_REQUIREMENT, bind_request_records
+    from .request_record_ownership import (
+        SOURCE_REQUIREMENT, bind_request_records, source_trigger_identity,
+    )
     from .typed_action_authoring import (
         preflight_state_guard_semantics, preflight_ui_action_effects,
     )
@@ -200,7 +205,8 @@ def repair_request_action_effects(
         feature = features[requirement_id]
         subset = [row for row in missing
                   if row["source_requirement_id"] == requirement_id]
-        triggers = [str(row["trigger"]).strip().casefold() for row in subset]
+        triggers = [str(row["canonical_state_trigger"]).strip().casefold()
+                    for row in subset]
         if len(triggers) != len(set(triggers)):
             raise ValueError(
                 "ACTION_REPAIR_AMBIGUOUS_TRIGGER: multiple actions share "
@@ -218,7 +224,9 @@ def repair_request_action_effects(
                 "This ONE approved server command lacks a state effect. "
                 "Do not rename or omit its original trigger or introduce a "
                 "different UI command. Author a canonical state_model.update "
-                "or transition using exactly this trigger, with real "
+                "or transition using the EXACT canonical_state_trigger "
+                "provided below (the long display description is not an "
+                "executable event identity), with real "
                 "server-owned, guarded atomic mutations and any necessary "
                 "state variable declarations. This is not a screen-open "
                 "operation. Do not author another requirement's transaction "
@@ -240,6 +248,7 @@ def repair_request_action_effects(
                 router, focused, behavior_contract=behavior,
                 required_action_count=1,
                 shared_state_variables=shared, media_paths=media_paths,
+                fixed_state_trigger=action["canonical_state_trigger"],
                 budget=budget,
             )
             candidate = bind_request_records(candidate, requirement_id)
@@ -249,7 +258,7 @@ def repair_request_action_effects(
                 concern: [
                     deepcopy(row) for row in candidate_state.get(concern, ())
                     if str(row.get("trigger") or "").strip().casefold()
-                    == str(action["trigger"]).strip().casefold()
+                    == str(action["canonical_state_trigger"]).strip().casefold()
                 ]
                 for concern in ("transitions", "updates")
             }
