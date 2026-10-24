@@ -62,6 +62,9 @@ jobs:
             tests/test_source_owned_host_integration.py \
             tests/test_source_owned_custom_event.py \
             tests/test_source_owned_site_choice.py \
+            tests/test_materialized_source_hook_producer.py \
+            tests/test_host_callback_body.py \
+            tests/test_entity_java_dependency_handoff.py \
             tests/test_construction_java_member_projection_regression.py \
             tests/test_construction_trigger_provenance.py \
             tests/test_construction_trigger_scope.py \
