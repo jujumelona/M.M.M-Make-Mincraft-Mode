@@ -95,8 +95,9 @@ def test_planner_checkpoint_restores_scope_without_another_model_call(monkeypatc
     first = planner.plan(PROMPT)
     second = planner.plan(PROMPT)
     assert first.request_scope == second.request_scope == scope_fixture()
-    assert len(received) == 2
-    assert "Establish colonies" in received[1]
+    assert len(received) == 1 + len(FEATURES)
+    assert all("ACTIVE REQUEST FEATURE:" in prompt for prompt in received[1:])
+    assert "Establish colonies" in received[-1]
 
 
 def test_request_decomposition_retains_more_than_four_features(monkeypatch, tmp_path):

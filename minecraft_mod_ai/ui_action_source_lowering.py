@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+from .request_record_ownership import same_action_source
 
 
 def _literal(typ, value):
@@ -40,9 +41,8 @@ def _selected_mutations(record, owned_refs, sections):
         for index, row in enumerate(state.get(concern, ()))
         if isinstance(row, Mapping)
     ]
-    action_trigger = str(record.get("trigger") or "").strip().casefold()
     selected = [(ref, row) for ref, row in available if ref in owned_refs]
-    if any(str(row.get("trigger") or "").strip().casefold() != action_trigger
+    if any(not same_action_source(row, record)
            for _, row in selected):
         raise ValueError(
             "ACTION_HOST_OWNER_TRIGGER_MISMATCH: a runtime owner references "
@@ -59,8 +59,7 @@ def _selected_mutations(record, owned_refs, sections):
         ]
         if len(actions) == 1 and len(available) == 1:
             candidate = available[0]
-            candidate_trigger = str(candidate[1].get("trigger") or "").strip().casefold()
-            if candidate_trigger and candidate_trigger == action_trigger:
+            if candidate[1].get("trigger") and same_action_source(candidate[1], record):
                 selected = [candidate]
     if not selected:
         raise ValueError(

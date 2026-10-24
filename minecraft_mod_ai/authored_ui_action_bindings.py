@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from .request_record_ownership import action_identity_payload
 
 
 def _mutating_ui_actions(sections: Mapping[str, Any]) -> tuple[str, ...]:
@@ -30,8 +31,7 @@ def action_record_identity(row):
     action = row.get("server_action")
     if isinstance(action, Mapping):
         from .typed_action_authoring import action_identity, validate_action_metadata
-        return action_identity({"contract": validate_action_metadata(action),
-                                "trigger": str(row.get("trigger") or "")})
+        return action_identity(action_identity_payload(row, validate_action_metadata(action)))
     return str(action or "").strip()
 
 

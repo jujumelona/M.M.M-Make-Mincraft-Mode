@@ -634,6 +634,7 @@ def merge_worksheet_section_chunks(
     chunks: Sequence[Mapping[str, Any]],
     allowed_refs: set[str],
     *, page_specs: Sequence[Sequence[str]] | None = None,
+    shared_state_variables: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     from .planning_contract_ssot import is_schema_definition_echo
 
@@ -804,14 +805,35 @@ def merge_worksheet_section_chunks(
             reason = f"No {concern.replace('_', ' ')} required for this {key.replace('_', ' ')}."
         final_inapplicable.append({"concern": concern, "reason": reason})
 
-    valid_evidence_refs = [ref for ref in evidence_refs if ref in allowed_refs]
-    assembled_specification: dict[str, Any] = dict(merged_specification)
-    assembled_specification["inapplicable_concerns"] = final_inapplicable
+    return _finalize_worksheet_section(
+        key, merged_specification, final_inapplicable,
+        [ref for ref in evidence_refs if ref in allowed_refs],
+        allowed_refs, shared_state_variables,
+    )
+
+
+def _finalize_worksheet_section(
+    key, specification, inapplicable, evidence_refs, allowed_refs, shared_variables,
+):
+    assembled_specification = dict(specification)
+    if key == "state_model" and shared_variables:
+        from .state_definition_merge import merge_state_definitions
+
+        assembled_specification["variables"] = merge_state_definitions(
+            shared_variables, assembled_specification["variables"],
+        )
+        inapplicable = [
+            row for row in inapplicable if row["concern"] != "variables"
+        ]
+    assembled_specification["inapplicable_concerns"] = inapplicable
     assembled_section = {
         "specification": assembled_specification,
-        "constraint_evidence_refs": valid_evidence_refs,
+        "constraint_evidence_refs": evidence_refs,
     }
-    return validate_worksheet_section(assembled_section, allowed_refs, key)
+    return validate_worksheet_section(
+        assembled_section, allowed_refs, key,
+        accumulated=bool(key == "state_model" and shared_variables),
+    )
 
 
 __all__ = [

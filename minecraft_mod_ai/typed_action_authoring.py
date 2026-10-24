@@ -15,6 +15,7 @@ import re
 
 from .typed_action_contract import SCALARS, action_bindings, validate_action_contract
 from .ui_action_source_lowering import _expression, _host_lower_ui_action_body
+from .request_record_ownership import same_action_source
 
 
 def preflight_state_guard_semantics(sections):
@@ -156,13 +157,12 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
         # Only a transaction with the same trigger can justify this command.
         # A launch-time currency reset cannot implement a shipyard purchase,
         # even if both mention the same state variable.
-        trigger = str(row.get("trigger") or "").strip().casefold()
         matching_writes = [
             mutation
             for collection in ("updates", "transitions")
             for change in state.get(collection, ())
             if isinstance(change, Mapping)
-            and str(change.get("trigger") or "").strip().casefold() == trigger
+            and same_action_source(change, row)
             for mutation in (change.get("mutation") or ())
             if isinstance(mutation, Mapping)
             and mutation.get("target") in actual_writes

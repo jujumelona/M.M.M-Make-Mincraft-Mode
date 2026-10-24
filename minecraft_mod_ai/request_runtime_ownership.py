@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from .request_record_ownership import SOURCE_REQUIREMENT, same_action_source
 
 from .request_runtime_records import TYPED_UI_OWNER as TYPED_UI_OWNER
 from .request_runtime_records import _runtime_records
@@ -103,6 +104,34 @@ def _choose_runtime_owner_batch(router, items, features, actions, consume):
     return out
 
 
+def _source_runtime_owner(ref, record, feature_ids, interactions):
+    from .authored_ui_action_bindings import action_record_identity
+
+    source = record.get(SOURCE_REQUIREMENT)
+    if source not in feature_ids:
+        return None
+    if not ref.startswith("state_model."):
+        return source
+    actions = [action_record_identity(row) for row in interactions
+               if same_action_source(record, row)]
+    if len(actions) > 1:
+        raise ValueError("REQUEST_UI_EFFECT_AMBIGUOUS: " + ref)
+    return TYPED_UI_OWNER + ":" + actions[0] if actions else source
+
+
+def _partition_source_owners(records, features, sections):
+    feature_ids = {row["requirement_id"] for row in features}
+    interactions = sections.get("resources_and_ui", {}).get("specification", {}).get("interactions", ())
+    assigned, remaining = [], []
+    for ref, record in records:
+        owner = _source_runtime_owner(ref, record, feature_ids, interactions)
+        if owner is None:
+            remaining.append((ref, record))
+        else:
+            assigned.append((ref, owner))
+    return assigned, remaining
+
+
 def author_runtime_ownership(router, scope, sections, *, budget=None):
     """Choose one owner per runtime record using bounded feature identities.
 
@@ -121,6 +150,7 @@ def author_runtime_ownership(router, scope, sections, *, budget=None):
     actions = _mutating_ui_actions(sections)
     consume = serialized_callback(budget.consume) if budget is not None else None
     records = list(_runtime_records(sections))
+    known_assignments, records = _partition_source_owners(records, features, sections)
     if len(records) >= 3 and len(features) > 1:
         # Group only four records per bounded inference; a dozen one-field
         # owner questions otherwise cost a dozen model roundtrips.
@@ -138,6 +168,7 @@ def author_runtime_ownership(router, scope, sections, *, budget=None):
             lambda item: _choose_runtime_owner(router, item, features, actions, consume),
             thread_name_prefix="mmm-request-runtime-owner",
         )
+    assignments = [*known_assignments, *assignments]
     groups = {}
     for ref, owner in assignments:
         action = ""

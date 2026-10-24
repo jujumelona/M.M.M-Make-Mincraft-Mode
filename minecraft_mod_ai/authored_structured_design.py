@@ -36,14 +36,9 @@ _CORE_REQUIRED_CONCERNS: dict[str, tuple[str, ...]] = {
 
 def _canonical_section_schema(section: str) -> dict[str, Any]:
     """Preserve planner transport limits, not on accumulated host state."""
-    schema = worksheet_section_schema(section)
-    if section == "state_model":
-        # Only the canonical variable table may outgrow a four-record planner
-        # response. Item typing and the rest of the worksheet remain strict.
-        schema["properties"]["specification"]["properties"]["variables"].pop(
-            "maxItems", None
-        )
-    return schema
+    from .request_record_ownership import accumulated_record_schema
+
+    return accumulated_record_schema(worksheet_section_schema(section), DETAIL_RECORDS[section])
 
 
 def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -484,6 +479,7 @@ class _PlannerSectionRequest:
     slots: int
     budget: Any = None
     record_counts: Mapping[str, int] | None = None
+    shared_state_variables: Sequence[Mapping[str, Any]] = ()
 
 
 def _generate_authored_chunk(
@@ -782,13 +778,14 @@ def _state_section_page_results(
     order: Sequence[str],
 ) -> list[dict[str, Any]]:
     from .structured_state_runtime import StateSymbolTable, validate_state_concern
+    from .state_definition_merge import merge_state_definitions
 
     ordered = list(order)
     if "variables" in ordered:
         ordered.remove("variables")
         ordered.insert(0, "variables")
 
-    symbols: StateSymbolTable | None = None
+    symbols = StateSymbolTable(request.shared_state_variables)
     accumulated: dict[str, Any] = {}
     by_index: dict[int, dict[str, Any]] = {}
     for concern in ordered:
@@ -803,7 +800,7 @@ def _state_section_page_results(
         if rows:
             accumulated[concern] = deepcopy(rows)
         if concern == "variables":
-            symbols = StateSymbolTable(rows)
+            symbols = StateSymbolTable(merge_state_definitions(request.shared_state_variables, rows))
         by_index.update(dict(results))
     return [by_index[index] for index, _page in indexed]
 
@@ -878,6 +875,7 @@ def _author_section(
         )
     return merge_worksheet_section_chunks(
         request.section, results, set(), page_specs=request.chunks,
+        shared_state_variables=request.shared_state_variables,
     )
 
 
@@ -887,6 +885,7 @@ def author_structured_sections(
     *,
     media_paths: Sequence[str | Path] = (),
     budget: Any = None,
+    shared_state_variables: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Author the canonical design as a finite host-owned dependency DAG."""
 
@@ -938,6 +937,7 @@ def author_structured_sections(
                 slots=slots,
                 budget=budget,
                 record_counts=record_counts,
+                shared_state_variables=shared_state_variables,
             )
             return section, _author_section(
                 request,

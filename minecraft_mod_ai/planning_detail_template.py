@@ -287,10 +287,22 @@ def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str
 
 WORKSHEET_SCHEMA = worksheet_schema()
 
+
+def _validation_specification_schema(key, state_symbols, *, accumulated):
+    schema = specification_schema(key, state_symbols=state_symbols)
+    if accumulated:
+        # Only host-joined records may outgrow one response's array limit.
+        for name, field in schema["properties"].items():
+            if name != "inapplicable_concerns":
+                field.pop("maxItems", None)
+    return schema
+
+
 def validate_worksheet_section(
     value: Any,
     allowed_refs: set[str],
     section: str,
+    *, accumulated: bool = False,
 ) -> dict[str, Any]:
     key = _normalize_section_name(section)
     if not isinstance(value, Mapping) or set(value) != {
@@ -316,13 +328,9 @@ def validate_worksheet_section(
             else ()
         )
 
+    schema = _validation_specification_schema(key, state_symbols, accumulated=accumulated)
     error = next(
-        Draft202012Validator(
-            specification_schema(
-                key,
-                state_symbols=state_symbols,
-            )
-        ).iter_errors(specification),
+        Draft202012Validator(schema).iter_errors(specification),
         None,
     )
     if error is not None:

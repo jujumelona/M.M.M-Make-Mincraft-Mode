@@ -75,7 +75,6 @@ class CompleteGameDesignPlanner:
         from .planner_operation import planner_operation
 
         from .authored_structured_design import (
-            author_structured_sections,
             normalize_structured_sections,
             render_structured_sections,
         )
@@ -114,7 +113,6 @@ class CompleteGameDesignPlanner:
         if request_scope is None:
             request_scope = author_request_scope(self.router, prompt, budget=budget)
             checkpoint.save_request_scope(request_scope)
-        planning_prompt = prompt + request_scope_context(request_scope)
         structured_sections = checkpoint.load_sections()
         if structured_sections is not None:
             try:
@@ -127,11 +125,11 @@ class CompleteGameDesignPlanner:
         restored_sections = structured_sections is not None
         if structured_sections is None:
             with planner_operation("author_structured_execution_contract"):
-                structured_sections = author_structured_sections(
-                    self.router,
-                    planning_prompt,
-                    media_paths=media_paths,
-                    budget=budget,
+                from .request_structured_design import author_request_structured_sections
+
+                structured_sections = author_request_structured_sections(
+                    self.router, prompt, request_scope,
+                    media_paths=media_paths, budget=budget, checkpoint=checkpoint,
                 )
             structured_sections = normalize_structured_sections(structured_sections)
             checkpoint.save_sections(structured_sections)

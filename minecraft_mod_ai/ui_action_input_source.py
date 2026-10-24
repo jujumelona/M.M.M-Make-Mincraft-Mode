@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import sys
 
 from .typed_action_contract import SCALARS
+from .request_record_ownership import same_action_source
 
 def _literal_type(node):
     value = node.get("value")
@@ -92,13 +93,12 @@ def _source_rules(record, state, interactions):
     trigger = str(record.get("trigger") or "").strip().casefold()
     if not trigger:
         return None
-    if sum(str(row.get("trigger") or "").strip().casefold() == trigger
-           for row in interactions) > 1:
+    if sum(same_action_source(row, record) for row in interactions) > 1:
         # Trigger equality cannot distinguish two different transactions.
         return None
     return [row for concern in ("updates", "transitions")
              for row in state.get(concern, ())
-             if str(row.get("trigger") or "").strip().casefold() == trigger
+             if same_action_source(row, record)
              and row.get("mutation")]
 
 

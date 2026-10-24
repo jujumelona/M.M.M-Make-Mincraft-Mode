@@ -89,6 +89,7 @@ class PlannerCheckpoint:
             "identity_sha256": self._key,
             "structured_sections": None,
             "request_scope": None,
+            "request_designs": {},
             "catalog_sha256": None,
             "content_progress": {},
             "content_design": None,
@@ -137,6 +138,25 @@ class PlannerCheckpoint:
     def save_request_scope(self, scope: Mapping[str, Any]) -> None:
         with self._lock:
             self._data["request_scope"] = deepcopy(dict(scope))
+            self._write()
+
+    def load_request_design(self, feature, shared_variables):
+        identity = _digest({"feature": feature, "shared_variables": shared_variables})
+        with self._lock:
+            cache = self._data.get("request_designs")
+            row = cache.get(str(feature["requirement_id"])) if isinstance(cache, dict) else None
+            if not isinstance(row, dict) or row.get("input_sha256") != identity:
+                return None
+            value = row.get("sections")
+            return deepcopy(value) if isinstance(value, dict) else None
+
+    def save_request_design(self, feature, shared_variables, sections):
+        identity = _digest({"feature": feature, "shared_variables": shared_variables})
+        with self._lock:
+            cache = self._data.setdefault("request_designs", {})
+            cache[str(feature["requirement_id"])] = {
+                "input_sha256": identity, "sections": deepcopy(dict(sections)),
+            }
             self._write()
 
     def save_sections(self, sections: Mapping[str, Any]) -> None:
