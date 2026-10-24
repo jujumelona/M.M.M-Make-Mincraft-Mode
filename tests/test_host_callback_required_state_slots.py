@@ -105,3 +105,55 @@ def test_late_required_state_writer_never_bypasses_an_effect_condition():
             frame=effect_frame(), effect_receipt=True,
         )
     assert not any("required_state_credits" in name for name in router.calls)
+
+
+
+def test_required_writer_ignores_context_overload_and_exposes_exact_value_type():
+    from minecraft_mod_ai.host_callback_body import _required_state_write_slots
+    frame = effect_frame()
+    frame["host_state_access"][0]["methods"].insert(0, {
+        "name": "writeState_credits",
+        "signature": "public static void writeState_credits(long value, java.util.Map<String, Object> context) { }",
+    })
+    slot = _required_state_write_slots(frame)["credits"]
+    assert slot["value_type"] == "long"
+    assert "(long value)" in slot["signature"]
+    router = Router([
+        {"action": "assign"},
+        {"target": "target.amount", "operator": "=", "value": "5"},
+        {"action": "complete"},
+        {"expression": "25L"},
+    ])
+    author_callback_body(router, [], data_name="typed_write", frame=frame,
+                         effect_receipt=True)
+    request = None
+    # Router records actions by name. A separate capture router can verify
+    # exact contextual Java type in the mandatory writer request.
+    class CaptureRouter(Router):
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if "required_state_credits" in data_name:
+                nonlocal request
+                request = json.loads(messages[-1]["content"])
+            return super().generate_structured_data(
+                role, messages, data_name=data_name, parameters=parameters)
+    import json
+    capture = CaptureRouter([
+        {"action": "assign"},
+        {"target": "target.amount", "operator": "=", "value": "5"},
+        {"action": "complete"},
+        {"expression": "25L"},
+    ])
+    author_callback_body(capture, [], data_name="typed_write", frame=frame,
+                         effect_receipt=True)
+    assert request["required_java_value_type"] == "long"
+
+
+def test_required_state_write_rejects_context_only_overload():
+    from minecraft_mod_ai.host_callback_body import _required_state_write_slots
+    frame = effect_frame()
+    frame["host_state_access"][0]["methods"] = [{
+        "name": "writeState_credits",
+        "signature": "public static void writeState_credits(long value, java.util.Map<String, Object> context) { }",
+    }]
+    with pytest.raises(ValueError, match="CALLBACK_REQUIRED_STATE_ACCESSOR_UNDECLARED"):
+        _required_state_write_slots(frame)
