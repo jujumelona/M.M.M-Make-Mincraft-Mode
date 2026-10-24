@@ -185,73 +185,87 @@ def repair_request_action_effects(
                 "ACTION_REPAIR_REQUIREMENT_MISSING: " + requirement_id
             )
 
+    # Repair one command at a time so a complex request is not limited to
+    # four aggregate state rows. Do not erase already-valid same-feature rules.
     current = deepcopy(original)
     for requirement_id in unresolved:
         feature = features[requirement_id]
         subset = [row for row in missing
                   if row["source_requirement_id"] == requirement_id]
-        current_state = current.get("state_model", {}).get("specification", {})
-        shared = deepcopy(current_state.get("variables", []))
-        focused = _feature_prompt(
-            str(request_scope.get("requested_prompt") or requested_prompt),
-            feature, shared,
-        )
-        focused += (
-            "\n\nMANDATORY EXECUTION CONTRACT REPAIR (one attempt):\n"
-            "These EXACT pre-existing UI actions were already approved. "
-            "Do not omit, rename, replace, or create commands for them. "
-            "For each non-presentation action, author an actual canonical "
-            "state_model.update or transition with precisely the same "
-            "trigger and source requirement. Define genuinely necessary "
-            "state variables and all guards/atomic mutations. Currency, "
-            "resources, upgrades and inventory must be server-authoritative. "
-            "An unrelated launch/mining update, an identity assignment or "
-            "a zero-valued effect is not an implementation. Opening a UI "
-            "screen alone requires no state mutation. Do not introduce "
-            "unrequested mechanics. Failed inputs:\n"
-            + json.dumps(subset, ensure_ascii=False, sort_keys=True)
-            + "\nExisting canonical request state:\n"
-            + json.dumps(current_state, ensure_ascii=False, sort_keys=True)
-        )
-        print(
-            "ACTION_SOURCE_REPAIR: request=" + requirement_id
-            + " unbound_actions=" + str(len(subset)), flush=True,
-        )
-        behavior = current.get("behavior_contract")
-        if not isinstance(behavior, Mapping):
+        triggers = [str(row["trigger"]).strip().casefold() for row in subset]
+        if len(triggers) != len(set(triggers)):
             raise ValueError(
-                "ACTION_SOURCE_REPAIR_BEHAVIOR_MISSING: " + requirement_id
+                "ACTION_REPAIR_AMBIGUOUS_TRIGGER: multiple actions share "
+                "one source trigger within " + requirement_id
             )
-        candidate = design.author_state_repair_section(
-            router, focused, behavior_contract=behavior,
-            required_action_count=len(subset),
-            shared_state_variables=shared, media_paths=media_paths,
-            budget=budget,
-        )
-        candidate = bind_request_records(candidate, requirement_id)
-        candidate_state = candidate.get("state_model", {}).get(
-            "specification", {})
-        repaired = deepcopy(current)
-        if "state_model" not in repaired:
-            repaired["state_model"] = {
-                "constraint_evidence_refs": [], "specification": {
-                    **{name: [] for name in DETAIL_RECORDS["state_model"]},
-                    "inapplicable_concerns": [],
-                },
+        for action in subset:
+            current_state = current.get("state_model", {}).get("specification", {})
+            shared = deepcopy(current_state.get("variables", []))
+            focused = _feature_prompt(
+                str(request_scope.get("requested_prompt") or requested_prompt),
+                feature, shared,
+            )
+            focused += (
+                "\n\nMANDATORY EXECUTION CONTRACT REPAIR (one attempt):\n"
+                "This ONE approved server command lacks a state effect. "
+                "Do not rename or omit its original trigger or introduce a "
+                "different UI command. Author a canonical state_model.update "
+                "or transition using exactly this trigger, with real "
+                "server-owned, guarded atomic mutations and any necessary "
+                "state variable declarations. This is not a screen-open "
+                "operation. Do not author another requirement's transaction "
+                "or fabricate zero-valued effects. Target command:\n"
+                + json.dumps(action, ensure_ascii=False, sort_keys=True)
+                + "\nExisting canonical request state:\n"
+                + json.dumps(current_state, ensure_ascii=False, sort_keys=True)
+            )
+            print(
+                "ACTION_SOURCE_REPAIR: request=" + requirement_id
+                + " trigger=" + str(action["trigger"])[:96], flush=True,
+            )
+            behavior = current.get("behavior_contract")
+            if not isinstance(behavior, Mapping):
+                raise ValueError(
+                    "ACTION_SOURCE_REPAIR_BEHAVIOR_MISSING: " + requirement_id
+                )
+            candidate = design.author_state_repair_section(
+                router, focused, behavior_contract=behavior,
+                required_action_count=1,
+                shared_state_variables=shared, media_paths=media_paths,
+                budget=budget,
+            )
+            candidate = bind_request_records(candidate, requirement_id)
+            candidate_state = candidate.get("state_model", {}).get(
+                "specification", {})
+            selected = {
+                concern: [
+                    deepcopy(row) for row in candidate_state.get(concern, ())
+                    if str(row.get("trigger") or "").strip().casefold()
+                    == str(action["trigger"]).strip().casefold()
+                ]
+                for concern in ("transitions", "updates")
             }
-        target = repaired["state_model"]["specification"]
-        target["variables"] = merge_state_definitions(
-            target.get("variables", []), candidate_state.get("variables", []),
-        )
-        for concern in ("transitions", "updates"):
-            target[concern] = [
-                row for row in target.get(concern, ())
-                if row.get(SOURCE_REQUIREMENT) != requirement_id
-            ] + deepcopy(candidate_state.get(concern, []))
-        repaired = design.normalize_structured_sections(repaired)
-        # Do not silently accept a regenerated feature that omitted a
-        # previously approved command. We never modify the UI ledger.
-        current = repaired
+            if not any(selected.values()):
+                raise ValueError(
+                    "ACTION_SOURCE_REPAIR_EXHAUSTED: planner did not produce "
+                    "an exact same-trigger state rule for " + requirement_id
+                    + " / " + str(action["trigger"])[:128]
+                )
+            repaired = deepcopy(current)
+            if "state_model" not in repaired:
+                repaired["state_model"] = {
+                    "constraint_evidence_refs": [], "specification": {
+                        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+                        "inapplicable_concerns": [],
+                    },
+                }
+            target = repaired["state_model"]["specification"]
+            target["variables"] = merge_state_definitions(
+                target.get("variables", []), candidate_state.get("variables", []),
+            )
+            for concern in ("transitions", "updates"):
+                target[concern].extend(selected[concern])
+            current = design.normalize_structured_sections(repaired)
 
     try:
         preflight_state_guard_semantics(current)
