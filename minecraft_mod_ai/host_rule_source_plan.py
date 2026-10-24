@@ -115,17 +115,29 @@ class RuntimeSourcePlanner:
 def bind_runtime_sources(behavior, bindings, planner, events):
     """Require the intersection of sources on one actual callback ABI."""
     names = tuple(dict.fromkeys(behavior.get("runtime_state_reads", ())))
-    invalid = [name for name in names if not isinstance(bindings.get(name), dict)
-               or bindings[name].get("binding") != "world_state"]
-    if invalid:
+    # World-state names are semantic requests, not executable sources.
+    # Requiring an LLM-produced `binding=world_state` *before* looking up
+    # real callback receiver APIs makes an actual target method invisible
+    # whenever its planning tag was omitted. The symbol graph, not this
+    # worksheet label, is authority: discover complete inspected paths for
+    # every declared runtime read, then require a concrete path for *each*
+    # name on one registered callback. Explicit verified_symbol_ref pins
+    # still narrow the result; a contradictory binding is rejected.
+    unsupported = [
+        name for name in names
+        if isinstance(bindings.get(name), dict)
+        and bindings[name].get("binding") not in (None, "world_state")
+    ]
+    if unsupported:
         raise RuleMissingRuntimeProducer(behavior.get("behavior_id", ""), [
-            {"name": name, "reason": "missing_world_observer_binding"} for name in invalid])
+            {"name": name, "reason": "runtime_binding_namespace_conflict"}
+            for name in unsupported])
     per_event, eligible, available = {}, [], set()
     for event in events:
         sources = {}
         for name in names:
             paths = planner.plans(name, event.get("parameters", ()))
-            declared = bindings[name].get("verified_symbol_ref")
+            declared = (bindings.get(name) or {}).get("verified_symbol_ref")
             if declared:
                 paths = [path for path in paths if path["symbol_refs"] == [declared]]
             sources[name] = paths
