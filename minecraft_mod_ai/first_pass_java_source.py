@@ -462,7 +462,9 @@ def compose_first_pass_java(
                 if not source_ref:
                     from .source_owned_site_choice import choose_verified_source_site
                     source_ref = choose_verified_source_site(
-                        router, behavior, symbol_index)
+                        router, behavior, symbol_index,
+                        side=str(spec.get("side") or "COMMON").upper(),
+                    )
                 root = (construction_context or {}).get("project_root")
                 if not root:
                     raise ValueError("JAVA_CUSTOM_SOURCE_PROJECT_ROOT_REQUIRED")
