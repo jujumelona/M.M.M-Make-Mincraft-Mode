@@ -466,6 +466,7 @@ class _PlannerPageRequest:
     concerns: Sequence[str]
     completed: Mapping[str, Mapping[str, Any]]
     media_paths: Sequence[str | Path]
+    fixed_state_trigger: str | None = None
 
 
 @dataclass(frozen=True)
@@ -480,6 +481,7 @@ class _PlannerSectionRequest:
     budget: Any = None
     record_counts: Mapping[str, int] | None = None
     shared_state_variables: Sequence[Mapping[str, Any]] = ()
+    fixed_state_trigger: str | None = None
 
 
 def _generate_authored_chunk(
@@ -515,6 +517,16 @@ def _generate_authored_chunk(
         record_counts=record_counts,
         state_symbols=state_symbols,
     )
+    if (page.section == "state_model" and page.fixed_state_trigger
+            and concern in {"updates", "transitions"}):
+        # Make the exact event identity part of the decoder contract, not
+        # a free-form string comparison that a small model can paraphrase.
+        item_properties = schema["properties"][concern]["items"]["properties"]
+        if "trigger" in item_properties:
+            item_properties["trigger"] = {
+                "type": "string",
+                "enum": [page.fixed_state_trigger],
+            }
     messages: Sequence[Mapping[str, Any]]
     if page.section == "state_model":
         messages = ()
@@ -726,6 +738,7 @@ def _generate_concern_pages(
             concerns=concerns,
             completed=request.completed,
             media_paths=request.media_paths,
+            fixed_state_trigger=request.fixed_state_trigger,
         )
         if request.budget is not None:
             call_count = 1
@@ -961,6 +974,7 @@ def author_state_repair_section(
     router: Any, prompt: str, *, behavior_contract: Mapping[str, Any],
     required_action_count: int, shared_state_variables: Sequence[Mapping[str, Any]],
     budget: Any = None, media_paths: Sequence[str | Path] = (),
+    fixed_state_trigger: str | None = None,
 ) -> dict[str, Any]:
     """Reauthor only the failing feature's state worksheet, not nine sections.
 
@@ -982,10 +996,16 @@ def author_state_repair_section(
     counts = _generate_section_record_counts(
         router, prompt, section="state_model", completed=completed,
     )
-    if counts.get("updates", 0) + counts.get("transitions", 0) < required_action_count:
-        # The model cannot silently erase player actions by selecting zero
-        # state rules. Assign the minimum executable rule slots without
-        # choosing their payloads or state semantics for it.
+    if fixed_state_trigger:
+        if not 1 <= len(fixed_state_trigger) <= 128:
+            raise ValueError("ACTION_REPAIR_TRIGGER_ABI_INVALID")
+        # Exactly one transaction owns the command, so the model cannot
+        # manufacture multiple competing updates or transitions for it.
+        if counts.get("transitions", 0):
+            counts["transitions"], counts["updates"] = 1, 0
+        else:
+            counts["updates"], counts["transitions"] = 1, 0
+    elif counts.get("updates", 0) + counts.get("transitions", 0) < required_action_count:
         counts["updates"] = max(
             counts.get("updates", 0),
             required_action_count - counts.get("transitions", 0),
@@ -997,6 +1017,7 @@ def author_state_repair_section(
         slots=max(1, router_native_model_parallelism(router, role="planner")),
         budget=budget, record_counts=counts,
         shared_state_variables=shared_state_variables,
+        fixed_state_trigger=fixed_state_trigger,
     )
     return {"state_model": _author_section(request, allow_parallel=True)}
 
