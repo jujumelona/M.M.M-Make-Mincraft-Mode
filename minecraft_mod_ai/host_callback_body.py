@@ -211,7 +211,7 @@ def _required_state_write_slots(frame):
                 # overloads. This lowering intentionally invokes (value)
                 # and must NOT infer the value type from the context overload.
                 try:
-                    raw, parsed = _parse("class MmmStateSignature {\\n" + signature + "\\n}")
+                    raw, parsed = _parse("class MmmStateSignature {\n" + signature + "\n}")
                 except ValueError:
                     continue
                 owner_node = next((row for row in parsed.named_children
