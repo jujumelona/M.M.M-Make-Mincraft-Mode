@@ -496,3 +496,47 @@ def test_missing_runtime_producer_requires_real_receiver_observation():
     with pytest.raises(ValueError, match="SOURCE_RUNTIME_OBSERVATION_NOT_GROUNDED"):
         validate_runtime_observation_predicate(scoped, "true")
     validate_runtime_observation_predicate(scoped, "player.level() != null")
+
+
+def test_feature_completion_requires_its_real_host_owned_state_write():
+    from minecraft_mod_ai.host_callback_body import (
+        _require_canonical_state_effects, _effect_operation,
+    )
+
+    frame = {
+        "host_behavior_contract": {
+            "behavior_id": "colonize", "state_writes": ["colonized"],
+        },
+        "host_state_access": [
+            {"owner": "example.AuthoredStateModel",
+             "methods": [{"name": "writeState_colonized"}]},
+        ],
+    }
+    # Local computations are NOT side effects, even if the initializer calls
+    # a real method. A status/log only or other state's write is not enough.
+    assert not _effect_operation("declare", "var mmmValue0 = player.getLevel();")
+    with pytest.raises(ValueError, match="CANONICAL_STATE_WRITES_MISSING"):
+        _require_canonical_state_effects(
+            "private void apply() { var mmmValue0 = player.getLevel(); }", frame,
+        )
+    with pytest.raises(ValueError, match="CANONICAL_STATE_WRITES_MISSING"):
+        _require_canonical_state_effects(
+            "private void apply() {"
+            " example.AuthoredStateModel.writeState_credits(1); }", frame,
+        )
+    _require_canonical_state_effects(
+        "private void apply() {"
+        " example.AuthoredStateModel.writeState_colonized(true); }", frame,
+    )
+
+
+def test_unmaterialized_canonical_state_owner_cannot_be_claimed():
+    from minecraft_mod_ai.host_callback_body import _require_canonical_state_effects
+
+    frame = {"host_behavior_contract": {"state_writes": ["colonized"]},
+             "host_state_access": []}
+    with pytest.raises(ValueError, match="CALLBACK_STATE_OWNER_UNAVAILABLE"):
+        _require_canonical_state_effects(
+            "private void apply() { System.out.println(\"colonized\"); }",
+            frame,
+        )
