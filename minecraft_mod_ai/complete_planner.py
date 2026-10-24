@@ -184,7 +184,15 @@ class CompleteGameDesignPlanner:
         capability_contracts = typed_host_capability_contracts()
         validate_typed_host_capability_contracts(capability_contracts)
         target_adapter = adapter or getattr(self.router, "_mmm_target_adapter", None)
-        from .typed_action_authoring import promote_action_sections
+        from .typed_action_authoring import (
+            preflight_state_guard_semantics,
+            preflight_ui_action_effects,
+            promote_action_sections,
+        )
+        # Do not spend model calls inferring UI form labels for an already
+        # invalid source design. Screen navigation is not a transaction.
+        preflight_state_guard_semantics(structured_sections)
+        preflight_ui_action_effects(structured_sections, strict_source=True)
         promoted = promote_action_sections(self.router, structured_sections, budget=budget, requested_prompt=prompt,
                                           minecraft_version=getattr(target_adapter, "minecraft_version", ""))
         if promoted != structured_sections:
@@ -194,10 +202,6 @@ class CompleteGameDesignPlanner:
         # Reject an unexecutable typed UI action before building the content
         # graph or spending hundreds of model calls on a nonexistent mutation.
         # Never replace a presentation-only screen with a fabricated command.
-        from .typed_action_authoring import (
-            preflight_state_guard_semantics,
-            preflight_ui_action_effects,
-        )
         preflight_state_guard_semantics(structured_sections)
         preflight_ui_action_effects(structured_sections, strict_source=True)
         target_adapter = adapter or getattr(
