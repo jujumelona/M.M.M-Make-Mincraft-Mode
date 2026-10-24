@@ -27,6 +27,44 @@ _STATE_EXECUTABLE_FIELDS = {
 }
 
 
+def canonicalize_boolean_context_keywords(sections):
+    """Migrate only impossible boolean keyword context_refs in saved state IR.
+
+    A model may encode true/false as a context name even though they are
+    reserved Java keywords, not variables. Preserve all other refs; never
+    guess an arbitrary missing client input or turn one into a constant.
+    Source worksheets and provenance are retained, and the input is not
+    mutated. This also protects older completed Colab checkpoints.
+    """
+    result = deepcopy(sections)
+    if not isinstance(result, dict):
+        return result
+    model = result.get("state_model")
+    if not isinstance(model, dict):
+        return result
+    state = model.get("specification", model)
+    if not isinstance(state, dict):
+        return result
+
+    def migrate(node):
+        if isinstance(node, dict):
+            if (node.get("kind") == "context_ref"
+                    and node.get("name") in ("true", "false")):
+                return {"kind": "literal", "value": node["name"] == "true"}
+            return {key: migrate(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [migrate(value) for value in node]
+        return node
+
+    for concern, fields in _STATE_EXECUTABLE_FIELDS.items():
+        for row in state.get(concern, ()):
+            if isinstance(row, dict):
+                for field in fields:
+                    if field in row:
+                        row[field] = migrate(row[field])
+    return result
+
+
 def state_variable_default_schema(
     value_family: str | None = None,
 ) -> dict[str, Any]:
@@ -2071,6 +2109,7 @@ PUBLIC_API = (
 __all__ = [
     "PUBLIC_API",
     "StateSymbolTable",
+    "canonicalize_boolean_context_keywords",
     "compile_mutation_ir",
     "compile_state_expr_ir",
     "constrain_state_chunk_schema",
