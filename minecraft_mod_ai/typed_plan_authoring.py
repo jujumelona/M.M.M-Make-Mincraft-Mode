@@ -29,6 +29,8 @@ _HOST_UNRESOLVED = object()
 
 
 def _decode_int_literal(raw_value: Any, *, scope: str) -> int:
+    if type(raw_value) is bool:
+        raise ValueError(f"TYPED_PLAN_LITERAL_INT_INVALID: {scope} got {raw_value!r}")
     try:
         text = str(raw_value).strip() if not isinstance(raw_value, int) else raw_value
         value = int(text)
@@ -44,6 +46,8 @@ def _decode_int_literal(raw_value: Any, *, scope: str) -> int:
 
 
 def _decode_long_literal(raw_value: Any, *, scope: str) -> int:
+    if type(raw_value) is bool:
+        raise ValueError(f"TYPED_PLAN_LITERAL_LONG_INVALID: {scope} got {raw_value!r}")
     try:
         text = str(raw_value).strip() if not isinstance(raw_value, int) else raw_value
         value = int(text)
@@ -59,6 +63,8 @@ def _decode_long_literal(raw_value: Any, *, scope: str) -> int:
 
 
 def _decode_double_literal(raw_value: Any, *, scope: str) -> float:
+    if type(raw_value) is bool:
+        raise ValueError(f"TYPED_PLAN_LITERAL_DOUBLE_INVALID: {scope} got {raw_value!r}")
     try:
         text = str(raw_value).strip() if not isinstance(raw_value, (int, float)) else raw_value
         value = float(text)
