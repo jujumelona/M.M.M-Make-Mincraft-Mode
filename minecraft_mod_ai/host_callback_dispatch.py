@@ -71,11 +71,20 @@ def select_callback_results(router, event, symbols):
     return selected
 
 
-def render_callback_dispatch(condition, effect, arguments, results):
+def render_callback_dispatch(condition, effect, arguments, results, *, observers=()):
+    # Every missing world/UI source is now a concrete, separately compiled
+    # predicate. No gameplay effect can run merely because the broad event
+    # predicate matched; all required observers must also evaluate true.
+    guards = [condition, *observers]
+    if len(guards) != len(set(guards)):
+        raise ValueError("CALLBACK_OBSERVER_METHOD_DUPLICATE")
+    if not all(isinstance(name, str) and name.isidentifier() for name in guards):
+        raise ValueError("CALLBACK_OBSERVER_METHOD_INVALID")
+    predicate = " && ".join(f"this.{name}({arguments})" for name in guards)
     if not results:
-        return (f"if (this.{condition}({arguments})) {{\n"
+        return (f"if ({predicate}) {{\n"
                 f"    this.{effect}({arguments});\n}}")
-    return (f"if (!this.{condition}({arguments})) {{\n"
+    return (f"if (!({predicate})) {{\n"
             f"    return {results['unhandled']};\n}}\n"
             f"if (!this.{effect}({arguments})) {{\n"
             f"    return {results['unhandled']};\n}}\nreturn {results['handled']};")
