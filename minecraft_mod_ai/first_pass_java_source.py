@@ -448,7 +448,21 @@ def compose_first_pass_java(
                         router, behavior, event_candidates)
                     continue
                 from .source_owned_hook import choose_source_hook, SourceHookUnavailable
-                if event_candidates:
+                # A verified Fabric callback alone cannot provide a missing
+                # world/UI observation. When the immutable work graph requires
+                # a producer BEFORE the callback, first bind the real materialized
+                # source method. Otherwise the picker selects an unrelated
+                # tick/player event and the coder invents an API to compensate.
+                requires_original_producer = bool(
+                    source_work_graph is not None and any(
+                        row.get("behavior_id") == behavior_id
+                        and row.get("kind") == "runtime_producer"
+                        and row.get("evidence", {}).get("source_order")
+                        == "before_occurrence_hook"
+                        for row in source_work_graph.get("tasks", ())
+                    )
+                )
+                if event_candidates and not requires_original_producer:
                     try:
                         bound_events[behavior_id] = choose_source_hook(
                             router, behavior, event_candidates)
