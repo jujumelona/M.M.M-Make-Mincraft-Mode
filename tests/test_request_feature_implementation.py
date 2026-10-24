@@ -246,3 +246,47 @@ def test_integration_source_dependencies_are_not_inferred_from_intent_text():
     )
     assert "unrelated_named_owner" in modules[0].depends_on
     assert len(jobs) == 1
+
+
+def test_canonical_python_generator_java_path_is_required_before_callback_author():
+    import json
+    from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
+    from minecraft_mod_ai.complete_spec import ProductionModule
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    from minecraft_mod_ai.host_version_catalog import host_target
+    from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
+    from minecraft_mod_ai.task_template_catalog import canonical_specification_input
+
+    adapter = host_target("auto")
+    jobs = expand_facts_to_jobs(
+        [PromptFact(fact_id="entity_alien", fact_type=FactType.ENTITY_EXISTS,
+                    subject="alien_hostile_entity")],
+        mod_id="space", package_name="example.space",
+        version_context=adapter.version_context,
+    )
+    entity = next(j for j in jobs if j.canonical_leaf == "minecraft/entity/type")
+    assert not entity.target_path  # The real path is in canonical input.
+    leaf_input = entity.deterministic_inputs["_canonical_inputs"]
+    expected = canonical_specification_input(
+        entity.canonical_leaf, leaf_input,
+    )["target_path"]
+    plan = AuthoredPlan("Fight alien", "Saved", request_scope={
+        "requirements": [{"requirement_id": "battle", "statement": "Fight an alien",
+                          "implementation_role": "gameplay"}],
+        "behavior_requirements": [{
+            "behavior_id": "fight_alien", "requirement_id": "battle",
+            "intent": "Fight alien", "source_quote": "Fight an alien",
+            "trigger": "Player attacks alien", "effects": "Alien loses health",
+            "state_reads": [], "state_writes": [],
+        }],
+    })
+    modules, produced = compile_request_feature_jobs(
+        plan, adapter=adapter, mod_id="space", package_name="example.space",
+        content_modules=(ProductionModule("alien_hostile_entity", "entity",
+                                          {"requirement_refs": []}),),
+        content_jobs=(entity,),
+    )
+    spec = produced[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]
+    required = json.loads(spec["bindings"]["required_content_source_paths_json"])
+    assert expected in required
+    assert set(produced[0].requires) == set(entity.produces)
