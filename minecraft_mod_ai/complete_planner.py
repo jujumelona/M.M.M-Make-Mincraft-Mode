@@ -170,7 +170,15 @@ class CompleteGameDesignPlanner:
         prompt = plan.requested_prompt
         media_paths = plan.media_paths
         existing_input_sha256 = plan.existing_input_sha256
-        structured_sections = plan.structured_sections
+        from .structured_state_runtime import canonicalize_boolean_context_keywords
+
+        # Saved model-generated state IR may encode the literal true/false
+        # as illegal Java context identifiers. Migrate only these reserved
+        # keywords before the expensive content graph and typed compilation.
+        # Other undeclared input references are never guessed or rewritten.
+        structured_sections = canonicalize_boolean_context_keywords(
+            plan.structured_sections
+        )
         from .request_scope import request_scope_context
 
         request_scope = plan.request_scope
