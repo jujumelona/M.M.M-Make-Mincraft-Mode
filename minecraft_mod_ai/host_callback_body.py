@@ -234,6 +234,18 @@ def _complete_required_state_effects(
         if not str(exc).startswith(prefix):
             raise
         missing = [part.strip() for part in str(exc)[len(prefix):].split(",") if part.strip()]
+    # A missing state mutation cannot be appended *after* a model-authored
+    # conditional block: doing so bypasses the condition and mutates state
+    # when the model intentionally skipped the effect. Fail closed instead
+    # of generating plausible but behaviorally incorrect Java.
+    if any(
+        statement.lstrip().startswith(("if (", "while (", "for (", "} else", "switch ("))
+        for statement in semantic_statements
+    ):
+        raise ValueError(
+            "CALLBACK_REQUIRED_STATE_WRITE_CONTROL_FLOW_UNRESOLVED: "
+            + ", ".join(sorted(missing))
+        )
     for name in missing:
         slot = slots[name]
         owner = slot["owner"]
