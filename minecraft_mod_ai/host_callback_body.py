@@ -588,7 +588,17 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     effects = 0
     blocked_operations: set[str] = set()
     for index in range(64):
-        choices = [kind for kind in ("call", "assign", "declare", "if", "while", "foreach")
+        # A gameplay transition with mandatory writes is an atomic EFFECT.
+        # Its activation and preconditions live in the separately authored
+        # predicate/observer methods. Allowing the model to wrap required
+        # mutations in local if/while branches caused false success or late
+        # unconditional writes. Prohibit that unbounded control flow here.
+        supported_actions = (
+            ("call", "assign", "declare")
+            if state_slots or runtime_targets else
+            ("call", "assign", "declare", "if", "while", "foreach")
+        )
+        choices = [kind for kind in supported_actions
                    if kind not in blocked_operations
                    and (kind != "call" or verified_calls or not evidence_bound)]
         if blocks:
