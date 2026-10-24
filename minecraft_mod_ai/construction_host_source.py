@@ -47,6 +47,10 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
         *(str(row.get(field) or "")
           for row in behavior_rows
           for field in ("intent", "trigger", "effects")),
+        *(str(name)
+          for row in behavior_rows
+          for field in ("runtime_state_reads", "runtime_state_writes")
+          for name in (row.get(field) or ())),
     ))
     prompt = {
         "requirement": requirement,
