@@ -145,3 +145,62 @@ def test_nested_model_branch_does_not_get_unconditional_native_mutation():
             frame=verified_frame(), effect_receipt=True,
         )
     assert not any("runtime_mutation_Player health" in row[0] for row in router.calls)
+
+
+
+def test_native_mutator_with_float_argument_is_not_lost_by_callback_binding():
+    # The live player is a verified receiver, but Fabric does not provide the
+    # health float in the callback signature. The host freezes setHealth(float)
+    # and requests only its missing typed value.
+    message = [{"role": "user", "content": json.dumps({
+        "verified_event_callback": {
+            "parameters": ["example.Target", "example.Hand"],
+        },
+        "callback_input_api": [{
+            "verified_class": "example.Target", "members": [
+                {"kind": "METHOD", "name": "setHealth", "static": False,
+                 "return_type": "void", "parameters": ["float"]},
+                {"kind": "METHOD", "name": "getHealth", "static": False,
+                 "return_type": "float", "parameters": []},
+            ],
+        }],
+    })}]
+    router = Router([
+        {"action": "complete"},
+        {"verified_call_id": "m0"},
+        {"expression": "6.0f"},
+    ])
+    source = author_callback_body(
+        router, message, data_name="native_float",
+        frame=verified_frame(), effect_receipt=True,
+    )
+    assert "target.setHealth(6.0f);" in source
+    assert source.index("target.setHealth(6.0f);") < source.index(
+        "return __mmmHostEffectApplied;")
+    selection = router.calls[1][1]
+    assert selection["inspected_calls"][0]["signature"] == "example.Target#setHealth(float)"
+    scalar = router.calls[2][1]
+    assert scalar["required_java_type"] == "float"
+    assert scalar["required_native_state"] == "Player health"
+
+
+def test_unbound_non_scalar_parameter_cannot_be_invented_by_small_model():
+    message = [{"role": "user", "content": json.dumps({
+        "verified_event_callback": {
+            "parameters": ["example.Target", "example.Hand"],
+        },
+        "callback_input_api": [{
+            "verified_class": "example.Target", "members": [
+                {"kind": "METHOD", "name": "hurt", "static": False,
+                 "return_type": "boolean",
+                 "parameters": ["example.UnobservedDamageSource", "float"]},
+            ],
+        }],
+    })}]
+    router = Router([])
+    with pytest.raises(ValueError, match="CALLBACK_RUNTIME_MUTATION_VERIFIED_API_UNAVAILABLE"):
+        author_callback_body(
+            router, message, data_name="native_unbound_object",
+            frame=verified_frame(), effect_receipt=True,
+        )
+    assert router.calls == []
