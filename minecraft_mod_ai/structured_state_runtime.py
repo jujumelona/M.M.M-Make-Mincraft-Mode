@@ -22,7 +22,7 @@ _STATE_EXECUTABLE_FIELDS = {
     "transitions": ("guard", "mutation"),
     "invariants": ("condition",),
     "initialization": ("initial_state",),
-    "updates": ("guard", "mutation"),
+    "updates": ("mutation",),
     "cleanup": ("action",),
 }
 
