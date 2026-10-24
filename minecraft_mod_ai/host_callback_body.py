@@ -240,6 +240,7 @@ def validate_runtime_observation_predicate(scoped, expression):
     """
     pending = []
     parameters = []
+    observed_source = ""
     for message in reversed(scoped):
         if message.get("role") != "user":
             continue
@@ -251,6 +252,7 @@ def validate_runtime_observation_predicate(scoped, expression):
             continue
         work = task.get("source_owned_work")
         if isinstance(work, dict):
+            observed_source = str(task.get("observed_source_name") or "")
             pending = [row for row in work.get("source_tasks", ())
                        if row.get("kind") == "runtime_producer"
                        and row.get("status") != "verified"]
@@ -278,6 +280,22 @@ def validate_runtime_observation_predicate(scoped, expression):
                         for row in pending})
         raise ValueError("SOURCE_RUNTIME_OBSERVATION_NOT_GROUNDED: "
                          + json.dumps(names, ensure_ascii=False))
+    if observed_source:
+        # A world-state producer must read something from the actual event
+        # object, not simply return true or check a non-null parameter. This
+        # is necessary, not sufficient: compiling and playing the generated
+        # feature remains the final semantic acceptance test.
+        visit = [root]
+        accessed = False
+        while visit:
+            node = visit.pop()
+            if node.type in {"method_invocation", "field_access", "array_access"}:
+                accessed = True
+            visit.extend(node.named_children)
+        if not accessed:
+            raise ValueError(
+                "SOURCE_RUNTIME_PRODUCER_NOT_IMPLEMENTED: " + observed_source
+            )
 
 
 def _author_predicate(router, scoped, name, frame, correction, verified, rejected):
