@@ -7,6 +7,7 @@ invocation must appear in the effect body.  Runtime playtests remain required.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 
 
@@ -42,11 +43,22 @@ def author_runtime_mutation_calls(
         _ask, _effect_operation, lower_operation_from_host_verified_call,
     )
 
+    # Exclude Java Object and collection queries which may be non-getter
+    # methods but still have no externally observable mutation.
+    known_pure = {
+        "equals", "hashCode", "toString", "compareTo", "contains",
+        "containsKey", "containsValue", "size", "length", "iterator",
+        "stream", "spliterator", "clone", "copy", "matches",
+        "startsWith", "endsWith", "indexOf", "lastIndexOf",
+    }
     available = {
         str(row["id"]): row
         for row in verified_calls
         if isinstance(row, Mapping)
         and row.get("id") and row.get("expression") and row.get("signature")
+        and "#" in str(row["signature"])
+        and str(row["signature"]).split("#", 1)[1].split("(", 1)[0] not in known_pure
+        and not str(row["signature"]).startswith(("java.lang.Object#", "java.lang.String#"))
         and _effect_operation("call", str(row["expression"]) + ";")
     }
     if not available:
@@ -76,7 +88,8 @@ def author_runtime_mutation_calls(
 
         choice = _ask(
             router, scoped,
-            name=data_name + "_runtime_mutation_" + name,
+            name=(data_name + "_runtime_mutation_" +
+                  hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]),
             schema={
                 "type": "object",
                 "properties": {"verified_call_id": {
