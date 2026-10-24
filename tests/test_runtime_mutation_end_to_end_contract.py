@@ -234,6 +234,14 @@ def test_compiler_repair_cannot_drop_a_checked_native_mutation():
             source.replace("target.setHealth(6.0f);", "target.getHealth();"),
             behavior, receipt,
         )
+    with pytest.raises(ValueError, match="NATIVE_MUTATION_PROOF_EFFECT_DROPPED"):
+        verify_native_runtime_mutation_coverage(
+            source.replace(
+                "target.setHealth(6.0f);",
+                "if (false) { target.setHealth(6.0f); }",
+            ),
+            behavior, receipt,
+        )
     with pytest.raises(ValueError, match="NATIVE_MUTATION_PROOF_COVERAGE_MISSING"):
         verify_native_runtime_mutation_coverage(source, behavior, [])
     with pytest.raises(ValueError, match="NATIVE_MUTATION_PROOF_HANDLER_MISSING"):
