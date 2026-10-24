@@ -454,8 +454,100 @@ class FileAPIEvidence:
         by_root = defaultdict(list)
         for _score, root, key, row in chosen:
             by_root[root].append((key, row))
-        return [
+        records = [
             self._class_record(root, self.symbols[self.classes[root]],
                                all_options[root], by_root[root])
             for root in roots
         ]
+        # Root callback parameters rarely own the requested world mutation:
+        # a player must first yield a level, inventory, or owned subsystem.
+        # The old author could call only player.method(...), so it could
+        # neither observe nor mutate any reachable game-world owner.
+        # Construct a *bounded, inspected one-hop* receiver path. Never
+        # synthesize a getter from a word in the original request.
+        bridged = []
+        for root in roots:
+            for key, method in all_options[root]:
+                if method.get("kind") != "METHOD" or method.get("static"):
+                    continue
+                if parameter_types(method) or method.get("throws"):
+                    continue
+                target = canonical_type_name(method.get("return_type") or "")
+                if (target not in self.classes or target in roots
+                        or not self._accessible(target)
+                        or target.startswith(("java.", "javax.", "org.lwjgl."))):
+                    continue
+                name = str(method.get("name") or "")
+                if (not name or name.startswith(("set", "register", "toString",
+                                                "hashCode", "wait", "notify"))):
+                    continue
+                # Limit this expansion to actual observed Minecraft/project
+                # receiver types. The generic Java library is not an owner of
+                # this game's requested occurrence or mutation.
+                if not (target.startswith("net.minecraft.")
+                        or target.startswith(self.owner.rpartition(".")[0] + ".")):
+                    continue
+                overlap = len(set(re.findall(
+                    r"[a-z]{3,}", re.sub(
+                        r"(?<=[a-z0-9])(?=[A-Z])", " ", name + " " + target).lower()
+                )) & words)
+                reading = name.startswith(("get", "is", "has", "read", "peek"))
+                bridged.append((
+                    -overlap, not reading, root, target, name, key, method,
+                ))
+        bridged.sort()
+        selected_targets = set(roots)
+        for _, _, root, target, name, key, method in bridged:
+            if len(selected_targets) >= len(roots) + 6:
+                break
+            if target in selected_targets:
+                continue
+            options = self._member_options(target)
+            relevant = []
+            for member_key, member in options:
+                if member.get("kind") != "METHOD" or member.get("static"):
+                    continue
+                params = parameter_types(member)
+                if len(params) > 3 or any(
+                    canonical_type_name(typ) not in {*roots, target}
+                    for typ in params
+                ):
+                    continue
+                member_name = str(member.get("name") or "")
+                if member_name in {"getClass", "hashCode", "toString",
+                                   "equals", "wait", "notify", "notifyAll"}:
+                    continue
+                member_words = set(re.findall(
+                    r"[a-z]{3,}", re.sub(
+                        r"(?<=[a-z0-9])(?=[A-Z])", " ", member_name).lower()
+                ))
+                matches = len(member_words & words)
+                relevant.append((not bool(matches), -matches, len(params),
+                                 member_name, member_key, member))
+            relevant.sort(key=lambda row: row[:5])
+            chosen_nested = [(member_key, method) for _, _, _, _, member_key, method
+                             in relevant[:8]]
+            if not chosen_nested:
+                continue
+            # Include the source getter's real ABI even when the callback's
+            # original global top-N evidence budget excluded it.
+            origin = next(record for record in records
+                          if record["verified_class"] == root)
+            if not any(
+                item.get("name") == name
+                and canonical_type_name(item.get("return_type") or "") == target
+                and not item.get("parameters")
+                for item in origin["members"]
+            ):
+                origin["members"].append(prompt_symbol_record(method))
+            record = self._class_record(
+                target, self.symbols[self.classes[target]], options, chosen_nested)
+            record["verified_receiver_path"] = {
+                "source_type": root,
+                "source_method": name,
+                "destination_type": target,
+                "inspected_source_ref": key,
+            }
+            records.append(record)
+            selected_targets.add(target)
+        return records
