@@ -178,3 +178,86 @@ def author_runtime_mutation_calls(
         semantic_statements.append(statement)
         if effect_receipt:
             statements.append(receipt_name + " = true;")
+        collector = frame.get("host_runtime_mutation_receipts")
+        if collector is not None:
+            collector.append({
+                "behavior_id": str(
+                    (frame.get("host_behavior_contract") or {}).get("behavior_id") or ""),
+                "state_name": name,
+                "verified_signature": selected_result["signature"],
+                "statement": statement,
+            })
+
+
+
+def verify_native_runtime_mutation_coverage(source, behaviors, receipts):
+    """Recheck immutable native effect identity AFTER compiler repair and replay.
+
+    The first-pass generator selected each call from inspected Java symbols,
+    but compiler repair can replace a whole member. Compilation alone must
+    not certify a repaired handler after it dropped a mandatory mutation.
+    This proves call preservation/owner placement, not in-game semantics.
+    """
+    import re
+
+    from .java_region_parser import _parse, _text
+
+    required = {
+        (str(row.get("behavior_id") or ""), str(name))
+        for row in behaviors
+        for name in (row.get("runtime_state_writes") or ())
+    }
+    if not required:
+        return
+    if not isinstance(receipts, (list, tuple)):
+        raise ValueError("NATIVE_MUTATION_PROOF_RECEIPTS_REQUIRED")
+    by_key = {}
+    for item in receipts:
+        if not isinstance(item, dict):
+            raise ValueError("NATIVE_MUTATION_PROOF_RECEIPT_INVALID")
+        key = (str(item.get("behavior_id") or ""), str(item.get("state_name") or ""))
+        if key in by_key or key not in required:
+            raise ValueError("NATIVE_MUTATION_PROOF_OWNER_INVALID: " + repr(key))
+        signature = str(item.get("verified_signature") or "")
+        statement = str(item.get("statement") or "")
+        if "#" not in signature or not statement.endswith(";"):
+            raise ValueError("NATIVE_MUTATION_PROOF_ABI_INVALID: " + repr(key))
+        by_key[key] = item
+    if set(by_key) != required:
+        raise ValueError("NATIVE_MUTATION_PROOF_COVERAGE_MISSING: " +
+                         repr(sorted(required - set(by_key))))
+    if len({item["verified_signature"] for item in by_key.values()}) != len(required):
+        raise ValueError("NATIVE_MUTATION_PROOF_SIGNATURE_REUSED")
+
+    raw, tree = _parse(source)
+    methods = {}
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        if node.type == "method_declaration":
+            name = node.child_by_field_name("name")
+            body = node.child_by_field_name("body")
+            if name is not None and body is not None:
+                methods[_text(raw, name)] = body
+        pending.extend(node.named_children)
+    for (behavior_id, state_name), item in by_key.items():
+        handler = "applyBehavior" + hashlib.sha256(
+            behavior_id.encode("utf-8")).hexdigest()[:20]
+        method = methods.get(handler)
+        if method is None:
+            raise ValueError("NATIVE_MUTATION_PROOF_HANDLER_MISSING: " + behavior_id)
+        expected = re.sub(r"\s+", "", item["statement"].rstrip(";"))
+        found = False
+        pending = [method]
+        while pending:
+            node = pending.pop()
+            if node.type == "method_invocation":
+                candidate = re.sub(r"\s+", "", _text(raw, node))
+                if candidate == expected:
+                    found = True
+                    break
+            pending.extend(node.named_children)
+        if not found:
+            raise ValueError(
+                "NATIVE_MUTATION_PROOF_EFFECT_DROPPED: " +
+                behavior_id + "/" + state_name)
