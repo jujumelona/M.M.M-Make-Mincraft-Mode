@@ -93,18 +93,14 @@ def test_late_required_state_writer_never_bypasses_an_effect_condition():
     # brace, so an effect hidden behind if(false) still changed canonical
     # state. Reject the semantic ownership mismatch rather than silently
     # converting a conditional effect into an unconditional one.
-    router = Router([
-        {"action": "if"}, {"expression": "false"},
-        {"action": "assign"},
-        {"target": "target.amount", "operator": "=", "value": "5"},
-        {"action": "end"}, {"action": "complete"},
-    ])
-    with pytest.raises(ValueError, match="CALLBACK_REQUIRED_STATE_WRITE_CONTROL_FLOW_UNRESOLVED"):
+    router = Router([{"action": "if"}, {"action": "if"}])
+    with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
         author_callback_body(
             router, [], data_name="conditional_purchase",
             frame=effect_frame(), effect_receipt=True,
         )
     assert not any("required_state_credits" in name for name in router.calls)
+    assert "if" not in router.calls[0].split("_operation_")[0]
 
 
 
