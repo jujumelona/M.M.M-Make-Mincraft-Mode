@@ -106,3 +106,38 @@ def test_short_java_occurrence_verbs_remain_searchable():
             Picker("SOURCE_REQUIRED"),
             {"behavior_id": "buy", "trigger": "Player buys a module"}, symbols,
         )
+
+
+def test_planet_colonization_does_not_offer_lwjgl_or_space_getters_as_event_sites():
+    behavior = {"behavior_id": "colonize", "trigger":
+                "Player reaches planet location and starts colonization",
+                "intent": "Colonize available planets"}
+    jar = "/gradle/caches/org.lwjgl/lwjgl-vulkan.jar"
+    mc = "/gradle/loom-cache/minecraft-common-26.2.jar"
+    rows = {
+        "lwjgl": {"kind": "CLASS",
+                  "owner": "org.lwjgl.vulkan.VkPipelineSampleLocationsStateCreateInfoEXT"},
+        "lwjgl_method": {
+            "kind": "METHOD",
+            "owner": "org.lwjgl.vulkan.VkPipelineSampleLocationsStateCreateInfoEXT",
+            "name": "sampleLocationsEnable", "parameters": [], "access": 1,
+            "source_path": jar,
+        },
+        "minecraft": {"kind": "CLASS",
+                      "owner": "net.minecraft.world.entity.Entity"},
+        "minecraft_getter": {
+            "kind": "METHOD", "owner": "net.minecraft.world.entity.Entity",
+            "name": "getAvailableSpaceBelow", "parameters": ["double"],
+            "access": 1, "source_path": mc,
+        },
+        "gameplay": {"kind": "CLASS", "owner": "example.PlanetController"},
+        "gameplay_action": {
+            "kind": "METHOD", "owner": "example.PlanetController",
+            "name": "colonizePlanet", "parameters": [], "access": 1,
+            "source_path": "src/main/java/example/PlanetController.java",
+        },
+    }
+    assert [row["ref"] for row in shortlist_verified_sites(
+        behavior, rows)] == ["gameplay_action"]
+    assert shortlist_verified_sites(
+        behavior, {k: v for k, v in rows.items() if k != "gameplay_action"}) == []
