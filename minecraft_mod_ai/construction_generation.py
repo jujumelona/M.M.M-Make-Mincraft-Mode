@@ -66,9 +66,12 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         'java_class_header', 'authored')
     if header_policy not in ('plain', 'authored'):
         raise ValueError('CONSTRUCTION_CLASS_HEADER_POLICY')
-    symbols = dict(context['symbols'])
-    context['symbols'] = symbols
     context['source_pages'] = dict(context.get('source_pages', {}))
+    from .construction_source_symbols import merge_materialized_source_sites
+    symbols = merge_materialized_source_sites(
+        context['source_pages'], context['symbols']
+    )
+    context['symbols'] = symbols
     package, name = identity
     owner = package + '.' + name
     bindings = spec.get('bindings', {})
