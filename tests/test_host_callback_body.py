@@ -473,3 +473,26 @@ def test_verified_fabric_event_registration_is_not_gameplay_effect():
              "prefix": "private void run(net.fabricmc.fabric.api.event.Event evt) {\n",
              "suffix": "\n}"}
     assert verified_callback_choices(evidence, frame) == []
+
+
+def test_missing_runtime_producer_requires_real_receiver_observation():
+    from minecraft_mod_ai.host_callback_body import (
+        validate_runtime_observation_predicate,
+    )
+
+    payload = {
+        "source_owned_work": {"source_tasks": [{
+            "kind": "runtime_producer", "name": "Available planets",
+            "status": "pending",
+        }]},
+        "observed_source_name": "Available planets",
+        "declaration_metadata": {
+            "parameters": [{"name": "player", "type": "example.Player"}],
+        },
+    }
+    scoped = [{"role": "user", "content": json.dumps(payload)}]
+    with pytest.raises(ValueError, match="SOURCE_RUNTIME_PRODUCER_NOT_IMPLEMENTED"):
+        validate_runtime_observation_predicate(scoped, "player != null")
+    with pytest.raises(ValueError, match="SOURCE_RUNTIME_OBSERVATION_NOT_GROUNDED"):
+        validate_runtime_observation_predicate(scoped, "true")
+    validate_runtime_observation_predicate(scoped, "player.level() != null")
