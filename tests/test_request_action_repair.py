@@ -181,3 +181,73 @@ def test_repair_preserves_valid_same_feature_action(monkeypatch):
     repaired = repair_request_action_effects(None, source, scope())
     assert original_valid in repaired["state_model"]["specification"]["updates"]
     preflight_ui_action_effects(repaired, strict_source=True)
+
+
+def test_long_ui_description_uses_bounded_host_event_id(monkeypatch):
+    from minecraft_mod_ai.request_record_ownership import (
+        same_action_source, source_trigger_identity,
+    )
+    source = fixture()
+    ui = source["resources_and_ui"]["specification"]["interactions"][0]
+    ui["trigger"] = (
+        "player opens the spacecraft construction screen with at least one "
+        "unlocked module slot and sufficient credits, and purchases a modular "
+        "engine component from the shipyard for the currently owned spacecraft"
+    )
+    assert len(ui["trigger"]) > 128
+    canonical = source_trigger_identity(ui)
+    assert canonical.startswith("ui_evt_") and len(canonical) <= 128
+    assert source_trigger_identity(ui) == canonical
+    assert not same_action_source(
+        {"trigger": canonical, "source_requirement_id": "other"}, ui
+    )
+    calls = []
+
+    def bounded(router, prompt, **kwargs):
+        assert kwargs["fixed_state_trigger"] == canonical
+        assert kwargs["required_action_count"] == 1
+        calls.append(prompt)
+        return candidate(canonical)
+
+    monkeypatch.setattr(design, "author_state_repair_section", bounded)
+    result = repair_request_action_effects(None, source, scope())
+    update = result["state_model"]["specification"]["updates"][-1]
+    assert update["trigger"] == canonical
+    assert same_action_source(update, ui)
+    assert result["resources_and_ui"]["specification"]["interactions"][0]["trigger"] == ui["trigger"]
+    assert len(calls) == 1
+    preflight_ui_action_effects(result, strict_source=True)
+
+
+def test_repair_schema_binds_host_event_before_model_decoding(monkeypatch):
+    from minecraft_mod_ai import authored_structured_design as impl
+
+    fixed = "ui_evt_f1ea5d9ef6a7b8c9d0123456"
+    calls = []
+
+    def fake_template(section, concerns, *, record_counts, state_symbols):
+        assert section == "state_model" and concerns == ("updates",)
+        return {"properties": {"updates": {
+            "items": {"properties": {"trigger": {"type": "string", "maxLength": 128}}}
+        }}}
+
+    def fake_generator(router, prompt, messages, page, schema, state_symbols,
+                       *, section_context, on_additional_call):
+        calls.append(schema["properties"]["updates"]["items"]["properties"]["trigger"])
+        return {"updates": [{"trigger": fixed}]}
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.worksheet_atomic_chunker.worksheet_chunk_schema",
+        fake_template,
+    )
+    monkeypatch.setattr(impl, "_generate_authored_page_value", fake_generator)
+    page = impl._PlannerPageRequest(
+        section="state_model", chunk_index=0, chunk_count=1,
+        concerns=("updates",), completed={}, media_paths=(),
+        fixed_state_trigger=fixed,
+    )
+    result = impl._generate_authored_chunk(
+        None, "repair", page=page, record_counts={"updates": 1},
+    )
+    assert result["updates"][0]["trigger"] == fixed
+    assert calls == [{"type": "string", "enum": [fixed]}]
