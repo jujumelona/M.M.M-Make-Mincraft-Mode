@@ -58,3 +58,29 @@ def test_nonvoid_dispatch_checks_condition_before_effect_and_handled_result():
 def test_predicate_and_effect_return_values_are_not_confused():
     assert render_callback_dispatch("matches", "apply", "x", {}) == (
         "if (this.matches(x)) {\n    this.apply(x);\n}")
+
+
+def test_colonization_observers_gate_runtime_effect_before_dispatch():
+    names = ["observeRuntimeaabbccdd", "observeRuntimeeeff0011"]
+    text = render_callback_dispatch(
+        "matchesColonization", "applyColonization", "player, level", {},
+        observers=names,
+    )
+    assert text.startswith("if (this.matchesColonization(player, level) && ")
+    assert "this.observeRuntimeaabbccdd(player, level)" in text
+    assert "this.observeRuntimeeeff0011(player, level)" in text
+    assert text.index("observeRuntimeeeff0011") < text.index("applyColonization")
+    with pytest.raises(ValueError, match="DUPLICATE"):
+        render_callback_dispatch("matches", "apply", "player", {},
+                                 observers=["matches"])
+
+
+def test_nonvoid_observer_failure_returns_unhandled_not_success():
+    text = render_callback_dispatch(
+        "matches", "apply", "world",
+        {"unhandled": "false", "handled": "true"},
+        observers=["observePrerequisites"],
+    )
+    assert "if (!(this.matches(world) && this.observePrerequisites(world)))" in text
+    assert text.index("return false;") < text.index("this.apply(world)")
+    assert text.endswith("return true;")
