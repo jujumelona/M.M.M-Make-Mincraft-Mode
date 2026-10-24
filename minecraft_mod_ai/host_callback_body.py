@@ -557,11 +557,6 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                       context=context, lower=lambda row: row["action"])
         if action == "complete":
             completed = [*statements]
-            if effect_receipt:
-                completed.append(f"return {receipt_name};")
-            source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
-            if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
-                raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
             if state_slots:
                 _complete_required_state_effects(
                     router, scoped, data_name=data_name, frame=frame,
@@ -569,7 +564,11 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                     receipt_name=receipt_name, effect_receipt=effect_receipt,
                     slots=state_slots,
                 )
-                source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
+            if effect_receipt:
+                completed.append(f"return {receipt_name};")
+            source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
+            if rejected_compiler_member is not None and _same_compiled_member(source, rejected_compiler_member):
+                raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
             _require_canonical_state_effects(source, frame)
             return validate_generated_java_source(source, frame, frame["prefix"], frame["suffix"])
         new_local = f"mmmValue{len(locals_)}"
