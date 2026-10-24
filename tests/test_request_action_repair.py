@@ -130,3 +130,54 @@ def test_unrelated_meaningful_write_cannot_hide_same_target_noop():
     })
     with pytest.raises(ValueError, match="ACTION_UI_EFFECT_UNBOUND"):
         preflight_ui_action_effects(source, strict_source=True)
+
+
+def test_multiple_actions_in_one_feature_repair_individually(monkeypatch):
+    source = fixture()
+    ui = source["resources_and_ui"]["specification"]["interactions"]
+    for index in range(5):
+        extra = deepcopy(ui[0])
+        extra.update(trigger=f"upgrade_component_{index}",
+                     server_action=f"Upgrade component {index}")
+        ui.append(extra)
+    before = deepcopy(source)
+    calls = []
+
+    def one_action_only(router, prompt, **kwargs):
+        assert kwargs["required_action_count"] == 1
+        import re
+        action = re.search(r'"trigger": "(buy_ship_component|upgrade_component_\\d+)"', prompt)
+        assert action is not None
+        calls.append(action.group(1))
+        return candidate(action.group(1))
+
+    monkeypatch.setattr(design, "author_state_repair_section", one_action_only)
+    repaired = repair_request_action_effects(None, source, scope())
+    assert len(calls) == 6
+    assert repaired["resources_and_ui"] == before["resources_and_ui"]
+    assert repaired["state_model"]["specification"]["updates"][0] == (
+        before["state_model"]["specification"]["updates"][0]
+    )
+    preflight_ui_action_effects(repaired, strict_source=True)
+
+
+def test_repair_preserves_valid_same_feature_action(monkeypatch):
+    source = fixture()
+    src = source["resources_and_ui"]["specification"]["interactions"]
+    already_valid = deepcopy(src[0])
+    already_valid["trigger"] = "install_weapon"
+    src.append(already_valid)
+    source["state_model"]["specification"]["updates"].append({
+        "owner": "player", "trigger": "install_weapon",
+        "source_requirement_id": "ship",
+        "mutation": [{"target": "amount", "operator": "+=",
+                      "value": {"kind": "number", "value": "1"}}],
+    })
+    original_valid = deepcopy(source["state_model"]["specification"]["updates"][-1])
+    monkeypatch.setattr(
+        design, "author_state_repair_section",
+        lambda *args, **kwargs: candidate(),
+    )
+    repaired = repair_request_action_effects(None, source, scope())
+    assert original_valid in repaired["state_model"]["specification"]["updates"]
+    preflight_ui_action_effects(repaired, strict_source=True)
