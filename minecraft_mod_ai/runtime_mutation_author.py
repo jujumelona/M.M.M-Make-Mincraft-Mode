@@ -134,9 +134,9 @@ def author_runtime_mutation_calls(
                 )
             code = lower_operation_from_host_verified_call(
                 expression, frame, statements, [])
-            return code
+            return {"statement": code, "signature": selected["signature"]}
 
-        statement = _ask(
+        selected_result = _ask(
             router, scoped,
             name=(data_name + "_runtime_mutation_" +
                   hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]),
@@ -170,19 +170,10 @@ def author_runtime_mutation_calls(
                 "prior_verified_signatures": sorted(used_signatures),
             }, lower=lower,
         )
-        # Select the matching signature from the host-compiled statement; a
-        # second copy cannot satisfy a different required runtime target.
-        # The outer schema admission already constrained this to an ID.
-        matching = [
-            item["signature"] for item in options.values()
-            if (item.get("kind") == "bound"
-                and statement == str(item["expression"]) + ";")
-            or (item.get("kind") == "typed"
-                and statement.startswith(str(item["receiver"]) + "." + str(item["name"]) + "("))
-        ]
-        if len(matching) != 1:
-            raise ValueError("CALLBACK_RUNTIME_MUTATION_SIGNATURE_UNBOUND: " + name)
-        used_signatures.add(matching[0])
+        # Signature is carried directly from the selected checked ID, not
+        # rediscovered with a text-prefix search (which conflates overloads).
+        used_signatures.add(selected_result["signature"])
+        statement = selected_result["statement"]
         statements.append(statement)
         semantic_statements.append(statement)
         if effect_receipt:
