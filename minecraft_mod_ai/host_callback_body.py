@@ -204,14 +204,39 @@ def _required_state_write_slots(frame):
             if not owner:
                 continue
             for method in contract.get("methods") or ():
-                if method.get("name") == "writeState_" + name:
-                    matches.append((owner, str(method.get("signature") or "")))
+                if method.get("name") != "writeState_" + name:
+                    continue
+                signature = str(method.get("signature") or "")
+                # Canonical state has both (value) and (value, context)
+                # overloads. This lowering intentionally invokes (value)
+                # and must NOT infer the value type from the context overload.
+                try:
+                    raw, parsed = _parse("class MmmStateSignature {\\n" + signature + "\\n}")
+                except ValueError:
+                    continue
+                owner_node = next((row for row in parsed.named_children
+                                   if row.type == "class_declaration"), None)
+                if owner_node is None:
+                    continue
+                methods = [row for row in owner_node.child_by_field_name("body").named_children
+                           if row.type == "method_declaration"]
+                if len(methods) != 1:
+                    continue
+                parameters = [p for p in methods[0].child_by_field_name("parameters").named_children
+                              if p.type == "formal_parameter"]
+                if len(parameters) != 1:
+                    continue
+                param_type = parameters[0].child_by_field_name("type")
+                if param_type is None:
+                    continue
+                matches.append((owner, signature, _text(raw, param_type)))
         if not matches:
             raise ValueError("CALLBACK_REQUIRED_STATE_ACCESSOR_UNDECLARED: " + name)
-        if len({owner for owner, _ in matches}) != 1:
+        if len({(owner, typ) for owner, _, typ in matches}) != 1:
             raise ValueError("CALLBACK_REQUIRED_STATE_OWNER_AMBIGUOUS: " + name)
-        owner, signature = matches[0]
-        slots[name] = {"owner": owner, "signature": signature}
+        owner, signature, value_type = matches[0]
+        slots[name] = {"owner": owner, "signature": signature,
+                       "value_type": value_type}
     return slots
 
 
@@ -275,6 +300,7 @@ def _complete_required_state_effects(
                 ),
                 "state_name": name, "verified_writer": slot["signature"],
                 "verified_writer_owner": owner,
+                "required_java_value_type": slot["value_type"],
                 "assigned_behavior": frame.get("host_behavior_contract"),
                 "accepted_host_statements": semantic_statements,
             }, lower=lower,
