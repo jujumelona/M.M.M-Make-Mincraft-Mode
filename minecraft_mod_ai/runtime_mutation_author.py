@@ -253,7 +253,17 @@ def verify_native_runtime_mutation_coverage(source, behaviors, receipts):
             node = pending.pop()
             if node.type == "method_invocation":
                 candidate = re.sub(r"\s+", "", _text(raw, node))
-                if candidate == expected:
+                statement = node.parent
+                # Runtime writes are direct statements of the already-guarded
+                # effect method. A repair cannot hide an identical call in an
+                # unreachable branch, lambda or nested block.
+                direct = (
+                    statement is not None
+                    and statement.type == "expression_statement"
+                    and statement.parent is not None
+                    and statement.parent.id == method.id
+                )
+                if candidate == expected and direct:
                     found = True
                     break
             pending.extend(node.named_children)
