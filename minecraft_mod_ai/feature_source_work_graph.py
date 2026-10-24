@@ -174,7 +174,9 @@ def bind_selected_hooks(
             raise ValueError("FEATURE_WORK_SELECTED_HOOK_NOT_INSPECTED: " + selected_id)
         row["evidence"]["event_binding"] = selected_id
         if selected_id in materialized:
-            row["evidence"]["source_kind"] = "materialized_custom_mixin"
+            row["evidence"]["source_kind"] = (
+                "host_typed_ui_action" if event.get("provenance") == "host_typed_ui_action"
+                else "materialized_custom_mixin")
         if row.get("status") != "verified":
             row["status"] = "source_selected"
         registered.add(owner)
@@ -182,6 +184,32 @@ def bind_selected_hooks(
         raise ValueError("FEATURE_WORK_SELECTED_HOOK_OWNER_UNKNOWN")
     amended["unverified_obligations"] = sum(
         row.get("status") != "verified" for row in amended.get("tasks", ()))
+    amended["completion_verified"] = False
+    return amended
+
+
+def bind_planned_ui_occurrence(graph, behavior_id, produced):
+    """A planned real producer supplies an ABI, never verified gameplay."""
+    from copy import deepcopy
+
+    amended = deepcopy(dict(graph))
+    rows = amended["tasks"]
+    hook = next(row for row in rows if row.get("kind") == "occurrence_hook"
+                and row.get("behavior_id") == behavior_id)
+    source = next((row for row in rows if row.get("kind") == "custom_event_source"
+                   and row.get("behavior_id") == behavior_id), None)
+    if source is None:
+        identity = _id("custom_event_source", behavior_id)
+        source = {"task_id": identity, "kind": "custom_event_source",
+                  "behavior_id": behavior_id, "name": "", "depends_on": [],
+                  "status": "planned", "evidence": {}}
+        rows.insert(rows.index(hook), source)
+        hook["depends_on"] = [identity, *hook["depends_on"]]
+    source["status"] = "planned"
+    source["evidence"].update({"source_kind": "host_typed_ui_action",
+        "planned_paths": sorted(produced["files"]), "runtime_verified": False})
+    hook["evidence"].setdefault("materialized_custom_event_ids", []).append(
+        produced["callback"]["event_id"])
     amended["completion_verified"] = False
     return amended
 

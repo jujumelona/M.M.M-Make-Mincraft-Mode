@@ -441,3 +441,22 @@ def test_registry_builder_evidence_includes_resource_key_identifier_factory():
     assert identifier in classes
     assert any(row['name'] == 'create' and identifier in row['parameters']
                for row in classes[KEY]['members'])
+
+
+def test_callback_member_access_uses_inspected_class_owner_with_opaque_index_keys():
+    from copy import deepcopy
+
+    from minecraft_mod_ai.construction_file_api_evidence import FileAPIEvidence
+    symbols = {
+        'opaque-class': {'kind': 'CLASS', 'owner': 'example.Target', 'name': 'Target', 'access': 1},
+        'opaque-method': {'kind': 'METHOD', 'owner': 'example.Target', 'name': 'updateFlag',
+                          'return_type': 'void', 'parameters': [], 'access': 1},
+        'opaque-private': {'kind': 'CLASS', 'owner': 'other.Hidden', 'name': 'Hidden', 'access': 2},
+        'opaque-client': {'kind': 'CLASS', 'owner': 'other.Client', 'name': 'Client', 'access': 1, 'side': 'CLIENT'},
+    }
+    original = deepcopy(symbols)
+    index = FileAPIEvidence(symbols, target_path='src/main/java/demo/Feature.java', owner='demo.Feature')
+    records = index.callback_member_records(['example.Target', 'other.Hidden', 'other.Client'], intent='Update flag')
+    assert [row['verified_class'] for row in records] == ['example.Target']
+    assert [row['name'] for row in records[0]['members']] == ['updateFlag']
+    assert symbols == original

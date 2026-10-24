@@ -54,7 +54,7 @@ def validate_registered_event_sources(
     compact = re.sub(r"\s+", "", masked)
     available = {str(row.get("event_id") or ""): row for row in inspected_events}
     for row in materialized_events:
-        if (row.get("provenance") != "verified_source_site_mixin"
+        if (row.get("provenance") not in {"verified_source_site_mixin", "host_typed_ui_action"}
                 or not row.get("event_id") or not row.get("event_owner")
                 or row.get("event_field") != "EVENT"):
             raise ValueError("FEATURE_PROOF_CUSTOM_EVENT_RECEIPT_INVALID")
@@ -79,6 +79,12 @@ def validate_registered_event_sources(
         found = False
         compact_body = re.sub(r"\s+", "", body)
         for event in eligible:
+            if (event.get("provenance") in {"verified_source_site_mixin", "host_typed_ui_action"}
+                    and event.get("behavior_id") != identity):
+                # Compiler repair/replay must preserve the original producer
+                # owner. A real allocation control cannot prove release just
+                # because both handlers have the same Java parameter types.
+                continue
             owner = str(event.get("event_owner") or "")
             field = str(event.get("event_field") or "")
             if not owner or not field:

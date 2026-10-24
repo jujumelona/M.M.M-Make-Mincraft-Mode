@@ -420,6 +420,7 @@ def compose_first_pass_java(
     bound_events = {}
     event_candidates = []
     pending_custom_source_sites = []
+    pending_ui_source_plans = []
     # Source-owned features must supply their own real execution producer.
     # The restricted rule path above is allowed to bind only inspected hooks
     # whose observation contract is already proven. Reusing the same hook
@@ -472,10 +473,39 @@ def compose_first_pass_java(
                               or site_bindings.get(behavior_id))
                 if not source_ref:
                     from .source_owned_site_choice import choose_verified_source_site
-                    source_ref = choose_verified_source_site(
-                        router, behavior, symbol_index,
-                        side=str(spec.get("side") or "COMMON").upper(),
-                    )
+                    try:
+                        source_ref = choose_verified_source_site(
+                            router, behavior, symbol_index,
+                            side=str(spec.get("side") or "COMMON").upper(),
+                        )
+                    except SourceHookUnavailable:
+                        # New player-initiated gameplay need not already have
+                        # its own Java method. Build its original input source
+                        # through the existing Typed Action host, before asking
+                        # the coder for a listener body. Passive occurrences
+                        # remain unsupported here; no unrelated hook is used.
+                        root = (construction_context or {}).get("project_root")
+                        if not root or str(spec.get("side") or "COMMON").upper() == "CLIENT":
+                            raise
+                        from pathlib import Path
+                        from .source_owned_ui_event import author_typed_ui_occurrence
+                        manifest = Path(root) / "src/main/resources/fabric.mod.json"
+                        if not manifest.is_file():
+                            raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
+                        metadata = json.loads(manifest.read_text(encoding="utf-8"))
+                        target = (construction_context or {}).get("target") or {}
+                        produced = author_typed_ui_occurrence(
+                            router, behavior, symbols=symbol_index, package=package_name,
+                            mod_id=metadata["id"], minecraft_version=target.get(
+                                "minecraft_version") or bindings.get("minecraft_version"),
+                        )
+                        pending_ui_source_plans.append(produced)
+                        bound_events[behavior_id] = produced["callback"]
+                        if source_work_graph is not None:
+                            from .feature_source_work_graph import bind_planned_ui_occurrence
+                            source_work_graph = bind_planned_ui_occurrence(
+                                source_work_graph, behavior_id, produced)
+                        continue
                 root = (construction_context or {}).get("project_root")
                 if not root:
                     raise ValueError("JAVA_CUSTOM_SOURCE_PROJECT_ROOT_REQUIRED")
@@ -703,6 +733,11 @@ def compose_first_pass_java(
                             if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", simple)
                             and simple[:1].lower() + simple[1:] not in KEYWORDS
                             else f"eventArg{index_arg}")
+                if event_callback.get("provenance") == "host_typed_ui_action":
+                    # The host's form ABI owns input names as well as types.
+                    # Two strings with different meanings cannot collapse to
+                    # anonymous callback-local names.
+                    name_arg = event_callback["parameter_names"][index_arg]
                 while name_arg in used:
                     name_arg += str(index_arg)
                 used.add(name_arg)
@@ -1006,4 +1041,10 @@ def compose_first_pass_java(
         from .source_owned_custom_event import materialize_verified_custom_event
         for site in pending_custom_source_sites:
             materialize_verified_custom_event(**site)
+    if pending_ui_source_plans:
+        from .source_owned_ui_event import materialize_typed_ui_occurrence
+        for planned in pending_ui_source_plans:
+            materialize_typed_ui_occurrence(
+                planned, project_root=construction_context["project_root"],
+                symbols=construction_context.get("symbols") or {})
     return source

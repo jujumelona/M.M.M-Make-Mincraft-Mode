@@ -7,7 +7,7 @@ callable signatures instead of handing the model a bare class name.
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import ChainMap, Counter, defaultdict
 
 from .construction_type_contracts import canonical_type_name, class_accessible
 from .java_operation_ir import parameter_types
@@ -99,13 +99,20 @@ class FileAPIEvidence:
             enclosing = canonical_type_name(row.get('enclosing_owner') or '')
             if enclosing:
                 self.children[enclosing].append(name)
+        # Class identities belong to inspected owner records, not the opaque
+        # keys used by a source/bytecode index. Share the original index and
+        # alias only noncanonical class keys for mechanical access checks;
+        # copying the 872K-symbol target per callback would waste Colab RAM.
+        self.type_symbols = ChainMap({
+            name: symbols[key] for name, key in self.classes.items() if name != key
+        }, symbols)
 
     def _accessible(self, name):
         key = self.classes.get(name)
         if key is None:
             return False
         row = self.symbols[key]
-        return class_accessible(self.symbols, row['owner'], self.owner, self.target_path)
+        return class_accessible(self.type_symbols, row['owner'], self.owner, self.target_path)
 
     def _resolve(self, reference):
         """Resolve the longest real class prefix of a qualified expression."""

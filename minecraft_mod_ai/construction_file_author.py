@@ -337,6 +337,19 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
     if not classpath:
         raise ConstructionFileError("CONSTRUCTION_FILE_TARGET_CLASSPATH_REQUIRED")
     from .construction_project_compile import verify_java_source_with_dependencies
+    registered_ui = []
+    if spec.get("bindings", {}).get("request_feature_entrypoint") and context.get("symbols"):
+        from .source_owned_ui_event import read_verified_typed_ui_events
+        registered_ui = read_verified_typed_ui_events(
+            project_root=context["project_root"], symbols=context["symbols"],
+            behaviors=json.loads(spec.get("bindings", {}).get("construction_behaviors_json") or "[]"),
+            package=package, side=str(spec.get("side") or "COMMON").upper())
+    # The event is in a separate generated namespace. Include every concrete
+    # server producer source in this compile, including its startup transport;
+    # discovery of same-package siblings cannot find these dependencies.
+    source_context = [*source_context, *(
+        {"path": path} for event in registered_ui for path in event["producer_source_paths"]
+    )]
     # Compile the full owner and its materialized sibling sources, rather than
     # a detached method or an owner without its actual project prerequisites.
     verify_java_source_with_dependencies(source, context=context,
@@ -361,6 +374,7 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
             behavior_ids=[row["behavior_id"] for row in checked_behaviors],
             package=package, side=str(spec.get("side") or "COMMON").upper(),
         )
+        registered_custom.extend(registered_ui)
         validate_registered_event_sources(
             source, checked_behaviors, checked_events,
             materialized_events=registered_custom)

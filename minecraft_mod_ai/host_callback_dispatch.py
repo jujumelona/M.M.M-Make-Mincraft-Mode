@@ -42,6 +42,11 @@ def select_callback_results(router, event, symbols):
     authority. Void callbacks do not need any result inference.
     """
     type_name = event["return_type"]
+    if event.get("provenance") == "host_typed_ui_action":
+        # This event's result convention is host-authored: true means the
+        # server effect applied; false rejects the submitted action. The
+        # small model must not reverse success and rejection semantics.
+        return {"unhandled": "false", "handled": "true"}
     if type_name == "void":
         return {}
     choices = ["false", "true"] if type_name == "boolean" else _result_fields(event, symbols)

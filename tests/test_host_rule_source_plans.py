@@ -257,7 +257,6 @@ def test_production_entity_handoff_compiles_and_executes_rule(tmp_path, monkeypa
 
 
 def test_complete_multihop_source_skips_absent_receiver_then_reads_live_values(tmp_path):
-    import json
     from test_host_rule_feature import LEVEL, compile_run, index
     from minecraft_mod_ai.host_rule_feature import compose_rule_feature
 

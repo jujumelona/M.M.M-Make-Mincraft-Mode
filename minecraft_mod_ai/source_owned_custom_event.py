@@ -180,6 +180,7 @@ public abstract class {mixin_name} {{
         "mixin_config": mixin_file,
         "files": files,
         "callback": {
+            "behavior_id": behavior_id,
             "event_id": event_owner + "#EVENT", "event_owner": event_owner,
             "event_field": "EVENT", "event_interface": event_owner + ".Listener",
             "method": "onEvent", "parameters": args, "return_type": "void",
@@ -205,9 +206,10 @@ def materialize_verified_custom_event(
     if not manifest.is_file() or manifest.is_symlink():
         raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
     import fcntl
+    from .project_write_lock import project_write_lock
     lock = root / ".mmm/source-producer.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a+", encoding="utf-8") as handle:
+    with project_write_lock(root), lock.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         metadata = json.loads(manifest.read_text(encoding="utf-8"))
         if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
