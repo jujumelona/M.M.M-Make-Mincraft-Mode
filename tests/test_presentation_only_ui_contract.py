@@ -93,3 +93,26 @@ def test_navigation_with_source_owned_mutation_remains_executable():
     state["updates"][0]["trigger"] = SHIPYARD_OPEN
     assert not is_presentation_only_interaction(interaction, state)
     assert _mutating_ui_actions(design)
+
+
+def test_presentation_screen_does_not_steal_runtime_owner_for_empty_transition():
+    from minecraft_mod_ai.request_runtime_ownership import _partition_source_owners
+
+    design = sections(SHIPYARD_OPEN)
+    interaction = design["resources_and_ui"]["specification"]["interactions"][0]
+    interaction["trigger"] = SHIPYARD_OPEN
+    interaction["source_requirement_id"] = "shipyard"
+    state = design["state_model"]["specification"]
+    state["updates"][0]["trigger"] = "mine_resource"
+    empty_transition = {
+        "trigger": SHIPYARD_OPEN,
+        "mutation": [],
+        "source_requirement_id": "shipyard",
+    }
+    state["transitions"] = [empty_transition]
+    assigned, remaining = _partition_source_owners(
+        [("state_model.transitions[0]", empty_transition)],
+        [{"requirement_id": "shipyard"}], design,
+    )
+    assert assigned == [("state_model.transitions[0]", "shipyard")]
+    assert remaining == []
