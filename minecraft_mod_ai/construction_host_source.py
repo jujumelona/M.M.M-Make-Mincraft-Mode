@@ -191,7 +191,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 ]
                 prompt["runtime_state_bindings"] = {
                     key: value for key, value in runtime_bindings.items()
-                    if any(key in row.get("runtime_state_reads", ())
+                    if any(key in (*row.get("runtime_state_reads", ()),
+                                           *row.get("runtime_state_writes", ()))
                            for row in behavior_rows)
                 }
                 prompt["retained_typed_behavior"] = json.loads(
