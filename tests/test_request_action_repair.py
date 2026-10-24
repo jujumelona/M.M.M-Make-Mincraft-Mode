@@ -146,7 +146,7 @@ def test_multiple_actions_in_one_feature_repair_individually(monkeypatch):
     def one_action_only(router, prompt, **kwargs):
         assert kwargs["required_action_count"] == 1
         import re
-        action = re.search(r'"trigger": "(buy_ship_component|upgrade_component_\\d+)"', prompt)
+        action = re.search(r'"trigger": "(buy_ship_component|upgrade_component_[0-9]+)"', prompt)
         assert action is not None
         calls.append(action.group(1))
         return candidate(action.group(1))
