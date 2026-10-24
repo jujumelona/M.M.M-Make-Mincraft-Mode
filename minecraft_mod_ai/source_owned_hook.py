@@ -73,6 +73,12 @@ def choose_source_hook(
     if explicitly_bound:
         if explicitly_bound not in by_id:
             raise ValueError("SOURCE_HOOK_NOT_IN_INSPECTED_ABI: " + explicitly_bound)
+        relevant = _event_candidates_for_occurrence(behavior, [by_id[explicitly_bound]])
+        if not relevant:
+            raise SourceHookUnavailable(
+                behavior_id, reason="explicit_hook_cannot_observe_original_occurrence",
+                inspected=1,
+            )
         return by_id[explicitly_bound]
     if not by_id:
         raise SourceHookUnavailable(behavior_id, reason="no_inspected_callback", inspected=0)
