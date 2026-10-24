@@ -104,6 +104,7 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
     command. Reject fabricated self-writes before hundreds of model decisions.
     """
     from .authored_structured_design import active_concern_records
+    from .authored_ui_action_bindings import is_presentation_only_interaction
 
     rows = active_concern_records(sections, "resources_and_ui").get(
         "interactions", ()
@@ -138,9 +139,14 @@ def preflight_ui_action_effects(sections, *, strict_source=False):
         if not isinstance(row, Mapping):
             continue
         action = row.get("server_action")
-        if not isinstance(action, Mapping):
+        if not isinstance(action, (Mapping, str)):
             continue
-        intent = str(action.get("intent") or "")
+        if is_presentation_only_interaction(row, state):
+            # A pure screen-open event has no server mutation. It must not
+            # be promoted to a synthetic command; its separately authored
+            # gameplay controls still require executable state effects.
+            continue
+        intent = str(action.get("intent") if isinstance(action, Mapping) else action).strip()
         # A request to display a screen is not yet a server-side transaction.
         # Keep gameplay commands with explicit action verbs eligible even when
         # their UI title contains 'menu' or 'panel'.
@@ -527,9 +533,12 @@ def author_action_functions(
     state_types = _extract_state_variable_types(sections)
     preflight_state_guard_semantics(sections)
     preflight_ui_action_effects(sections)
+    from .authored_ui_action_bindings import is_presentation_only_interaction
+
     functions, bindings = [], []
     for record in rows:
-        if not isinstance(record.get("server_action"), Mapping):
+        if (not isinstance(record.get("server_action"), Mapping)
+                or is_presentation_only_interaction(record, state)):
             continue
         metadata = validate_action_metadata(record["server_action"])
         identity = action_record_identity(record)
@@ -688,6 +697,7 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
     from .authored_ui_action_bindings import (
         _mutating_ui_actions,
         action_record_identity,
+        is_presentation_only_interaction,
     )
     from .typed_host_capabilities import typed_host_capability_contracts
     from .typed_plan_ir import validate_typed_plan_ir
@@ -708,14 +718,17 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
         isinstance(row.get("server_action"), Mapping) for row in rows
     ):
         return plan
+    state = active_concern_records(plan.structured_sections, "state_model")
     expected = {
         action_record_identity(row)
         for row in rows
-        if isinstance(row.get("server_action"), Mapping)
+        if (isinstance(row.get("server_action"), Mapping)
+            and not is_presentation_only_interaction(row, state))
     }
     existing = {row["id"] for row in action_bindings(plan.typed_plan_ir)}
     if (
-        all(isinstance(row.get("server_action"), Mapping) for row in rows)
+        all(isinstance(row.get("server_action"), Mapping)
+            or is_presentation_only_interaction(row, state) for row in rows)
         and expected == existing
     ):
         return plan
@@ -723,6 +736,8 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
     target_rows = sections["resources_and_ui"]["specification"]["interactions"]
     identities = {}
     for row in target_rows:
+        if is_presentation_only_interaction(row, state):
+            continue
         old = row["server_action"]
         row["server_action"] = author_action_metadata(
             router, row, source_sections=plan.structured_sections,
@@ -795,7 +810,9 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
 def promote_action_sections(router, sections, *, budget=None, minecraft_version="",
                             requested_prompt=""):
     """Resolve concrete inputs before runtime ownership and function authoring."""
-    from .authored_ui_action_bindings import _mutating_ui_actions
+    from .authored_ui_action_bindings import (
+        _mutating_ui_actions, is_presentation_only_interaction,
+    )
 
     if not _checked_action_target(router, minecraft_version):
         rows = (
@@ -811,11 +828,17 @@ def promote_action_sections(router, sections, *, budget=None, minecraft_version=
     if not _mutating_ui_actions(sections):
         return sections
     result = deepcopy(sections)
+    state = (
+        result.get("state_model", {})
+        .get("specification", {})
+    )
     for record in (
         result.get("resources_and_ui", {})
         .get("specification", {})
         .get("interactions", ())
     ):
+        if is_presentation_only_interaction(record, state):
+            continue
         record["server_action"] = author_action_metadata(
             router, record, budget=budget, source_sections=sections,
             requested_prompt=requested_prompt,
