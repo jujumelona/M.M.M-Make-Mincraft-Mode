@@ -586,7 +586,12 @@ def _author_condition_left(
             )
         left = {"kind": "state_ref", "name": left_name}
     elif source == "context":
-        left = {"kind": "context_ref", "name": str(raw["context"])}
+        name = str(raw["context"])
+        left = (
+            {"kind": "literal", "value": name == "true"}
+            if name in {"true", "false"}
+            else {"kind": "context_ref", "name": name}
+        )
     elif source == "true":
         left = {"kind": "literal", "value": True}
     elif source == "false":
@@ -736,7 +741,14 @@ def _author_condition_right(
     if source == "state":
         return {"kind": "state_ref", "name": str(value)}
     if source == "context":
-        return {"kind": "context_ref", "name": str(value)}
+        # Grammar-constrained models sometimes choose source=context and
+        # spell Java boolean keywords as a field name. These can never be
+        # context identifiers; preserve the explicit boolean constant in
+        # canonical state IR, not an invalid reference that fails later.
+        name = str(value)
+        if name in {"true", "false"}:
+            return {"kind": "literal", "value": name == "true"}
+        return {"kind": "context_ref", "name": name}
     if source == "number":
         return {"kind": "number", "value": str(value)}
     return {"kind": "literal", "value": str(value)}
@@ -1107,7 +1119,14 @@ def _author_mutation_value(
     if source == "state":
         return {"kind": "state_ref", "name": str(value)}
     if source == "context":
-        return {"kind": "context_ref", "name": str(value)}
+        # Grammar-constrained models sometimes choose source=context and
+        # spell Java boolean keywords as a field name. These can never be
+        # context identifiers; preserve the explicit boolean constant in
+        # canonical state IR, not an invalid reference that fails later.
+        name = str(value)
+        if name in {"true", "false"}:
+            return {"kind": "literal", "value": name == "true"}
+        return {"kind": "context_ref", "name": name}
     if source == "number":
         return {"kind": "number", "value": str(value)}
     return {"kind": "literal", "value": str(value)}
