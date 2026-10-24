@@ -44,10 +44,29 @@ def verified_callback_choices(messages, frame, *, predicate=False):
             task = row
     if task is None or not isinstance(task.get("callback_input_api"), list):
         return []
-    params = _callback_parameters(frame)
     declared = task["verified_event_callback"].get("parameters", [])
+    # The host fixed and validated the declaration metadata before any body
+    # model call. Prefer that typed ownership record over reparsing one
+    # synthetic half-open method prefix. The prefix parser can return no
+    # method for a valid incomplete Java frame, silently removing all
+    # verified calls and forcing the 9B coder to invent a method invocation.
+    metadata = task.get("declaration_metadata") or {}
+    declared_parameters = metadata.get("parameters") or ()
+    authored_params = [
+        (row.get("type"), row.get("name"))
+        for row in declared_parameters if isinstance(row, dict)
+    ]
+    if (len(authored_params) == len(declared)
+            and all(isinstance(typ, str) and isinstance(name, str)
+                    and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name)
+                    for typ, name in authored_params)
+            and [typ for typ, _ in authored_params] == declared):
+        params = authored_params
+    else:
+        params = _callback_parameters(frame)
     if [kind for kind, _ in params] != declared:
-        # A method's immutable actual inputs must match the inspected callback.
+        # The host may not substitute a different receiver just because it
+        # exposes a conveniently named method. Every argument is exact ABI.
         return []
     inputs = {}
     for kind, name in params:
