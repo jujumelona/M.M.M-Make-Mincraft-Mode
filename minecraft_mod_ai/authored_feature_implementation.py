@@ -160,6 +160,7 @@ def compile_request_feature_jobs(
         bindings["target_contract_json"] = json.dumps(adapter.version_context.to_dict().get("target", {}), separators=(",", ":"))
         declarations = []
         source_paths = []
+        producer_ports = []
         if runtime_modules:
             source_paths.extend(f"src/main/java/{package_name.replace('.', '/')}/{name}.java"
                                 for name in ("AuthoredProgram", "AuthoredStateModel", "AuthoredHostCapabilities"))
@@ -169,6 +170,7 @@ def compile_request_feature_jobs(
             target_path = getattr(job, "target_path", "")
             if target_path.endswith(".java"):
                 source_paths.append(target_path)
+                producer_ports.extend(getattr(job, "produces", ()) or ())
                 relative = target_path.split("/java/", 1)[-1]
                 path = PurePosixPath(relative)
                 declaration = {"package_name": str(path.parent).replace("/", "."), "class_name": path.stem}
@@ -181,6 +183,7 @@ def compile_request_feature_jobs(
                 specification = canonical_specification_input(job.canonical_leaf, canonical_inputs)
                 if specification.get("language") == "java":
                     source_paths.append(specification["target_path"])
+                    producer_ports.extend(getattr(job, "produces", ()) or ())
                     known = specification.get("bindings", {})
                     declarations.append({key: known[key] for key in (
                         "package_name", "class_name", "registry_path", "fact_type",
@@ -271,6 +274,11 @@ def compile_request_feature_jobs(
         jobs.append(ArtifactJob(
             job_id=subject + ".implementation", template_id="", owner_module=subject,
             executor_type=ExecutorType.PYTHON_GENERATOR, operation="generate",
+            # Module depends_on alone is NOT an executable artifact-graph
+            # edge. Gate this source producer on the real published Java
+            # output ports, so the callback author cannot race the GUI,
+            # item or entity code that exposes its occurrence method.
+            requires=tuple(dict.fromkeys(producer_ports)),
             deterministic_inputs={"_canonical_inputs": inputs},
             context_id=adapter.version_context.context_id, canonical_leaf=leaf,
             implementation_id=implementation["implementation_id"],
