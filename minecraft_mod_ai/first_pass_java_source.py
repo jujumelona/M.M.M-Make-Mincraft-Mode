@@ -453,14 +453,11 @@ def compose_first_pass_java(
                 # a producer BEFORE the callback, first bind the real materialized
                 # source method. Otherwise the picker selects an unrelated
                 # tick/player event and the coder invents an API to compensate.
+                from .feature_source_work_graph import requires_original_occurrence_site
                 requires_original_producer = bool(
-                    source_work_graph is not None and any(
-                        row.get("behavior_id") == behavior_id
-                        and row.get("kind") == "runtime_producer"
-                        and row.get("evidence", {}).get("source_order")
-                        == "before_occurrence_hook"
-                        for row in source_work_graph.get("tasks", ())
-                    )
+                    source_work_graph is not None
+                    and requires_original_occurrence_site(
+                        source_work_graph, behavior_id)
                 )
                 if event_candidates and not requires_original_producer:
                     try:
