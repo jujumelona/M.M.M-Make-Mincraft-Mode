@@ -222,3 +222,31 @@ def requires_original_occurrence_site(graph: Mapping[str, Any], behavior_id: str
         and task.get("status") != "verified"
         for task in graph.get("tasks", ())
     )
+
+
+def runtime_observer_methods(graph: Mapping[str, Any], behavior_id: str) -> list[dict]:
+    """Host-owned independent predicates for every missing runtime value.
+
+    These methods use the verified occurrence callback's parameter ABI.
+    Returning true from the main behavior condition is insufficient when a
+    separate required world/UI source has never been implemented. The
+    builder creates one *compilable method slot per missing value*; the
+    author must implement it against inspected APIs, and the host dispatches
+    through all slots before applying gameplay effects.
+    """
+    result = []
+    for row in graph.get("tasks", ()):
+        if (row.get("kind") != "runtime_producer"
+                or row.get("behavior_id") != behavior_id
+                or row.get("status") == "verified"):
+            continue
+        task_id = str(row.get("task_id") or "")
+        if not task_id.startswith("runtime_producer:"):
+            raise ValueError("FEATURE_WORK_PRODUCER_ID_INVALID")
+        result.append({
+            "name": "observeRuntime" + task_id.partition(":")[2],
+            "task_id": task_id,
+            "source_name": str(row.get("name") or ""),
+            "required_action": str(row.get("evidence", {}).get("required_action") or ""),
+        })
+    return result
