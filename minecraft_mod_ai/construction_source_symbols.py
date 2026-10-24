@@ -177,3 +177,54 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
                         'access': row['access'] & 7, 'throws': [],
                         'implicit_default_constructor': True}
     return symbols, tuple(rejected)
+
+
+def merge_materialized_source_sites(source_pages, target_symbols):
+    """Make hash-inspected already-generated Java methods available to hook routing.
+
+    A symbol index assembled before the content shard cannot know about newly
+    generated, installed GUI/entity source. Those real project methods are the
+    possible original occurrence producers for a custom Mixin. Only parsed,
+    hash-checked materialized declarations may join the target ABI, and an
+    existing owner is never overwritten.
+    """
+    if not source_pages:
+        return dict(target_symbols)
+    if not isinstance(source_pages, Mapping):
+        raise ValueError("CONSTRUCTION_SOURCE_PAGES_INVALID")
+    original = dict(target_symbols)
+    classes = {
+        str(row.get("owner"))
+        for row in original.values()
+        if isinstance(row, Mapping) and row.get("kind") == "CLASS"
+    }
+    # Re-index newly generated project owners only. Existing target owners
+    # retain their verified bytecode contracts, even when source was also
+    # present in the project snapshot.
+    filtered = {}
+    for path, entries in source_pages.items():
+        kept = [
+            row for row in entries
+            if isinstance(row, Mapping) and row.get("owner") not in classes
+        ]
+        if kept:
+            filtered[path] = kept
+    if not filtered:
+        return original
+    parsed, rejected = inspected_project_source_symbols(filtered, original)
+    if rejected:
+        # Partially parsed Java is not a valid producer. A source hook may only
+        # target an owner whose method signatures were resolved completely.
+        invalid = {row.get("name") for row in rejected}
+        incomplete = {
+            row.get("owner") for row in parsed.values()
+            if isinstance(row, Mapping) and row.get("kind") == "CLASS"
+            and not row.get("method_contract_complete", False)
+        }
+        parsed = {
+            key: row for key, row in parsed.items()
+            if row.get("owner") not in incomplete
+            and row.get("owner") not in invalid
+        }
+    original.update(parsed)
+    return original
