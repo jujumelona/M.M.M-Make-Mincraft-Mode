@@ -60,6 +60,9 @@ jobs:
             tests/test_feature_registration_proof.py \
             tests/test_source_owned_callback_authoring.py \
             tests/test_source_owned_host_integration.py \
+            tests/test_host_action_occurrence.py \
+            tests/test_source_owned_ui_host.py \
+            tests/test_player_action_occurrence_evidence.py \
             tests/test_source_owned_custom_event.py \
             tests/test_source_owned_site_choice.py \
             tests/test_materialized_source_hook_producer.py \
