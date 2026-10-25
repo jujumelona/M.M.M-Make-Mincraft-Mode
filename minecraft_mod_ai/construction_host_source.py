@@ -168,6 +168,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "verified_behavior_ids": feature_route["verified_behavior_ids"],
                 "target_compilation_verified": False, "runtime_verified": False,
             }, ensure_ascii=False), flush=True)
+        implementation_router = router
+        if feature_route is not None and feature_route["route"] == "source_owned_java":
+            from .feature_implementation_worker import require_feature_implementation_router
+            implementation_router = require_feature_implementation_router(router)
         if rule_mode:
             # Rule authoring queries the authoritative typed symbol index in
             # bounded pages. Do not first ask for whole-feature API retrieval
@@ -185,7 +189,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         else:
             contract, requirement, behavior_rows, prompt, state_access = (
                 _build_host_java_prompt(
-                    router, spec, context, package=package, name=name,
+                    implementation_router, spec, context, package=package, name=name,
                     owner=owner, behaviors=behaviors, source_context=source_context,
                 )
             )
@@ -290,7 +294,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     )
                 if source is None:
                     source = compose_first_pass_java(
-                        router, effective_spec, [
+                        implementation_router, effective_spec, [
                             {"role": "system", "content": instructions},
                             {"role": "user", "content": json.dumps(
                                 prompt, ensure_ascii=False, default=str)},
@@ -321,6 +325,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # failure. Resume the whole candidate, then author only its failing
             # member against the latest compiler diagnostic.
             repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
+            if feature_route is not None and feature_route["route"] == "source_owned_java":
+                from .feature_implementation_worker import require_feature_implementation_router
+                repair_router = require_feature_implementation_router(repair_router)
             for attempt in range(budget + 1):
                 try:
                     _verify_full_source(source, spec, context, package=package,

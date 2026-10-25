@@ -40,6 +40,7 @@ _ROLE_TOOL_STAGE = {
     "researcher": "research",
     "coder": "generation",
     "coder_safe": "quality",
+    "feature_coder": "generation",
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
@@ -91,7 +92,7 @@ def _native_tool_template_contains_source(schema: Any) -> bool:
     return False
 
 _DEFAULT_AGENT_TOOL_ROUND_LIMIT = 64
-_REPOSITORY_POLICY_ROLES = frozenset({"coder", "coder_safe"})
+_REPOSITORY_POLICY_ROLES = frozenset({"coder", "coder_safe", "feature_coder"})
 _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT = (
     "Repository branch policy (host-owned, mandatory, and not overridable):\n"
     "- The only permitted Git branch/ref for repository work is `main`.\n"
