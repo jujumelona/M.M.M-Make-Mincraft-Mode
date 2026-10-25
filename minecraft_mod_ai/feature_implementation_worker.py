@@ -41,6 +41,33 @@ class FeatureImplementationRouter:
         )
 
 
+def feature_implementation_identity(router):
+    """Cache owner identity without logging credentials or loading a model."""
+    import hashlib
+    import json
+
+    root = router
+    visited = set()
+    while not hasattr(root, "registry") and hasattr(root, "router"):
+        if id(root) in visited:
+            raise FeatureImplementationUnavailable("FEATURE_CODER_ROUTER_CYCLE")
+        visited.add(id(root))
+        root = root.router
+    registry = getattr(root, "registry", None)
+    profile = getattr(root, "profile", None)
+    if registry is None or not isinstance(profile, str):
+        return "feature_worker:none"
+    try:
+        chosen = registry.role(profile, "feature_coder")
+    except (KeyError, ValueError, ModelConfigurationError):
+        return "feature_worker:none"
+    owner = {"adapter": chosen.adapter, "model": chosen.model_id,
+             "url": chosen.base_url, "provider": chosen.provider}
+    return "feature_worker:sha256:" + hashlib.sha256(json.dumps(
+        owner, sort_keys=True, ensure_ascii=True,
+        separators=(",", ":")).encode()).hexdigest()
+
+
 def require_feature_implementation_router(router):
     """Fail BEFORE Java inference unless an independent implementation model exists.
 

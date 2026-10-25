@@ -91,3 +91,36 @@ def test_wrapper_under_journal_keeps_journal_as_primary_recipient():
     worker = require_feature_implementation_router(Journal())
     worker.generate_structured_data("planner", [], data_name="p", parameters={})
     assert underlying.calls == [("structured", "feature_coder", "p")]
+
+
+def test_worker_cache_identity_changes_without_exposing_api_key():
+    from minecraft_mod_ai.feature_implementation_worker import feature_implementation_identity
+    router = Router(Registry())
+    key = feature_implementation_identity(router)
+    assert key.startswith("feature_worker:sha256:")
+    assert "not-a-real-secret" not in key
+    router.registry.remote = False
+    assert feature_implementation_identity(router) == "feature_worker:none"
+
+
+def test_source_owned_host_fails_before_small_model_generation(tmp_path):
+    from minecraft_mod_ai.construction_host_source import compose_host_java_source
+    router = Router(Registry(remote=False))
+    source = {"target_path": "src/main/java/example/Feature.java",
+              "side": "COMMON", "requirement": "Build a completely new mechanic",
+              "bindings": {"package_name": "example", "class_name": "Feature",
+                           "request_feature_entrypoint": True}}
+    context = {"target": {"loader": "fabric", "minecraft_version": "26.2",
+                          "java_version": 25}, "project_root": str(tmp_path),
+               "java_classpath": ["/fixture"], "prerequisite_hashes": {},
+               "symbols": {}}
+    behavior = {"behavior_id": "feature.needs_runtime_owner",
+                "intent": "Build a completely new mechanic",
+                "effects": "Changes a Minecraft world state",
+                "trigger": "When the player has resources",
+                "runtime_state_writes": ["world entity data"]}
+    with pytest.raises(FeatureImplementationUnavailable, match="FEATURE_CODER_NOT_CONFIGURED"):
+        compose_host_java_source(
+            router, source, context, package="example", name="Feature",
+            owner="example.Feature", behaviors=[behavior])
+    assert router.calls == []
