@@ -92,20 +92,6 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
     return contract, requirement, behavior_rows, prompt, state_access
 
 
-def _feature_implementation_router(router, feature_route):
-    if feature_route is None or feature_route["route"] != "source_owned_java":
-        return router
-    from .feature_implementation_worker import require_feature_implementation_router
-    return require_feature_implementation_router(router)
-
-
-def _implementation_owner_identity(router, spec):
-    if not spec.get("bindings", {}).get("request_feature_entrypoint"):
-        return "host_only"
-    from .feature_implementation_worker import feature_implementation_identity
-    return feature_implementation_identity(router)
-
-
 def compose_host_java_source(router, spec: dict, context: dict, *,
                              package: str, name: str, owner: str,
                              behaviors=(), source_context=()) -> str:
@@ -121,10 +107,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     if not root.is_dir():
         raise HostJavaConstructionError("JAVA_HOST_WORKSPACE_NOT_FOUND")
 
-    implementation_owner = _implementation_owner_identity(router, spec)
     identifier = _digest({
-        "schema": "mmm/host-java-compilation-unit-v2",
-        "implementation_owner": implementation_owner,
+        "schema": "mmm/host-java-compilation-unit-v1",
         "spec": spec, "owner": owner, "target": context["target"],
         "prerequisites": context.get("prerequisite_hashes", {}),
         "work_order": context.get("feature_work_order_sha256", ""),
@@ -184,7 +168,6 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "verified_behavior_ids": feature_route["verified_behavior_ids"],
                 "target_compilation_verified": False, "runtime_verified": False,
             }, ensure_ascii=False), flush=True)
-        implementation_router = _feature_implementation_router(router, feature_route)
         if rule_mode:
             # Rule authoring queries the authoritative typed symbol index in
             # bounded pages. Do not first ask for whole-feature API retrieval
@@ -202,7 +185,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         else:
             contract, requirement, behavior_rows, prompt, state_access = (
                 _build_host_java_prompt(
-                    implementation_router, spec, context, package=package, name=name,
+                    router, spec, context, package=package, name=name,
                     owner=owner, behaviors=behaviors, source_context=source_context,
                 )
             )
@@ -307,7 +290,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     )
                 if source is None:
                     source = compose_first_pass_java(
-                        implementation_router, effective_spec, [
+                        router, effective_spec, [
                             {"role": "system", "content": instructions},
                             {"role": "user", "content": json.dumps(
                                 prompt, ensure_ascii=False, default=str)},
@@ -338,7 +321,6 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # failure. Resume the whole candidate, then author only its failing
             # member against the latest compiler diagnostic.
             repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
-            repair_router = _feature_implementation_router(repair_router, feature_route)
             for attempt in range(budget + 1):
                 try:
                     _verify_full_source(source, spec, context, package=package,
