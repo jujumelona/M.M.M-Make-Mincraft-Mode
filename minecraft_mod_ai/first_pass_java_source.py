@@ -494,39 +494,13 @@ def compose_first_pass_java(
                         pass
                 if not source_ref:
                     from .source_owned_site_choice import choose_verified_source_site
-                    try:
-                        source_ref = choose_verified_source_site(
-                            router, behavior, symbol_index,
-                            side=str(spec.get("side") or "COMMON").upper(),
-                        )
-                    except SourceHookUnavailable:
-                        # New player-initiated gameplay need not already have
-                        # its own Java method. Build its original input source
-                        # through the existing Typed Action host, before asking
-                        # the coder for a listener body. Passive occurrences
-                        # remain unsupported here; no unrelated hook is used.
-                        root = (construction_context or {}).get("project_root")
-                        if not root or str(spec.get("side") or "COMMON").upper() == "CLIENT":
-                            raise
-                        from pathlib import Path
-                        from .source_owned_ui_event import author_typed_ui_occurrence
-                        manifest = Path(root) / "src/main/resources/fabric.mod.json"
-                        if not manifest.is_file():
-                            raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
-                        metadata = json.loads(manifest.read_text(encoding="utf-8"))
-                        target = (construction_context or {}).get("target") or {}
-                        produced = author_typed_ui_occurrence(
-                            router, behavior, symbols=symbol_index, package=package_name,
-                            mod_id=metadata["id"], minecraft_version=target.get(
-                                "minecraft_version") or bindings.get("minecraft_version"),
-                        )
-                        pending_ui_source_plans.append(produced)
-                        bound_events[behavior_id] = produced["callback"]
-                        if source_work_graph is not None:
-                            from .feature_source_work_graph import bind_planned_ui_occurrence
-                            source_work_graph = bind_planned_ui_occurrence(
-                                source_work_graph, behavior_id, produced)
-                        continue
+                    # A passive/missing source needs an actual inspected
+                    # occurrence owner. No second AI activation decision can
+                    # reclassify it into an invented player command.
+                    source_ref = choose_verified_source_site(
+                        router, behavior, symbol_index,
+                        side=str(spec.get("side") or "COMMON").upper(),
+                    )
                 root = (construction_context or {}).get("project_root")
                 if not root:
                     raise ValueError("JAVA_CUSTOM_SOURCE_PROJECT_ROOT_REQUIRED")
