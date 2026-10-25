@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import json
-import hashlib
-from pathlib import Path
-from collections.abc import Sequence, Mapping
 from jsonschema import Draft202012Validator
 
 from .implementation_identity import compute_content_hash, compute_json_schema_hash
+from .java_source_snapshot import verified_java_companions as _verified_java_companions
 
 
 def validate_json_schema(value, schema):
@@ -44,60 +42,25 @@ def validate_semantic_contract(value, *, contract, context_id, leaf_id):
 
 
 
-def _verified_java_companions(
-    *, project_root: str | Path,
-    source_context: Sequence[Mapping[str, str]],
-) -> dict[str, str]:
-    """Read exact, admitted Java producer sources, never inferred filenames.
+def _validate_attributed_source_sides(symbols, *, leaf_id, side):
+    from .side_enforcement import check_side_compatibility
+    for symbol in symbols:
+        valid, reason = check_side_compatibility(symbol.source_side or side, symbol.side)
+        if not valid:
+            raise ValueError(f"SIDE_VIOLATION: {leaf_id}: {symbol.owner}.{symbol.name}: {reason}")
 
-    Source context contains an immutable SHA-256 from the producer's materialized
-    file. Recheck that hash before javac attribution so a simultaneous writer
-    cannot substitute a different owner while verification is running.
-    """
-    root = Path(project_root).resolve()
-    result: dict[str, str] = {}
-    for entry in source_context:
-        if entry.get("authority") != "materialized_prerequisite_source":
-            raise ValueError("JAVA_COMPANION_UNVERIFIED_AUTHORITY")
-        relative = entry.get("path")
-        if (not isinstance(relative, str)
-                or not relative.startswith(("src/main/java/", "src/client/java/"))
-                or not relative.endswith(".java")
-                or Path(relative).is_absolute()):
-            raise ValueError("JAVA_COMPANION_PATH_INVALID")
-        path = root / relative
-        current = root
-        for section in Path(relative).parts:
-            current /= section
-            if current.is_symlink():
-                raise ValueError("JAVA_COMPANION_SYMLINK_INVALID")
-        real = path.resolve()
-        if not real.is_relative_to(root) or not real.is_file():
-            raise ValueError("JAVA_COMPANION_NOT_MATERIALIZED")
-        raw = real.read_bytes()
-        if hashlib.sha256(raw).hexdigest() != entry.get("sha256"):
-            raise ValueError("JAVA_COMPANION_SOURCE_CHANGED")
-        name = real.name
-        if name in result:
-            raise ValueError("JAVA_COMPANION_DUPLICATE_SIMPLE_NAME: " + name)
-        result[name] = raw.decode("utf-8")
-    return result
 
 def validate_side(source, *, leaf_id, side, classpath, java_version, classpath_sides=None,
                   project_root=None, source_context=()):
     from .java_symbol_resolver import JavaSymbolResolver
-    from .side_enforcement import check_side_compatibility
     additional_sources = (_verified_java_companions(
         project_root=project_root, source_context=source_context)
         if source_context else {})
     symbols = JavaSymbolResolver(
         classpath, java_version, classpath_sides=classpath_sides,
-        additional_sources=additional_sources,
+        additional_sources=additional_sources, include_companion_symbols=True,
     ).extract_symbols_from_source(source)
-    for symbol in symbols:
-        valid, reason = check_side_compatibility(side, symbol.side)
-        if not valid:
-            raise ValueError(f"SIDE_VIOLATION: {leaf_id}: {symbol.owner}.{symbol.name}: {reason}")
+    _validate_attributed_source_sides(symbols, leaf_id=leaf_id, side=side)
     return {"validator": "client_side_only", "status": "PASS", "symbols_checked": len(symbols)}
 
 

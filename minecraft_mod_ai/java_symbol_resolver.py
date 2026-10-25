@@ -21,6 +21,7 @@ class JavaSymbol:
     is_static: bool
     side: str  # CLIENT | SERVER | COMMON
     namespace: str  # NAMED | INTERMEDIARY | OFFICIAL
+    source_side: str = ""  # Originating project source set, when known.
 
 
 class JavaSymbolResolverError(Exception):
@@ -33,12 +34,14 @@ class JavaSymbolResolver:
 
     def __init__(self, classpath: list[Path], java_version: str = "21", *,
                  namespace: str = "NAMED", classpath_sides: dict[str, str] | None = None,
-                 additional_sources: Mapping[str, str] | None = None):
+                 additional_sources: Mapping[str, str] | None = None,
+                 include_companion_symbols: bool = False):
         self.classpath = [Path(p) for p in classpath]
         self.java_version = java_version
         self.namespace = namespace
         self.classpath_sides = classpath_sides or {}
         self.additional_sources = dict(additional_sources or {})
+        self.include_companion_symbols = include_companion_symbols
 
     def _resolve(self, source_code: str, filename: str | None = None):
         from .javac_bridge import analyze_java
@@ -51,7 +54,8 @@ class JavaSymbolResolver:
         try:
             rows = analyze_java(source_code, classpath=self.classpath,
                                 java_version=self.java_version, filename=filename,
-                                additional_sources=self.additional_sources)
+                                additional_sources=self.additional_sources,
+                                include_companion_symbols=self.include_companion_symbols)
             classes = {}
             for path in self.classpath:
                 default_side = self.classpath_sides.get(str(path), "COMMON")
@@ -84,7 +88,8 @@ class JavaSymbolResolver:
                         side = members[0].side
                 # JDK and current compilation-unit declarations are resolved by the compiler.
                 output.append((JavaSymbol(row["name"], row["owner"], row["descriptor"],
-                                          row["kind"], row["is_static"], side, self.namespace), row["line"]))
+                                          row["kind"], row["is_static"], side, self.namespace,
+                                          row.get("source_side", "")), row["line"]))
             return output
         except (ValueError, OSError, RuntimeError) as exc:
             raise JavaSymbolResolverError(str(exc)) from exc

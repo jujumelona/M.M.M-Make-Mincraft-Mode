@@ -171,6 +171,17 @@ def verify_job_binding(job, resolved, context):
     return authority
 
 
+def _generator_source_context(job, *, spec, context, port_registry, base_dir):
+    if base_dir is None or spec.get("language") != "java":
+        return ()
+    from .request_runtime_records import generated_owner_source_context, verified_graph_java_source_paths
+
+    required_paths = verified_graph_java_source_paths(
+        job, context=context, port_registry=port_registry, project_root=base_dir,
+    )
+    return generated_owner_source_context(base_dir, spec, required_paths=required_paths)
+
+
 def execute_generator_job(job, *, context, router, port_registry=None, base_dir=None):
     from .resolved_version_context import execution_context
     from .task_template_catalog import load_template
@@ -196,18 +207,10 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     if port_registry is not None and any(port_registry.has(name) for name in job.produces):
         raise ValueError("GENERATOR_OUTPUT_PORT_CONFLICT")
     generator = authority.executors[job.implementation_id]
-    source_context = ()
-    if base_dir is not None and spec.get("language") == "java":
-        from .request_runtime_records import (
-            generated_owner_source_context, verified_graph_java_source_paths,
-        )
-
-        required_paths = verified_graph_java_source_paths(
-            job, context=context, port_registry=port_registry, project_root=base_dir,
-        )
-        source_context = generated_owner_source_context(
-            base_dir, spec, required_paths=required_paths,
-        )
+    from .java_source_snapshot import JavaSourceCapture
+    source_capture = JavaSourceCapture()
+    source_context = _generator_source_context(job, spec=spec, context=context,
+        port_registry=port_registry, base_dir=base_dir)
     extra_context = {"source_context": source_context} if source_context else {}
     if manifest.get("resource_contract"):
         from .canonical_resource_contract import prepare_resource_context
@@ -228,9 +231,15 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
                 project_root=base_dir, source_context=source_context,
                 target_override=resolved.to_dict()["target"],
             )
+            extra_context["construction_context"]["_java_source_capture"] = source_capture
     output = generator(inputs, leaf_id=job.canonical_leaf, router=router, authority=authority, **extra_context)
     source = output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")]
     verify_candidate_content(job, resolved, context, spec, source)
+    if base_dir is not None and spec["language"] == "java":
+        source_context = source_capture.source_context(
+            spec.get("java_prefix", "") + source + spec.get("java_suffix", ""),
+            project_root=base_dir, target_path=spec["target_path"], source_context=source_context,
+        )
     validations = []
     if manifest.get("resource_contract"):
         from .canonical_resource_contract import validate_resource_artifact

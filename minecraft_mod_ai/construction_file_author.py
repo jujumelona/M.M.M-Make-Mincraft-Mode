@@ -352,7 +352,7 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
     )]
     # Compile the full owner and its materialized sibling sources, rather than
     # a detached method or an owner without its actual project prerequisites.
-    verify_java_source_with_dependencies(source, context=context,
+    compiled_sources = verify_java_source_with_dependencies(source, context=context,
         target_path=spec["target_path"], filename=name + ".java",
         source_context=source_context)
     _check_identity(source, package, name)
@@ -381,6 +381,9 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
     verify_source = context.get("verify_source")
     if verify_source:
         verify_source(source, spec["target_path"])
+    from .java_source_snapshot import record_compiled_sources
+    record_compiled_sources(context, source=source,
+        target_path=spec["target_path"], sources=compiled_sources)
 
 
 def _required_entrypoint_bindings(spec: dict, behavior_specs) -> dict:

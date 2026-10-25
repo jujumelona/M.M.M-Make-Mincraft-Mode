@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
@@ -21,7 +22,12 @@ import com.sun.source.tree.*;
 import com.sun.source.util.*;
 
 class IntegritySymbols {
-  static Types types; static Elements elements;
+  static Types types; static Elements elements; static Trees trees;
+  static String sourceSide(CompilationUnitTree unit) {
+    String path=unit.getSourceFile().toUri().getPath();
+    return path.startsWith("/src/client/java/") ? "CLIENT" :
+           path.startsWith("/src/main/java/") ? "COMMON" : "";
+  }
   static String q(String s) {
     StringBuilder b = new StringBuilder("\"");
     for (char c : s.toCharArray()) {
@@ -65,7 +71,8 @@ class IntegritySymbols {
         }
       }
     }
-    return "COMMON";
+    TreePath origin=trees.getPath(e);
+    return origin!=null && sourceSide(origin.getCompilationUnit()).equals("CLIENT") ? "CLIENT" : "COMMON";
   }
   public static void main(String[] args) throws Exception {
     String mode=args[0], release=args[1], cp=args[2], filename=args[3];
@@ -98,10 +105,10 @@ class IntegritySymbols {
       }
       if(failed) System.exit(2);
       if(mode.equals("parse")) { Files.writeString(Path.of(args[5]), "[]"); return; }
-      Trees trees=Trees.instance(task); types=task.getTypes(); elements=task.getElements();
+      trees=Trees.instance(task); types=task.getTypes(); elements=task.getElements();
       List<String> rows=new ArrayList<>();
       for(CompilationUnitTree unit: units) {
-        if (!unit.getSourceFile().toUri().equals(input.toUri())) continue;
+        if (!mode.equals("resolve_all") && !unit.getSourceFile().toUri().equals(input.toUri())) continue;
         new TreePathScanner<Void,Void>() {
         void emit(TreePath path, Tree tree) {
           Element e=trees.getElement(path);
@@ -114,7 +121,8 @@ class IntegritySymbols {
           long pos=trees.getSourcePositions().getStartPosition(unit,tree);
           rows.add("{\"owner\":"+q(elements.getBinaryName(owner).toString().replace('.','/'))+
             ",\"name\":"+q(name)+",\"descriptor\":"+q(descriptor(e))+",\"kind\":"+q(kind)+",\"side\":"+q(side(e))+
-            ",\"is_static\":"+e.getModifiers().contains(Modifier.STATIC)+",\"line\":"+unit.getLineMap().getLineNumber(pos)+"}");
+            ",\"is_static\":"+e.getModifiers().contains(Modifier.STATIC)+",\"source_side\":"+q(sourceSide(unit))+
+            ",\"line\":"+unit.getLineMap().getLineNumber(pos)+"}");
         }
         public Void visitMethodInvocation(MethodInvocationTree t,Void v) {
           emit(new TreePath(getCurrentPath(),t.getMethodSelect()),t); return super.visitMethodInvocation(t,v);
@@ -142,7 +150,8 @@ class IntegritySymbols {
 
 def analyze_java(source: str, *, classpath=(), java_version="17", filename="IntegrityInput.java",
                  parse_only=False, timeout=60,
-                 additional_sources: Mapping[str, str] | None = None) -> list[dict]:
+                 additional_sources: Mapping[str, str] | None = None,
+                 include_companion_symbols=False) -> list[dict]:
     from .java_lsp import _resolve_project_java_home, _java_executable
 
     # Use the same exact-target resolver as Gradle and JDT, including lazy JDK
@@ -173,14 +182,15 @@ def analyze_java(source: str, *, classpath=(), java_version="17", filename="Inte
         output_path = root / "result.json"
         companions = []
         for index, (name, code) in enumerate((additional_sources or {}).items()):
-            if (not isinstance(name, str) or Path(name).name != name
-                    or not name.endswith(".java") or name == filename
+            if (not isinstance(name, str)
+                    or re.fullmatch(r"(?:[\w$-]+/)*[\w$-]+\.java", name) is None or name == filename
                     or not isinstance(code, str)):
                 raise ValueError("JAVA_ADDITIONAL_SOURCE_INVALID")
             path = root / f"companion_{index}.txt"
             path.write_text(code, encoding="utf-8")
             companions.extend([name, str(path)])
-        result = subprocess.run([java, str(helper), "parse" if parse_only else "resolve",
+        mode = "parse" if parse_only else "resolve_all" if include_companion_symbols else "resolve"
+        result = subprocess.run([java, str(helper), mode,
                                  str(java_version), cp, filename, str(input_path), str(output_path),
                                  *companions],
                                 capture_output=True, text=True, encoding="utf-8", errors="replace",

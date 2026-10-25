@@ -44,7 +44,7 @@ def test_actual_admitted_companion_source_resolves_side_and_preserves_sha(tmp_pa
     row = {"path": relative, "sha256": hashlib.sha256(ENTITY.encode()).hexdigest(),
            "authority": "materialized_prerequisite_source"}
     checked = _verified_java_companions(project_root=tmp_path, source_context=[row])
-    assert checked == {"EntityOwner.java": ENTITY}
+    assert checked == {relative: ENTITY}
     receipt = validate_side(
         REGISTRY, leaf_id="minecraft/entity/registry", side="COMMON",
         classpath=[], java_version="17", project_root=tmp_path, source_context=[row],
@@ -70,5 +70,36 @@ def test_unapproved_and_duplicate_companion_sources_are_rejected(tmp_path):
         _verified_java_companions(
             project_root=tmp_path, source_context=[{**row, "authority": "model_guess"}],
         )
-    with pytest.raises(ValueError, match="JAVA_COMPANION_DUPLICATE_SIMPLE_NAME"):
+    with pytest.raises(ValueError, match="JAVA_COMPANION_DUPLICATE_SOURCE_IDENTITY"):
         _verified_java_companions(project_root=tmp_path, source_context=[row, row])
+
+
+def test_namespaced_companions_with_identical_filenames_resolve_independently(tmp_path):
+    sources = {
+        "src/main/java/first/Occurrence.java":
+            "package first; public class Occurrence { public static int value(){return 1;} }",
+        "src/main/java/second/Occurrence.java":
+            "package second; public class Occurrence { public static int value(){return 2;} }",
+    }
+    records = []
+    for relative, source in sources.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+        records.append({"path": relative, "sha256": hashlib.sha256(source.encode()).hexdigest(),
+                        "authority": "materialized_prerequisite_source"})
+    checked = _verified_java_companions(project_root=tmp_path, source_context=records)
+    rows = analyze_java(
+        "public class Listener { int value(){return first.Occurrence.value()+second.Occurrence.value();} }",
+        java_version="17", filename="Listener.java", additional_sources=checked,
+    )
+    assert {row["owner"] for row in rows if row["name"] == "value"} == {
+        "first/Occurrence", "second/Occurrence"}
+
+
+@pytest.mark.parametrize("name", ["../Escape.java", "/Escape.java", "C:/Escape.java",
+                                      "part\\Escape.java", "part/../Escape.java", "part/X.java?x=1"])
+def test_companion_source_identity_cannot_escape_its_namespace(name):
+    with pytest.raises(ValueError, match="JAVA_ADDITIONAL_SOURCE_INVALID"):
+        analyze_java("public class Listener {}", java_version="17", filename="Listener.java",
+                     additional_sources={name: "public class Escape {}"})

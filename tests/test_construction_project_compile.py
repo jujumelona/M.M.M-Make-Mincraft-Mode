@@ -12,7 +12,7 @@ import pytest
 
 def load_compiler(monkeypatch):
     pkg = types.ModuleType('minecraft_mod_ai')
-    pkg.__path__ = []
+    pkg.__path__ = [str(Path(__file__).resolve().parents[1] / 'minecraft_mod_ai')]
     monkeypatch.setitem(sys.modules,'minecraft_mod_ai',pkg)
     java = types.ModuleType('minecraft_mod_ai.java_lsp')
     # Path validation is tested without launching a compiler. Real compile
