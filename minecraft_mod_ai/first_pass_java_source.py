@@ -475,11 +475,15 @@ def compose_first_pass_java(
                 # a semantic site search. This is not a retry after MiMo says
                 # 'unavailable': a stated trade/purchase has a host-owned
                 # player command producer from the beginning.
-                if not source_ref and str(spec.get("side") or "COMMON").upper() != "CLIENT":
-                    from .host_action_occurrence import author_host_owned_player_occurrence
+                if (not source_ref and not behavior.get("event_binding")
+                        and str(spec.get("side") or "COMMON").upper() != "CLIENT"):
+                    from .host_action_occurrence import (
+                        author_host_owned_player_occurrence,
+                        select_original_player_action,
+                    )
                     from pathlib import Path
                     root = (construction_context or {}).get("project_root")
-                    if root:
+                    if root and select_original_player_action(behavior) is not None:
                         manifest = Path(root) / "src/main/resources/fabric.mod.json"
                         if not manifest.is_file():
                             raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")

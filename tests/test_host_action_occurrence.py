@@ -100,3 +100,12 @@ def test_the_canonical_scope_cannot_be_changed_after_planning():
     behavior = {**TRADE, "trigger": "Player does not purchase goods",
                 "effects": "Player purchases goods"}
     assert select_original_player_action(behavior) is None
+
+
+def test_host_action_with_automatic_server_side_effect_keeps_manual_producer():
+    contract = select_original_player_action({
+        **TRADE, "trigger": "Player has enough credits",
+        "effects": "Player purchases supplies and the server automatically subtracts the price",
+    })
+    assert contract is not None
+    assert contract["request_quote"].startswith("Player purchases supplies")
