@@ -65,8 +65,26 @@ def test_unimplemented_runtime_producer_uses_source_author_not_rule_paging(
     context = {"target": {"loader": "fabric", "java_version": 25},
                "java_classpath": ["/fake"], "project_root": str(tmp_path),
                "symbols": {}, "prerequisite_hashes": {}}
+    # The test installs an explicit independent source executor, never a
+    # hidden fallback to the small planner.
+    from types import SimpleNamespace
+    from minecraft_mod_ai.feature_implementation_worker import FeatureImplementationRouter
+    class StubRegistry:
+        def role(self, profile, role):
+            if role == "feature_coder":
+                return SimpleNamespace(adapter="openai_compatible",
+                    provider="openai_compatible", base_url="https://example.invalid/v1",
+                    model_id="independent-test-coder", api_key="test-only")
+            return SimpleNamespace(model_id="mimo-small", base_url="")
+    class StubRouter:
+        registry = StubRegistry()
+        profile = "test"
+    def checked_author(executor, *a, **kw):
+        assert isinstance(executor, FeatureImplementationRouter)
+        return author(executor, *a, **kw)
+    monkeypatch.setattr(first_pass, "compose_first_pass_java", checked_author)
     output = compose_host_java_source(
-        object(), spec, context, package="example", name="Bridge",
+        StubRouter(), spec, context, package="example", name="Bridge",
         owner="example.Bridge",
         behaviors=[{"behavior_id": "test-1", "intent": "Implement original feature",
                     "runtime_state_reads": ["unbuilt_state"]}],

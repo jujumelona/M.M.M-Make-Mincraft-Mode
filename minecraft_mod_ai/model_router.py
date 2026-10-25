@@ -40,7 +40,6 @@ _ROLE_TOOL_STAGE = {
     "researcher": "research",
     "coder": "generation",
     "coder_safe": "quality",
-    "feature_coder": "generation",
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})

@@ -142,6 +142,27 @@ def _validate_single_foundation_model(
     )
 
 
+def _optional_feature_coder_config() -> AdapterConfig | None:
+    """Only the explicitly provisioned external code worker has this role."""
+    values = {
+        "model_id": os.environ.get("MMM_FEATURE_CODER_MODEL", "").strip(),
+        "base_url": os.environ.get("MMM_FEATURE_CODER_BASE_URL", "").strip(),
+        "api_key": os.environ.get("MMM_FEATURE_CODER_API_KEY", "").strip(),
+    }
+    if not any(values.values()):
+        return None
+    if not all(values.values()):
+        raise ModelConfigurationError(
+            "FEATURE_CODER_CONFIG_INCOMPLETE: provide MMM_FEATURE_CODER_MODEL, "
+            "MMM_FEATURE_CODER_BASE_URL and MMM_FEATURE_CODER_API_KEY together"
+        )
+    return AdapterConfig(
+        role="feature_coder", adapter="openai_compatible",
+        provider="openai_compatible", max_context=131072,
+        max_input_tokens=0, max_new_tokens=8192, **values,
+    )
+
+
 class ModelRegistry:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = (
@@ -175,26 +196,9 @@ class ModelRegistry:
             for role, config in raw_roles.items()
         }
         _validate_single_foundation_model(name, roles)
-        # New, source-owned gameplay implementations are NOT a planning task.
-        # This worker is explicitly provisioned and separate from MiMo's
-        # single-foundation planning session; unset credentials do not load it.
-        feature_env = {
-            "model_id": os.environ.get("MMM_FEATURE_CODER_MODEL", "").strip(),
-            "base_url": os.environ.get("MMM_FEATURE_CODER_BASE_URL", "").strip(),
-            "api_key": os.environ.get("MMM_FEATURE_CODER_API_KEY", "").strip(),
-        }
-        if any(feature_env.values()):
-            if not all(feature_env.values()):
-                raise ModelConfigurationError(
-                    "FEATURE_CODER_CONFIG_INCOMPLETE: provide MMM_FEATURE_CODER_MODEL, "
-                    "MMM_FEATURE_CODER_BASE_URL and MMM_FEATURE_CODER_API_KEY together"
-                )
-            roles["feature_coder"] = AdapterConfig(
-                role="feature_coder", adapter="openai_compatible",
-                provider="openai_compatible", max_context=131072,
-                max_input_tokens=0, max_new_tokens=8192,
-                **feature_env,
-            )
+        coder = _optional_feature_coder_config()
+        if coder is not None:
+            roles["feature_coder"] = coder
         profile = ModelProfile(
             name=name,
             description=str(raw_profile.get("description", "")),
