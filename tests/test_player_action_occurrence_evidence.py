@@ -189,39 +189,3 @@ def test_a_quoted_prohibition_cannot_claim_to_be_a_voluntary_action(restriction)
     behavior = {**TRADE, "effects": restriction}
     with pytest.raises(SourceHookUnavailable, match="original_occurrence_is_not_manual_activation"):
         _author(behavior, ActionPlanner("effects", restriction))
-
-
-def test_model_abstention_cannot_veto_an_explicit_player_trade():
-    # Regression: 2026-10-25 production trace; the local 9B model returned
-    # {"activation":"unavailable"} even though effects describe a trade.
-    planned = _author(TRADE, ActionPlanner(activation="unavailable"))
-    assert planned["recipe"]["activation_evidence"]["request_field"] == "effects"
-    assert planned["recipe"]["activation_evidence"]["request_quote"] == TRADE["effects"]
-    assert planned["recipe"]["behavior"] == TRADE
-    assert planned["callback"]["provenance"] == "host_typed_ui_action"
-
-
-@pytest.mark.parametrize("intent,effects", [
-    ("Commission a settlement building", "Player commissions a settlement building"),
-    ("Apply the selected policy", "Player applies the selected policy"),
-    ("Supply the settlement", "Player supplies the settlement"),
-])
-def test_host_recovers_other_original_actions_without_an_action_verb_allowlist(intent, effects):
-    behavior = {**TRADE, "intent": intent, "effects": effects}
-    planned = _author(behavior, ActionPlanner(activation="unavailable"))
-    evidence = planned["recipe"]["activation_evidence"]
-    assert evidence["request_field"] == "effects"
-    assert evidence["request_quote"] == effects
-
-
-@pytest.mark.parametrize("intent,effects", [
-    ("Enter another planet", "Player enters another planet"),
-    ("Reach a new dimension", "Player reaches a new dimension"),
-    ("Receive supplies", "Player receives supplies automatically"),
-    ("Purchase supplies", "Player purchases supplies automatically"),
-    ("Purchase supplies", "Player does not purchase supplies"),
-])
-def test_host_never_fabricates_manual_action_for_passive_or_prohibited_events(intent, effects):
-    behavior = {**TRADE, "intent": intent, "effects": effects}
-    with pytest.raises(SourceHookUnavailable):
-        _author(behavior, ActionPlanner(activation="unavailable"))

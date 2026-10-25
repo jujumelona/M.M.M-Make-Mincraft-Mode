@@ -78,21 +78,10 @@ def author_player_action_evidence(router, behavior):
     try:
         selected = json.loads(validate_structured_output(
             json.dumps(response, ensure_ascii=False), response_format="json", response_schema=schema))
-    except StructuredOutputValidationError:
-        # A malformed or abstaining model cannot veto a positive, immutable
-        # source action. The host can independently recover only an explicitly
-        # player-owned verb that agrees with the original intent.
-        selected = {"activation": "unavailable", "request_field": "trigger",
-                    "request_quote": ""}
+    except StructuredOutputValidationError as exc:
+        raise _unavailable(behavior, "original_trigger_has_no_owned_ui_activation") from exc
     if selected["activation"] != "typed_ui_action":
-        from .host_player_action_recovery import recover_player_action_quote
-
-        recovered = recover_player_action_quote(behavior)
-        if recovered is None:
-            raise _unavailable(behavior, "original_trigger_has_no_owned_ui_activation")
-        field, quote = recovered
-        selected = {"activation": "typed_ui_action", "request_field": field,
-                    "request_quote": quote}
+        raise _unavailable(behavior, "original_trigger_has_no_owned_ui_activation")
     evidence = {"schema": _SCHEMA, "behavior_sha256": _behavior_hash(behavior),
                 "request_field": selected["request_field"],
                 "request_quote": selected["request_quote"].strip()}
