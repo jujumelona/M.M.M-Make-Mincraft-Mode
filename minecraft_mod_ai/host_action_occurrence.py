@@ -104,3 +104,25 @@ def author_host_owned_player_occurrence(router, behavior, *, symbols,
         package=package, mod_id=mod_id, minecraft_version=minecraft_version,
         symbols=symbols,
     )
+
+
+def author_project_player_occurrence(router, behavior, *, project_root,
+                                     symbols, package, minecraft_version, side):
+    """Plan a typed original action before asking MiMo to search Fabric hooks."""
+    if str(side).upper() == "CLIENT" or select_original_player_action(behavior) is None:
+        return None
+    if not project_root:
+        return None
+    import json
+    from pathlib import Path
+
+    manifest = Path(project_root) / "src/main/resources/fabric.mod.json"
+    if not manifest.is_file():
+        raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
+    metadata = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
+        raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_INVALID")
+    return author_host_owned_player_occurrence(
+        router, behavior, symbols=symbols, package=package,
+        mod_id=metadata["id"], minecraft_version=minecraft_version,
+    )

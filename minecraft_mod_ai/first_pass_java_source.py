@@ -460,6 +460,29 @@ def compose_first_pass_java(
                     and requires_original_occurrence_site(
                         source_work_graph, behavior_id)
                 )
+                # The host owns an explicitly requested player interaction.
+                # Do this before asking MiMo which generic Fabric hook to use.
+                source_ref = (behavior.get("source_site_ref")
+                              or site_bindings.get(behavior_id))
+                if not source_ref and not behavior.get("event_binding"):
+                    from .host_action_occurrence import author_project_player_occurrence
+                    target = (construction_context or {}).get("target") or {}
+                    produced = author_project_player_occurrence(
+                        router, behavior,
+                        project_root=(construction_context or {}).get("project_root"),
+                        symbols=symbol_index, package=package_name,
+                        minecraft_version=target.get("minecraft_version")
+                                          or bindings.get("minecraft_version"),
+                        side=str(spec.get("side") or "COMMON"),
+                    )
+                    if produced is not None:
+                        pending_ui_source_plans.append(produced)
+                        bound_events[behavior_id] = produced["callback"]
+                        if source_work_graph is not None:
+                            from .feature_source_work_graph import bind_planned_ui_occurrence
+                            source_work_graph = bind_planned_ui_occurrence(
+                                source_work_graph, behavior_id, produced)
+                        continue
                 if event_candidates and not requires_original_producer:
                     try:
                         bound_events[behavior_id] = choose_source_hook(
@@ -469,41 +492,6 @@ def compose_first_pass_java(
                         # SOURCE_REQUIRED is not a second opportunity to
                         # substitute a player_join or server_tick callback.
                         pass
-                source_ref = (behavior.get("source_site_ref")
-                              or site_bindings.get(behavior_id))
-                # Source ownership is decided from the original action before
-                # a semantic site search. This is not a retry after MiMo says
-                # 'unavailable': a stated trade/purchase has a host-owned
-                # player command producer from the beginning.
-                if (not source_ref and not behavior.get("event_binding")
-                        and str(spec.get("side") or "COMMON").upper() != "CLIENT"):
-                    from .host_action_occurrence import (
-                        author_host_owned_player_occurrence,
-                        select_original_player_action,
-                    )
-                    from pathlib import Path
-                    root = (construction_context or {}).get("project_root")
-                    if root and select_original_player_action(behavior) is not None:
-                        manifest = Path(root) / "src/main/resources/fabric.mod.json"
-                        if not manifest.is_file():
-                            raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
-                        metadata = json.loads(manifest.read_text(encoding="utf-8"))
-                        if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
-                            raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_INVALID")
-                        target = (construction_context or {}).get("target") or {}
-                        produced = author_host_owned_player_occurrence(
-                            router, behavior, symbols=symbol_index, package=package_name,
-                            mod_id=metadata["id"], minecraft_version=target.get(
-                                "minecraft_version") or bindings.get("minecraft_version"),
-                        )
-                        if produced is not None:
-                            pending_ui_source_plans.append(produced)
-                            bound_events[behavior_id] = produced["callback"]
-                            if source_work_graph is not None:
-                                from .feature_source_work_graph import bind_planned_ui_occurrence
-                                source_work_graph = bind_planned_ui_occurrence(
-                                    source_work_graph, behavior_id, produced)
-                            continue
                 if not source_ref:
                     from .source_owned_site_choice import choose_verified_source_site
                     try:
