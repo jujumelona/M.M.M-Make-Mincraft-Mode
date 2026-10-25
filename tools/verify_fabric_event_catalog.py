@@ -66,6 +66,11 @@ def _compiler_probe_decision(data_name, parameters):
 
 def _compiler_probe_operation(data_name, parameters):
     if "_required_state_abi_probe_count_try_" in data_name:
+        # Verified production callbacks now request a typed JSON primitive.
+        # Keep the legacy expression response only for explicit ABI-compatibility
+        # tests that still exercise the older freeform authoring path.
+        if "value" in parameters.get("properties", {}):
+            return {"value": 1}
         return {"expression": "1"}
     if "_operation_0_try_" in data_name:
         choices = parameters["properties"]["action"]["enum"]
