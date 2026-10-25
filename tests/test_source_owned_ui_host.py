@@ -157,10 +157,12 @@ def test_production_trade_uses_host_action_before_mimo_source_site_or_callback(t
         [behavior], producer_obligations=[{
             "behavior_id": behavior["behavior_id"],
             "name": "available goods", "reason": "no_inspected_semantic_source",
+            "required_action": "read actually available goods from a verified server owner",
         }, {
             "behavior_id": behavior["behavior_id"],
             "name": "player inventory",
             "reason": "runtime_mutation_requires_verified_effect",
+            "required_action": "invoke a verified mutating inventory API",
         }], inspected_hooks=[])
 
     def wrong_source_site(*args, **kwargs):
