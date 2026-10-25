@@ -134,3 +134,52 @@ def test_eligibility_trigger_and_action_effect_use_the_same_production_source_br
     assert len(events) == 1
     validate_registered_event_sources(source, [behavior], [], materialized_events=events)
     assert events[0]["behavior_id"] == "allocate"
+
+
+def test_production_trade_uses_host_action_before_mimo_source_site_or_callback(tmp_path, monkeypatch):
+    """Regression of the captured 2026-10-25 '거래 등으로' production failure."""
+    from minecraft_mod_ai.feature_registration_proof import validate_registered_event_sources
+    from minecraft_mod_ai.source_owned_ui_event import read_verified_typed_ui_events
+
+    _, behavior, spec, context, _ = _fixture(tmp_path, monkeypatch)
+    behavior.update({
+        "behavior_id": "behavior_7e44c67dc12bf6885bb9",
+        "intent": "Trade and purchase goods to fund spacecraft construction and upgrades",
+        "trigger": "Player has accumulated money and wants to build or upgrade a spacecraft",
+        "effects": "Player trades mined resources for goods, then purchases spacecraft construction materials and upgrades",
+        "source_quote": "거래 등으로",
+        "runtime_state_reads": [
+            "available goods", "spacecraft build requirements", "spacecraft upgrade requirements"],
+        "runtime_state_writes": ["player inventory"],
+    })
+    spec["bindings"]["construction_behaviors_json"] = json.dumps([behavior])
+    context["source_owned_work_graph"] = build_source_work_graph(
+        [behavior], producer_obligations=[{
+            "behavior_id": behavior["behavior_id"],
+            "name": "available goods", "reason": "no_inspected_semantic_source",
+        }], inspected_hooks=[])
+
+    def wrong_source_site(*args, **kwargs):
+        raise AssertionError("MiMo must not search for an already-existing custom trade hook")
+    monkeypatch.setattr("minecraft_mod_ai.source_owned_site_choice.choose_verified_source_site",
+                        wrong_source_site)
+
+    class MiMo:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "ui_action_label":
+                return {"label": "Trade and purchase"}
+            if data_name == "ui_action_input_count":
+                return {"count": 0}
+            raise AssertionError("9B must not choose whether its requested action exists: " + data_name)
+
+    source = compose_first_pass_java(MiMo(), spec, [],
+                                     construction_context=context, behaviors=[behavior])
+    installed = read_verified_typed_ui_events(
+        project_root=tmp_path, symbols=context["symbols"],
+        behaviors=[behavior], package="example")
+    assert len(installed) == 1
+    assert installed[0]["parameters"] == ["net.minecraft.commands.CommandSourceStack"]
+    validate_registered_event_sources(source, [behavior], [], materialized_events=installed)
+    assert "registerBehavior" in source
+    assert "applyBehavior" in source
+    assert "matchesBehavior" in source
