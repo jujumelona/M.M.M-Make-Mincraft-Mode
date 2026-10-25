@@ -242,7 +242,7 @@ def _required_state_write_slots(frame):
 
 def _complete_required_state_effects(
     router, scoped, *, data_name, frame, statements, semantic_statements,
-    receipt_name, effect_receipt, slots,
+    receipt_name, effect_receipt, slots, typed_values=False,
 ):
     """Lower each missing mandatory write through one verified typed-value slot.
 
@@ -274,8 +274,13 @@ def _complete_required_state_effects(
     for name in missing:
         slot = slots[name]
         owner = slot["owner"]
+        if typed_values:
+            from .host_typed_state_values import (
+                lower_typed_java_value, typed_value_schema,
+            )
         def lower(row, *, state_name=name, state_owner=owner):
-            expression = parse_expression(row["expression"])
+            expression = (lower_typed_java_value(row, slot["value_type"])
+                          if typed_values else parse_expression(row["expression"]))
             # Reading a variable and writing it back is a semantic no-op;
             # it cannot satisfy a requested gameplay state transition.
             if expression in {
@@ -290,9 +295,16 @@ def _complete_required_state_effects(
             return operation
         statement = _ask(
             router, scoped, name=data_name + "_required_state_" + name,
-            schema=_EXPRESSION_SCHEMA,
+            schema=(typed_value_schema(slot["value_type"]) if typed_values
+                    else _EXPRESSION_SCHEMA),
             context={
                 "instruction": (
+                    "Choose the exact typed JSON value for this canonical state "
+                    "transition. Do not supply Java syntax, methods, getters, "
+                    "statements or quoted Java literals. The host renders Java "
+                    "from the JSON primitive. Never substitute an unrelated "
+                    "gameplay effect for the requested state change."
+                    if typed_values else
                     "Produce ONLY the value expression for this exact required "
                     "canonical state write. The host owns the call, state name "
                     "and receiver. Use current verified callback or state values "
@@ -607,6 +619,43 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
         receipt_name += "_"
     if effect_receipt:
         statements.append(f"boolean {receipt_name} = false;")
+
+    # Real, ABI-bound production callbacks with explicit write obligations
+    # are lowered as host-owned operations, not through an unbounded choice
+    # of unrelated Java calls. The previous path accepted repeated
+    # source.getPlayer().removeAllEffects() as a "gameplay effect" before
+    # asking a 9B model to supply a boolean using arbitrary Java source.
+    if effect_receipt and evidence_bound and (state_slots or runtime_targets):
+        completed = list(statements)
+        if state_slots:
+            _complete_required_state_effects(
+                router, scoped, data_name=data_name, frame=frame,
+                statements=completed, semantic_statements=semantic_statements,
+                receipt_name=receipt_name, effect_receipt=True, slots=state_slots,
+                typed_values=True,
+            )
+        if runtime_targets:
+            from .runtime_mutation_author import author_runtime_mutation_calls
+            author_runtime_mutation_calls(
+                router, scoped, data_name=data_name, frame=frame,
+                verified_calls=native_verified_calls,
+                typed_candidates=typed_mutation_candidates,
+                targets=runtime_targets, statements=completed,
+                semantic_statements=semantic_statements,
+                effect_receipt=True, receipt_name=receipt_name,
+            )
+        completed.append(f"return {receipt_name};")
+        source = frame["prefix"] + "\n".join(completed) + frame["suffix"]
+        if rejected_compiler_member is not None and _same_compiled_member(
+            source, rejected_compiler_member
+        ):
+            raise ValueError("CALLBACK_COMPILER_REJECTED_MEMBER_REPEATED")
+        if state_slots:
+            _require_canonical_state_effects(source, frame)
+        return validate_generated_java_source(
+            source, frame, frame["prefix"], frame["suffix"]
+        )
+
     effects = 0
     blocked_operations: set[str] = set()
     for index in range(64):
