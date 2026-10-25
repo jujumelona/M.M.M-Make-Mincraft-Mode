@@ -35,17 +35,18 @@ class JavaSymbolResolver:
     def __init__(self, classpath: list[Path], java_version: str = "21", *,
                  namespace: str = "NAMED", classpath_sides: dict[str, str] | None = None,
                  additional_sources: Mapping[str, str] | None = None,
-                 include_companion_symbols: bool = False):
+                 include_companion_symbols: bool = False, project_root: str | Path | None = None):
         self.classpath = [Path(p) for p in classpath]
         self.java_version = java_version
         self.namespace = namespace
         self.classpath_sides = classpath_sides or {}
         self.additional_sources = dict(additional_sources or {})
         self.include_companion_symbols = include_companion_symbols
+        self.project_root = project_root
 
     def _resolve(self, source_code: str, filename: str | None = None):
         from .javac_bridge import analyze_java
-        from .jar_api_extractor import inspect_jar, parse_class
+        from .java_symbol_authority import read_binary_classpath, resolved_declaration_side
         import re
         # Only filename discovery uses text; all symbol identity comes from javac.
         if filename is None:
@@ -56,37 +57,13 @@ class JavaSymbolResolver:
                                 java_version=self.java_version, filename=filename,
                                 additional_sources=self.additional_sources,
                                 include_companion_symbols=self.include_companion_symbols)
-            classes = {}
-            for path in self.classpath:
-                default_side = self.classpath_sides.get(str(path), "COMMON")
-                if path.is_dir():
-                    found = {c.name: c for c in (parse_class(p.read_bytes(), default_side=default_side)
-                                               for p in path.rglob("*.class"))}
-                else:
-                    found = inspect_jar(
-                        path, java_version=int(self.java_version), default_side=default_side,
-                        require_classes=False,
-                    )
-                for name, item in found.items():
-                    if name == "module-info":
-                        continue
-                    if name in classes:
-                        if classes[name].content_hash != item.content_hash:
-                            raise JavaSymbolResolverError("AMBIGUOUS_CLASSPATH_CLASS: " + name)
-                        continue
-                    classes[name] = item
+            classes, locations = read_binary_classpath(self.classpath,
+                java_version=self.java_version, classpath_sides=self.classpath_sides)
+            source_names = {"/" + name for name in (filename, *self.additional_sources)}
             output = []
             for row in rows:
-                owner = classes.get(row["owner"])
-                side = row["side"]
-                if owner:
-                    side = owner.side
-                    if row["kind"] != "CLASS":
-                        members = [m for m in owner.members if (m.name, m.descriptor) == (row["name"], row["descriptor"])]
-                        if len(members) != 1:
-                            raise JavaSymbolResolverError("MEMBER_NOT_IN_INSPECTED_CLASSPATH")
-                        side = members[0].side
-                # JDK and current compilation-unit declarations are resolved by the compiler.
+                side = resolved_declaration_side(row, classes, locations,
+                    source_names=source_names, project_root=self.project_root)
                 output.append((JavaSymbol(row["name"], row["owner"], row["descriptor"],
                                           row["kind"], row["is_static"], side, self.namespace,
                                           row.get("source_side", "")), row["line"]))
@@ -114,17 +91,19 @@ class JavaSymbolResolver:
         }.items())
 
 
-def resolve_java_symbols_with_javac(source_file: Path, classpath: list[Path], output_dir: Path) -> list[JavaSymbol]:
+def resolve_java_symbols_with_javac(source_file: Path, classpath: list[Path], output_dir: Path, *,
+                                    project_root: str | Path | None = None) -> list[JavaSymbol]:
     # Tree attribution needs no emitted class files; preserve the historical API.
-    resolver = JavaSymbolResolver(classpath)
+    resolver = JavaSymbolResolver(classpath, project_root=project_root)
     return [s for s, _ in resolver._resolve(source_file.read_text(encoding="utf-8"), source_file.name)]
 
 
 def resolve_java_symbols_with_jdtls(source_code: str, classpath: list[Path], workspace_root: Path) -> list[JavaSymbol]:
     """Compatibility entry point using the installed JDK compiler backend."""
-    return JavaSymbolResolver(classpath).extract_symbols_from_source(source_code)
+    return JavaSymbolResolver(classpath, project_root=workspace_root).extract_symbols_from_source(source_code)
 
 
-def resolve_java_symbols_with_javaparser(source_code: str, classpath: list[Path]) -> list[JavaSymbol]:
+def resolve_java_symbols_with_javaparser(source_code: str, classpath: list[Path], *,
+                                         project_root: str | Path | None = None) -> list[JavaSymbol]:
     """Compatibility entry point using the installed JDK compiler backend."""
-    return JavaSymbolResolver(classpath).extract_symbols_from_source(source_code)
+    return JavaSymbolResolver(classpath, project_root=project_root).extract_symbols_from_source(source_code)

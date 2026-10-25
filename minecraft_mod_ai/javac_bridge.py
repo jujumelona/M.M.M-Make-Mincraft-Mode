@@ -28,6 +28,10 @@ class IntegritySymbols {
     return path.startsWith("/src/client/java/") ? "CLIENT" :
            path.startsWith("/src/main/java/") ? "COMMON" : "";
   }
+  static String declarationSource(Element element) {
+    TreePath path=trees.getPath(element);
+    return path==null ? "" : path.getCompilationUnit().getSourceFile().toUri().getPath();
+  }
   static String q(String s) {
     StringBuilder b = new StringBuilder("\"");
     for (char c : s.toCharArray()) {
@@ -95,7 +99,8 @@ class IntegritySymbols {
     }
     try (StandardJavaFileManager fm=compiler.getStandardFileManager(diagnostics, null, null)) {
       JavacTask task=(JavacTask)compiler.getTask(null,fm,diagnostics,
-          List.of("-proc:none","--release",release,"-classpath",cp),null,sources);
+          List.of("-proc:none","--release",release,"-classpath",cp,"-sourcepath",
+                  Path.of(args[5]).resolveSibling("no-implicit-sources").toString()),null,sources);
       List<CompilationUnitTree> units=new ArrayList<>();
       task.parse().forEach(units::add);
       if (!mode.equals("parse")) task.analyze();
@@ -122,6 +127,8 @@ class IntegritySymbols {
           rows.add("{\"owner\":"+q(elements.getBinaryName(owner).toString().replace('.','/'))+
             ",\"name\":"+q(name)+",\"descriptor\":"+q(descriptor(e))+",\"kind\":"+q(kind)+",\"side\":"+q(side(e))+
             ",\"is_static\":"+e.getModifiers().contains(Modifier.STATIC)+",\"source_side\":"+q(sourceSide(unit))+
+            ",\"declaration_source\":"+q(declarationSource(owner))+
+            ",\"reference_source\":"+q(unit.getSourceFile().toUri().getPath())+
             ",\"line\":"+unit.getLineMap().getLineNumber(pos)+"}");
         }
         public Void visitMethodInvocation(MethodInvocationTree t,Void v) {

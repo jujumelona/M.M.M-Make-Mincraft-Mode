@@ -5,6 +5,7 @@ from minecraft_mod_ai.construction_runtime import _reconcile_project_compiled_so
 
 
 def test_local_compiled_class_and_members_replaced_by_current_source(tmp_path):
+    (tmp_path / "build/classes/java/main").mkdir(parents=True)
     local = str(tmp_path / "build" / "classes" / "java" / "main")
     external = str(tmp_path / "dependencies" / "external.jar")
     original = {

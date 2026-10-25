@@ -58,7 +58,7 @@ def validate_side(source, *, leaf_id, side, classpath, java_version, classpath_s
         if source_context else {})
     symbols = JavaSymbolResolver(
         classpath, java_version, classpath_sides=classpath_sides,
-        additional_sources=additional_sources, include_companion_symbols=True,
+        additional_sources=additional_sources, include_companion_symbols=True, project_root=project_root,
     ).extract_symbols_from_source(source)
     _validate_attributed_source_sides(symbols, leaf_id=leaf_id, side=side)
     return {"validator": "client_side_only", "status": "PASS", "symbols_checked": len(symbols)}

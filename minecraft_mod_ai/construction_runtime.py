@@ -44,18 +44,19 @@ def _reconcile_project_compiled_sources(symbols, pages, root):
     the exact current AuthoredProgram.java is included as a materialized source.
     External jar conflicts remain errors. The cached bytecode index is not mutated.
     """
+    from .java_symbol_authority import is_project_compiled_output
+
     declarations = {
         unit['owner'] for collection in pages.values() for unit in collection
         if unit.get('kind') in {'class', 'interface', 'enum', 'record'}
     }
-    build_classes = (root / 'build' / 'classes').resolve()
     local_owners = set()
     for owner in declarations:
         existing = symbols.get(owner)
         if not existing:
             continue
         source_path = existing.get('source_path', '')
-        if source_path and Path(source_path).resolve().is_relative_to(build_classes):
+        if source_path and is_project_compiled_output(source_path, root):
             local_owners.add(owner)
     if not local_owners:
         return symbols
@@ -63,7 +64,7 @@ def _reconcile_project_compiled_sources(symbols, pages, root):
         key: row for key, row in symbols.items()
         if not (row.get('owner') in local_owners
                 and row.get('source_path')
-                and Path(row['source_path']).resolve().is_relative_to(build_classes))
+                and is_project_compiled_output(row['source_path'], root))
     }
 
 
