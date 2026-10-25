@@ -46,6 +46,10 @@ def test_compiler_probe_never_asks_small_model_for_raw_java_statement():
         "coder", [], data_name="submit_java_implementation_0_required_state_abi_probe_count_try_0",
         parameters={"properties": {"expression": {"type": "string"}}},
     ) == {"expression": "1"}
+    assert provider.generate_structured_data(
+        "coder", [], data_name="submit_java_implementation_0_required_state_abi_probe_count_try_0",
+        parameters={"properties": {"value": {"type": "integer"}}},
+    ) == {"value": 1}
     with pytest.raises(AssertionError, match="declared state writer"):
         provider.generate_structured_data(
             "coder", [], data_name="submit_java_implementation_0_operation_0_try_0",
