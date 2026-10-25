@@ -520,8 +520,8 @@ def author_indexed_callback_body(router, messages, *, data_name, frame, api_inde
                                  task, predicate=False, effect_receipt=False):
     """Attach host authority after message serialization, then author one body."""
     if effect_receipt and frame["host_behavior_contract"].get("runtime_state_writes"):
-        from .host_runtime_mutation_catalog import bind_runtime_mutation_catalog
-        frame["host_verified_runtime_mutation_candidates"] = bind_runtime_mutation_catalog(
+        from .host_runtime_mutation_catalog import cached_runtime_mutation_catalog
+        frame["host_verified_runtime_mutation_candidates"] = cached_runtime_mutation_catalog(
             api_index, task, frame)
     return author_callback_body(router, messages, data_name=data_name, frame=frame,
                                 predicate=predicate, effect_receipt=effect_receipt)

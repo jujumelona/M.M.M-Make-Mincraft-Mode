@@ -62,19 +62,24 @@ def runtime_mutation_api_records(evidence, owners):
 
 def bind_runtime_mutation_catalog(evidence, task, frame):
     """Bind complete inspected ABIs to one exact host-owned callback frame."""
-    from .host_verified_callback_ops import _callback_parameters, verified_runtime_mutation_candidates
+    from .host_verified_callback_ops import verified_runtime_mutation_candidates
 
     event = task["verified_event_callback"]
-    key = (json.dumps(task.get("declaration_metadata", {}).get("parameters"), sort_keys=True),
-           tuple(_callback_parameters(frame)))
-    cache = evidence.__dict__.setdefault("native_mutation_catalogs", {})
-    if key in cache:
-        return cache[key]
     native = {
         "verified_event_callback": event,
         "declaration_metadata": task.get("declaration_metadata", {}),
         "callback_input_api": runtime_mutation_api_records(
             evidence, event.get("parameters", ())),
     }
-    cache[key] = verified_runtime_mutation_candidates([], frame, api_task=native)
+    return verified_runtime_mutation_candidates([], frame, api_task=native)
+
+
+def cached_runtime_mutation_catalog(evidence, task, frame):
+    from .host_verified_callback_ops import _callback_parameters
+
+    key = (json.dumps(task.get("declaration_metadata", {}).get("parameters"), sort_keys=True),
+           tuple(_callback_parameters(frame)))
+    cache = evidence.__dict__.setdefault("native_mutation_catalogs", {})
+    if key not in cache:
+        cache[key] = bind_runtime_mutation_catalog(evidence, task, frame)
     return cache[key]

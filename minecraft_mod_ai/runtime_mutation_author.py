@@ -20,6 +20,18 @@ class RuntimeRepairBindings(dict):
         self.mutation_receipts = mutation_receipts
 
 
+def _mutation_page_item(identifier, item):
+    return {
+        "verified_call_id": identifier, "signature": item["signature"],
+        "expression": item.get("expression"), "receiver": item.get("receiver"),
+        "typed_arguments": [
+            {"type": arg["type"], "expression": arg.get("expression"),
+             "verified_value_count": len(arg.get("verified_values", ()))}
+            for arg in item.get("arguments") or ()
+        ],
+    }
+
+
 def _mutation_page_context(name, frame, options, signatures, statements, start, total):
     return {
         "instruction": (
@@ -38,9 +50,7 @@ def _mutation_page_context(name, frame, options, signatures, statements, start, 
         "catalogue_candidates": total,
         "catalogue_has_more": start + 32 < total,
         "inspected_calls": [
-            {"verified_call_id": identifier, "signature": item["signature"],
-             "expression": item.get("expression"), "receiver": item.get("receiver"),
-             "typed_arguments": item.get("arguments")}
+            _mutation_page_item(identifier, item)
             for identifier, item in options.items()
         ],
         "prior_verified_signatures": sorted(signatures),
@@ -63,6 +73,68 @@ def mutation_targets(behavior: Mapping | None) -> tuple[str, ...]:
     return tuple(targets)
 
 
+def _choose_native_argument(router, scoped, data_name, state_name, selected, argument, offset):
+    from .host_callback_body import _ask
+
+    values = argument["verified_values"]
+    for start in range(0, len(values), 32):
+        options = {"a" + str(i): values[i] for i in range(start, min(start + 32, len(values)))}
+        value = _ask(router, scoped, name=data_name + "_native_argument_" + str(offset)
+                     + "_page_" + str(start // 32),
+            schema={"type": "object", "properties": {"verified_argument_id": {
+                "type": "string", "enum": [*options, "unavailable"]}},
+                "required": ["verified_argument_id"], "additionalProperties": False},
+            context={
+                "instruction": "Choose the exact inspected callback participant for this argument; unavailable searches the next page.",
+                "required_native_state": state_name, "verified_method": selected["signature"],
+                "argument_index": offset, "required_java_type": argument["type"],
+                "verified_arguments": [{"verified_argument_id": key, "expression": expression}
+                                       for key, expression in options.items()],
+            }, lower=lambda row: options.get(row["verified_argument_id"]),
+        )
+        if value is not None:
+            return value
+    raise ValueError("CALLBACK_RUNTIME_ARGUMENT_UNRESOLVED: " + state_name + "/" + str(offset))
+
+
+def _author_native_scalar(router, scoped, data_name, state_name, selected, argument, offset, behavior):
+    from .host_callback_body import _ask, parse_expression
+
+    return _ask(router, scoped,
+        name=(data_name + "_native_value_" + hashlib.sha256(
+            state_name.encode("utf-8")).hexdigest()[:12] + "_" + str(offset)),
+        schema={"type": "object", "properties": {"expression": {
+            "type": "string", "minLength": 1, "maxLength": 2048}},
+            "required": ["expression"], "additionalProperties": False},
+        context={
+            "instruction": (
+                "Supply ONLY a Java value expression of the exact declared type "
+                "for the checked native mutator. Use verified callback/world inputs. "
+                "Do not author a statement, class, import or different target state. "
+                "The host owns the receiver and method overload."),
+            "required_native_state": state_name, "verified_method": selected["signature"],
+            "argument_index": offset, "required_java_type": argument["type"],
+            "assigned_behavior": behavior,
+        }, lower=lambda value: parse_expression(value["expression"]),
+    )
+
+
+def _native_mutation_expression(router, scoped, data_name, state_name, selected, behavior):
+    if selected["kind"] == "bound":
+        return str(selected["expression"])
+    args = []
+    for offset, argument in enumerate(selected["arguments"]):
+        value = argument.get("expression")
+        if argument.get("verified_values"):
+            value = _choose_native_argument(router, scoped, data_name, state_name,
+                                            selected, argument, offset)
+        elif value is None:
+            value = _author_native_scalar(router, scoped, data_name, state_name,
+                                          selected, argument, offset, behavior)
+        args.append(value)
+    return selected["receiver"] + "." + selected["name"] + "(" + ", ".join(args) + ")"
+
+
 def author_runtime_mutation_calls(
     router, scoped, *, data_name: str, frame: Mapping,
     verified_calls: Sequence[Mapping], typed_candidates: Sequence[Mapping],
@@ -78,7 +150,6 @@ def author_runtime_mutation_calls(
     """
     from .host_callback_body import (
         _ask, _effect_operation, lower_operation_from_host_verified_call,
-        parse_expression,
     )
 
     known_pure = {
@@ -131,48 +202,8 @@ def author_runtime_mutation_calls(
             if choice == "unavailable":
                 return None  # Absence on this page is not catalogue exhaustion.
             selected = options[choice]
-            if selected["kind"] == "bound":
-                expression = str(selected["expression"])
-            else:
-                args = []
-                for offset, argument in enumerate(selected["arguments"]):
-                    resolved = argument.get("expression")
-                    if resolved is None:
-                        java_type = argument["type"]
-                        resolved = _ask(
-                            router, scoped,
-                            name=(data_name + "_native_value_" +
-                                  hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
-                                  + "_" + str(offset)),
-                            schema={
-                                "type": "object",
-                                "properties": {"expression": {
-                                    "type": "string", "minLength": 1, "maxLength": 2048}},
-                                "required": ["expression"],
-                                "additionalProperties": False,
-                            },
-                            context={
-                                "instruction": (
-                                    "Supply ONLY a Java value expression of the exact "
-                                    "declared type for the checked native mutator. "
-                                    "Use verified callback/world inputs. Do not "
-                                    "author a method call statement, class, import "
-                                    "or different target state. The host owns "
-                                    "the receiver and method overload."
-                                ),
-                                "required_native_state": name,
-                                "verified_method": selected["signature"],
-                                "argument_index": offset,
-                                "required_java_type": java_type,
-                                "assigned_behavior": frame.get("host_behavior_contract"),
-                            },
-                            lower=lambda value: parse_expression(value["expression"]),
-                        )
-                    args.append(resolved)
-                expression = (
-                    selected["receiver"] + "." + selected["name"] +
-                    "(" + ", ".join(args) + ")"
-                )
+            expression = _native_mutation_expression(
+                router, scoped, data_name, name, selected, frame.get("host_behavior_contract"))
             code = lower_operation_from_host_verified_call(
                 expression, frame, statements, [])
             return {"statement": code, "signature": selected["signature"]}

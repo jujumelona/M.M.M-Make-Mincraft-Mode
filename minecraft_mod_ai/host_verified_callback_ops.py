@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-from itertools import product
 
 from .java_region_parser import _parse, _text
 
@@ -192,6 +191,17 @@ def _extend_native_receivers(records, declared, params, apis, inputs):
                     inputs[owner].append(receiver)
 
 
+def _runtime_argument_slots(arguments, inputs):
+    slots = []
+    for kind in arguments:
+        values = inputs.get(kind, ())
+        slot = {"type": kind, "expression": values[0] if len(values) == 1 else None}
+        if len(values) > 1:
+            slot["verified_values"] = tuple(values)
+        slots.append(slot)
+    return slots
+
+
 def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
     """Expose grounded receiver+method ABIs with typed *value* holes.
 
@@ -285,17 +295,15 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
                 continue
             signature = owner + "#" + name + "(" + ", ".join(arguments) + ")"
             for receiver in receivers:
-                for values in product(*(inputs.get(kind) or [None] for kind in arguments)):
-                    identity = (receiver, signature, values)
-                    if identity in seen:
-                        continue
-                    seen.add(identity)
-                    candidates.append({
-                        "id": "m" + str(len(candidates)),
-                        "receiver": receiver, "name": name, "signature": signature,
-                        "arguments": [{"type": kind, "expression": value}
-                                      for kind, value in zip(arguments, values)],
-                        "return_type": row.get("return_type"),
-                    })
+                identity = (receiver, signature)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                candidates.append({
+                    "id": "m" + str(len(candidates)),
+                    "receiver": receiver, "name": name, "signature": signature,
+                    "arguments": _runtime_argument_slots(arguments, inputs),
+                    "return_type": row.get("return_type"),
+                })
     return candidates
 

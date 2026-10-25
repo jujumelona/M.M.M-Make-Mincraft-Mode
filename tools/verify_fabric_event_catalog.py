@@ -64,6 +64,16 @@ def _compiler_probe_decision(data_name, parameters):
     raise AssertionError("Compiler probe received an unknown predicate/call schema")
 
 
+def _compiler_probe_operation(data_name, parameters):
+    if "_required_state_abi_probe_count_try_" in data_name:
+        return {"expression": "1"}
+    if "_operation_0_try_" in data_name:
+        choices = parameters["properties"]["action"]["enum"]
+        assert "complete" in choices, "ABI probe requires its declared state writer"
+        return {"action": "complete"}
+    raise AssertionError("Unknown host-authored compiler probe operation: " + data_name)
+
+
 class _CompilerProbeBodies:
     """Test-only ABI probe, NOT a gameplay-verified callback generator.
 
@@ -93,23 +103,44 @@ class _CompilerProbeBodies:
         decision = _compiler_probe_decision(data_name, parameters)
         if decision is not None:
             return decision
-        if "_operation_0_call_try_" in data_name:
-            return {
-                "receiver": "java.lang.System", "method": "nanoTime",
-                "arguments": [],
-            }
-        if "_operation_0_try_" in data_name:
-            assert "return" not in parameters["properties"]["action"]["enum"]
-            return {"action": "call"}
-        if "_operation_1_try_" in data_name:
-            return {"action": "complete"}
-        raise AssertionError(
-            "The real Fabric callback compiler probe received an unknown "
-            "host-authored operation: " + data_name
-        )
+        return _compiler_probe_operation(data_name, parameters)
 
     def generate_java_source(self, role, messages, *, data_name, source_frame):
         raise AssertionError("Compiler proof must not hand Java source ownership to a model")
+
+
+def _callback_probe_source(event, symbols, name):
+    spec = {"language": "java", "side": "COMMON",
+            "target_path": "src/main/java/proof/" + name + ".java",
+            "bindings": {"request_feature_entrypoint": "proof." + name}}
+    state = {"owner": "proof.CompilerProbeState", "methods": [{
+        "name": "writeState_abi_probe_count",
+        "signature": "public static void writeState_abi_probe_count(int value);",
+    }]}
+    return compose_first_pass_java(
+        _CompilerProbeBodies(), spec, [],
+        construction_context={"symbols": symbols, "host_state_access": [state]},
+        behaviors=[{"behavior_id": event["event_id"], "intent": "Compiler ABI probe",
+                    "trigger": "The selected callback fires", "effects": "Compiler probe only",
+                    "event_binding": event["event_id"], "state_writes": ["abi_probe_count"]}])
+
+
+def _callback_probe_sources(root, events, symbols):
+    directory = root / "sources" / "proof"
+    directory.mkdir(parents=True, exist_ok=True)
+    state = directory / "CompilerProbeState.java"
+    state.write_text(
+        "package proof; public final class CompilerProbeState {"
+        "public static int count; "
+        "public static void writeState_abi_probe_count(int value) {count=value;} }")
+    paths = [str(state)]
+    for index, event in enumerate(events):
+        name = "Callback" + str(index)
+        path = directory / (name + ".java")
+        path.write_text(_callback_probe_source(event, symbols, name))
+        paths.append(str(path))
+    return paths
+
 
 def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
     root = Path(root).resolve()
@@ -166,21 +197,7 @@ def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
     missing = required - {row["event_id"] for row in events}
     if missing:
         raise AssertionError("Regression: actual event fields missing: " + ", ".join(sorted(missing)))
-    paths = []
-    for index, event in enumerate(events):
-        name = "Callback" + str(index)
-        spec = {"language": "java", "side": "COMMON",
-                "target_path": "src/main/java/proof/" + name + ".java",
-                "bindings": {"request_feature_entrypoint": "proof." + name}}
-        source = compose_first_pass_java(
-            _CompilerProbeBodies(), spec, [], construction_context={"symbols": symbols},
-            behaviors=[{"behavior_id": event["event_id"], "intent": "Compiler ABI probe",
-                        "trigger": "The selected callback fires", "effects": "Compiler probe only",
-                        "event_binding": event["event_id"]}])
-        path = root / "sources" / "proof" / (name + ".java")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
-        paths.append(str(path))
+    paths = _callback_probe_sources(root, events, symbols)
     # Compile the ACTUAL host-emitted living-entity registry against Minecraft
     # and Fabric classes. A synthetic signature stub could mask a 26.2 API
     # change, so both the class and registration are checked by javac.

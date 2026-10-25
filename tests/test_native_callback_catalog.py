@@ -244,3 +244,50 @@ def test_root_typed_getter_keeps_one_hop_participant_without_recursive_expansion
     expected = {"actor", "actor.getOwnedTarget()"} if self_type else {
         "target", "actor.getOwnedTarget()"}
     assert {c["receiver"] for c in candidates} == expected
+
+
+@pytest.mark.parametrize("value_count,arguments,wanted", [
+    (4, 4, ["v3", "v0", "v2", "v1"]),
+    (40, 1, ["v39"]),
+])
+def test_argument_choices_are_bound_after_method_selection(value_count, arguments, wanted):
+    # Eager products create 4**4 method choices for one actual overload.
+    # Keep one overload and preserve every valid argument value independently.
+    parameters = [("example.Target", "target"), *[("example.Value", f"v{i}")
+                                                     for i in range(value_count)]]
+    task = {"verified_event_callback": {"parameters": [t for t, _ in parameters]},
+            "callback_input_api": [{"verified_class": "example.Target", "members": [{
+                "kind": "METHOD", "name": "apply", "static": False, "return_type": "void",
+                "parameters": ["example.Value"] * arguments,
+            }]}]}
+    frame = _frame(("Inventory mutation",))
+    frame["prefix"] = "private boolean run(" + ", ".join(t + " " + n for t, n in parameters) + ") {\n"
+    candidates = verified_runtime_mutation_candidates([], frame, api_task=task)
+    assert len(candidates) == 1
+    frame["host_verified_runtime_mutation_candidates"] = candidates
+
+    class ArgumentRouter(SelectingRouter):
+        def __init__(self):
+            super().__init__("apply")
+            self.argument_pages = []
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            page = json.loads(messages[-1]["content"])
+            if "verified_arguments" in page:
+                self.argument_pages.append(page)
+                value = wanted[page["argument_index"]]
+                selected = next((r["verified_argument_id"] for r in page["verified_arguments"]
+                                 if r["expression"] == value), "unavailable")
+                return {"verified_argument_id": selected}
+            return super().generate_structured_data(role, messages, data_name=data_name,
+                                                     parameters=parameters)
+
+    router = ArgumentRouter()
+    source = author_callback_body(router, [{"role": "user", "content": json.dumps(task)}],
+                                   data_name="factored", frame=frame, effect_receipt=True)
+    assert "target.apply(" + ", ".join(wanted) + ");" in source
+    assert all(len(page["verified_arguments"]) <= 32 for page in router.argument_pages)
+    assert len(router.argument_pages) == (4 if value_count == 4 else 2)
+    method_arguments = router.pages[0]["inspected_calls"][0]["typed_arguments"]
+    assert all("verified_values" not in row for row in method_arguments)
+    assert all(row["verified_value_count"] == value_count for row in method_arguments)

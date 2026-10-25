@@ -56,3 +56,23 @@ publication have separate helpers. Runtime repair bindings retain receipt
 ownership while preserving existing repair signatures. The architecture
 regression audit against the original source reports zero violations; the
 95 related tests also pass after this responsibility split.
+
+Official Minecraft 26.2 verification
+----------------------------------
+
+JDK 25 compiled all 111 discovered common Fabric callbacks, their proof
+state owner and the entity/attribute registry: 114 Java sources, exit 0.
+The compiler-only probe uses an explicit owned state write, so it also
+covers callbacks whose inputs expose no gameplay mutator.
+
+The actual Minecraft/Fabric index contains 164,380 symbols. For the exact
+combat callback in the failed run, the old prompt sample omitted both
+``setHealth(float)`` and ``ItemStack.setDamageValue(int)``; the complete
+catalogue retains both. Argument combinations are represented as independent
+checked value slots. On this index, method choices fell from 168,064 to
+6,825 while retaining all operand alternatives. Method menus contain compact
+argument summaries; participant IDs are selected on separate bounded pages.
+
+The final related regression set passes 112 tests, including arguments beyond
+the first page. Real-model generation and in-game behavior remain separate
+runtime checks.
