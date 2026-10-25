@@ -203,7 +203,7 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
                            filename: str, target_path: str, symbols: dict,
                            owner: str, api_evidence: dict, attempt: int,
                            prerequisite_api=(), state_access=(), behaviors=(),
-                           runtime_state_bindings=()) -> str:
+                           runtime_state_bindings=(), runtime_mutation_receipts=None) -> str:
     from .host_java_imports import host_add_verified_imports
 
     checked_constructor = _javac_constructor_repair(
@@ -227,6 +227,7 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
         neighbor_signatures=_host_declared_neighbor_signatures(
             source, selected_name=original.split("{", 1)[0].strip()),
         runtime_state_bindings=runtime_state_bindings,
+        runtime_mutation_receipts=runtime_mutation_receipts,
     )
     if callback_repair is not None:
         updated = (raw[:node.start_byte] + callback_repair.encode("utf-8")

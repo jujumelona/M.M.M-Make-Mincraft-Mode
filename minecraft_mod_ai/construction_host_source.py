@@ -338,6 +338,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         behaviors=behavior_rows,
                         runtime_state_bindings=json.loads(spec.get("bindings", {}).get(
                             "runtime_state_bindings_json") or "{}"),
+                        runtime_mutation_receipts=mutation_receipts,
                         attempt=attempt + 1,
                     )
                 else:
@@ -375,3 +376,4 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         }, ensure_ascii=False), flush=True)
         return source
+

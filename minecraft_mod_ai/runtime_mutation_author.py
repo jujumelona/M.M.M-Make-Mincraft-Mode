@@ -8,6 +8,7 @@ invocation must appear in the effect body.  Runtime playtests remain required.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 
 
@@ -32,7 +33,7 @@ def author_runtime_mutation_calls(
     targets: Sequence[str], statements: list[str],
     semantic_statements: list[str], effect_receipt: bool, receipt_name: str,
 ) -> None:
-    """Lower one distinct checked native effect per runtime-state obligation.
+    """Resolve every native obligation against the complete inspected catalogue.
 
     Directly bound calls use the inspected callback ABI. Methods requiring a
     scalar argument use that same checked receiver and signature, but obtain
@@ -60,15 +61,14 @@ def author_runtime_mutation_calls(
         and not str(row["signature"]).startswith(("java.lang.Object#", "java.lang.String#"))
         and _effect_operation("call", str(row["expression"]) + ";")
     }
-    # Bound candidates above already cover methods whose every parameter is
-    # a callback input. Include typed candidates only when at least one
-    # argument truly needs an independently validated scalar value.
+    # The dedicated host catalogue also carries completely bound calls that
+    # fell outside the ordinary prompt sample. A prompt's first page must
+    # never be the authority for whether a callable exists.
     typed = {
         str(row["id"]): {"kind": "typed", **row}
         for row in typed_candidates
         if isinstance(row, Mapping)
         and row.get("id") and row.get("signature")
-        and any(arg.get("expression") is None for arg in row.get("arguments", ()))
     }
     available = {**bound, **typed}
     if not available:
@@ -78,17 +78,22 @@ def author_runtime_mutation_calls(
 
     used_signatures: set[str] = set()
     for index, name in enumerate(targets):
-        options = {
-            identifier: row for identifier, row in available.items()
-            if row["signature"] not in used_signatures
-        }
-        if not options:
-            raise ValueError("CALLBACK_RUNTIME_MUTATION_DISTINCT_API_REQUIRED: " + name)
+        words = set(re.findall(r"[a-z]+", re.sub(
+            r"(?<=[a-z0-9])(?=[A-Z])", " ", name).lower()))
+
+        def relevance(item):
+            text = item[1]["signature"] + " " + str(item[1].get("receiver") or "")
+            tokens = set(re.findall(r"[a-z]+", re.sub(
+                r"(?<=[a-z0-9])(?=[A-Z])", " ", text).lower()))
+            return -len(words & tokens)
+
+        ordered = sorted(available.items(), key=relevance)
+        options = {}
 
         def lower(row):
             choice = row["verified_call_id"]
             if choice == "unavailable":
-                raise ValueError("CALLBACK_RUNTIME_MUTATION_TARGET_UNRESOLVED: " + name)
+                return None  # Absence on this page is not catalogue exhaustion.
             selected = options[choice]
             if selected["kind"] == "bound":
                 expression = str(selected["expression"])
@@ -136,46 +141,62 @@ def author_runtime_mutation_calls(
                 expression, frame, statements, [])
             return {"statement": code, "signature": selected["signature"]}
 
-        selected_result = _ask(
-            router, scoped,
-            name=(data_name + "_runtime_mutation_" +
-                  hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]),
-            schema={
-                "type": "object",
-                "properties": {"verified_call_id": {
-                    "type": "string",
-                    "enum": [*options, "unavailable"],
-                }},
-                "required": ["verified_call_id"],
-                "additionalProperties": False,
-            },
-            context={
-                "instruction": (
-                    "Select the real inspected mutator for the EXACT original "
-                    "Minecraft state named below. Select 'unavailable' if "
-                    "none changes its original world/player/entity/item owner. "
-                    "A log, getter, callback registration, unrelated setter "
-                    "or detached scalar cannot satisfy the obligation. "
-                    "Actual semantic success still requires gameplay tests."
-                ),
-                "required_native_state": name,
-                "behavior": frame.get("host_behavior_contract"),
-                "inspected_calls": [
-                    {"verified_call_id": identifier, "signature": item["signature"],
-                     "expression": item.get("expression"),
-                     "receiver": item.get("receiver"),
-                     "typed_arguments": item.get("arguments")}
-                    for identifier, item in options.items()
-                ],
-                "prior_verified_signatures": sorted(used_signatures),
-            }, lower=lower,
-        )
+        # This is a per-request prompt bound, never a catalogue-size bound.
+        # Every remaining page is searched if the model reports unavailable.
+        for start in range(0, len(ordered), 32):
+            options = dict(ordered[start:start + 32])
+            selected_result = _ask(
+                router, scoped,
+                name=(data_name + "_runtime_mutation_" +
+                      hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+                      + "_page_" + str(start // 32)),
+                schema={
+                    "type": "object",
+                    "properties": {"verified_call_id": {
+                        "type": "string", "enum": [*options, "unavailable"],
+                    }},
+                    "required": ["verified_call_id"], "additionalProperties": False,
+                },
+                context={
+                    "instruction": (
+                        "Select the real inspected mutator for the EXACT original "
+                        "Minecraft state and event participant named below. Select "
+                        "'unavailable' if THIS PAGE has none; the host will search "
+                        "the remaining catalogue. A log, getter, callback registration, "
+                        "unrelated owner/setter or detached scalar cannot satisfy it. "
+                        "An existing exact invocation may cover another state it "
+                        "actually changes; the host emits identical invocations once. "
+                        "Actual semantic success still requires gameplay tests."
+                    ),
+                    "required_native_state": name,
+                    "behavior": frame.get("host_behavior_contract"),
+                    "catalogue_page": start // 32,
+                    "catalogue_candidates": len(ordered),
+                    "catalogue_has_more": start + 32 < len(ordered),
+                    "inspected_calls": [
+                        {"verified_call_id": identifier, "signature": item["signature"],
+                         "expression": item.get("expression"),
+                         "receiver": item.get("receiver"),
+                         "typed_arguments": item.get("arguments")}
+                        for identifier, item in options.items()
+                    ],
+                    "prior_verified_signatures": sorted(used_signatures),
+                    "accepted_native_effects": list(semantic_statements),
+                }, lower=lower,
+            )
+            if selected_result is not None:
+                break
+        else:
+            raise ValueError(
+                "CALLBACK_OPERATION_INVALID: CALLBACK_RUNTIME_MUTATION_TARGET_UNRESOLVED: "
+                + name + "; inspected all " + str(len(ordered)) + " callable candidates")
         # Signature is carried directly from the selected checked ID, not
         # rediscovered with a text-prefix search (which conflates overloads).
         used_signatures.add(selected_result["signature"])
         statement = selected_result["statement"]
-        statements.append(statement)
-        semantic_statements.append(statement)
+        if statement not in statements:
+            statements.append(statement)
+            semantic_statements.append(statement)
         if effect_receipt:
             statements.append(receipt_name + " = true;")
         collector = frame.get("host_runtime_mutation_receipts")
@@ -226,8 +247,9 @@ def verify_native_runtime_mutation_coverage(source, behaviors, receipts):
     if set(by_key) != required:
         raise ValueError("NATIVE_MUTATION_PROOF_COVERAGE_MISSING: " +
                          repr(sorted(required - set(by_key))))
-    if len({item["verified_signature"] for item in by_key.values()}) != len(required):
-        raise ValueError("NATIVE_MUTATION_PROOF_SIGNATURE_REUSED")
+    # Coverage belongs to (behavior, original state, concrete invocation).
+    # The same API may legitimately change several states or run in separate
+    # handlers. Each obligation below must still retain its exact live call.
 
     raw, tree = _parse(source)
     methods = {}
@@ -271,3 +293,4 @@ def verify_native_runtime_mutation_coverage(source, behaviors, receipts):
             raise ValueError(
                 "NATIVE_MUTATION_PROOF_EFFECT_DROPPED: " +
                 behavior_id + "/" + state_name)
+

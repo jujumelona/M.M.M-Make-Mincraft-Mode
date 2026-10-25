@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from itertools import product
 
 from .java_region_parser import _parse, _text
 
@@ -154,7 +155,7 @@ def verified_callback_choices(messages, frame, *, predicate=False):
     return choices[:32]
 
 
-def verified_runtime_mutation_candidates(messages, frame):
+def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
     """Expose grounded receiver+method ABIs with typed *value* holes.
 
     A Fabric callback rarely provides `float damage` or `int amount` as a
@@ -163,7 +164,7 @@ def verified_runtime_mutation_candidates(messages, frame):
     This catalog lets a separate host slot author such scalar values while
     keeping method identity, receiver and argument count immutable.
     """
-    task = None
+    task = api_task
     for message in messages:
         if message.get("role") != "user":
             continue
@@ -214,6 +215,37 @@ def verified_runtime_mutation_candidates(messages, frame):
         "containsKey", "containsValue", "size", "length", "iterator",
         "stream", "spliterator", "clone", "copy", "matches",
     }
+    # Retain every inspected path to a receiver type. Choosing the first bag,
+    # hand or entity of that type can silently change the effect's owner.
+    for record in task["callback_input_api"]:
+        if not isinstance(record, dict):
+            continue
+        owner = record.get("verified_class")
+        bridges = list(record.get("verified_receiver_paths") or ())
+        if isinstance(record.get("verified_receiver_path"), dict):
+            bridges.append(record["verified_receiver_path"])
+        for bridge in bridges:
+            if not isinstance(bridge, dict) or bridge.get("destination_type") != owner:
+                continue
+            start, method = bridge.get("source_type"), bridge.get("source_method")
+            if (start not in declared or not isinstance(method, str)
+                    or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", method)):
+                continue
+            if not any(
+                isinstance(row, dict) and row.get("kind") == "METHOD"
+                and row.get("name") == method and row.get("return_type") == owner
+                and not row.get("parameters") and not row.get("static")
+                and not int(row.get("access", 0)) & 8
+                for row in apis.get(start, {}).get("members", ())
+            ):
+                continue
+            # A self-type getter or a path back to another callback root
+            # must start from the immutable event inputs, never from paths
+            # appended above. This keeps the promised one-hop boundary.
+            for origin in (name for kind, name in params if kind == start):
+                receiver = origin + "." + method + "()"
+                if receiver not in inputs.setdefault(owner, []):
+                    inputs[owner].append(receiver)
     candidates, seen = [], set()
     for record in task["callback_input_api"]:
         if not isinstance(record, dict):
@@ -245,7 +277,9 @@ def verified_runtime_mutation_candidates(messages, frame):
         if not receivers:
             continue
         for row in record.get("members", ()):
-            if not isinstance(row, dict) or row.get("kind") != "METHOD" or row.get("static"):
+            if (not isinstance(row, dict) or row.get("kind") != "METHOD"
+                    or row.get("static") or int(row.get("access", 0)) & 8
+                    or row.get("owner") == "java.lang.Object"):
                 continue
             name = row.get("name")
             if (not isinstance(name, str) or not re.fullmatch(
@@ -256,28 +290,25 @@ def verified_runtime_mutation_candidates(messages, frame):
             if name == "register" and owner.startswith("net.fabricmc.fabric.api."):
                 continue
             arguments = row.get("parameters")
-            if not isinstance(arguments, list) or len(arguments) > 4:
+            if not isinstance(arguments, list):
                 continue
             # Non-scalar parameters must already be real callback inputs.
             # Scalar value slots are bounded and type checked at compilation.
             if any(kind not in inputs and kind not in scalar_types for kind in arguments):
                 continue
-            args = [
-                {"type": kind, "expression": (inputs[kind][0] if inputs.get(kind) else None)}
-                for kind in arguments
-            ]
             signature = owner + "#" + name + "(" + ", ".join(arguments) + ")"
             for receiver in receivers:
-                identity = (receiver, signature)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                candidates.append({
-                    "id": "m" + str(len(candidates)),
-                    "receiver": receiver, "name": name, "signature": signature,
-                    "arguments": args,
-                    "return_type": row.get("return_type"),
-                })
-                if len(candidates) >= 64:
-                    return candidates
+                for values in product(*(inputs.get(kind) or [None] for kind in arguments)):
+                    identity = (receiver, signature, values)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    candidates.append({
+                        "id": "m" + str(len(candidates)),
+                        "receiver": receiver, "name": name, "signature": signature,
+                        "arguments": [{"type": kind, "expression": value}
+                                      for kind, value in zip(arguments, values)],
+                        "return_type": row.get("return_type"),
+                    })
     return candidates
+
