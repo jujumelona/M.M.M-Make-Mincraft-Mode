@@ -15,12 +15,12 @@ from .source_occurrence_error import SourceHookUnavailable
 
 # This grammar admits a *stated actor and verb*, not a synthesized request.
 _ACTOR = re.compile(
-    r"(?<![a-z])(?:the\\s+)?(?:player|user)\\s+"
-    r"(?:(?:explicitly|manually|actively|deliberately)\\s+)*"
-    r"(?:(?:can|may|must|will|should)\\s+)?"
-    r"(?P<verb>[a-z]+)\\b", re.IGNORECASE,
+    r"(?<![a-z])(?:the\s+)?(?:player|user)\s+"
+    r"(?:(?:explicitly|manually|actively|deliberately)\s+)*"
+    r"(?:(?:can|may|must|will|should)\s+)?"
+    r"(?P<verb>[a-z]+)\b", re.IGNORECASE,
 )
-_KOREAN_ACTOR = re.compile(r"(?:플레이어|사용자)(?:가|는)\\s*[^.;!?\\n]{1,180}")
+_KOREAN_ACTOR = re.compile(r"(?:플레이어|사용자)(?:가|는)\s*[^.;!?\n]{1,180}")
 _KOREAN_MANUAL = re.compile(r"구매|거래|판매|선택|확인|요청|제작|건설|강화|설치|장착|교환|사용")
 _NON_ACTION = frozenset({
     "has", "have", "had", "wants", "want", "needs", "need",
@@ -33,13 +33,13 @@ _NON_ACTION = frozenset({
     "accumulates", "accumulate", "becomes", "become",
 })
 _NO_MANUAL = re.compile(
-    r"\\b(?:automatically|autonomously|without\\s+(?:any\\s+)?(?:player|user)\\s+input)\\b"
-    r"|자동으로|자동적|입력\\s*없이|않(?:는|다)|안\\s+", re.IGNORECASE,
+    r"\b(?:automatically|autonomously|without\s+(?:any\s+)?(?:player|user)\s+input)\b"
+    r"|자동으로|자동적|입력\s*없이|않(?:는|다)|안\s+", re.IGNORECASE,
 )
 
 
 def _clauses(text):
-    return (item.strip() for item in re.split(r"[.;!?\\n]+", text) if item.strip())
+    return (item.strip() for item in re.split(r"[.;!?\n]+", text) if item.strip())
 
 
 def select_original_player_action(behavior: Mapping) -> dict | None:
@@ -53,7 +53,7 @@ def select_original_player_action(behavior: Mapping) -> dict | None:
         for clause in _clauses(str(behavior.get(field) or "")):
             for actor in _ACTOR.finditer(clause):
                 verb = actor["verb"].casefold()
-                if verb in _NON_ACTION or _NO_MANUAL.search(clause):
+                if verb in _NON_ACTION:
                     continue
                 original = clause[actor.start():].strip()
                 # Directly bind a short original action clause, never compose
