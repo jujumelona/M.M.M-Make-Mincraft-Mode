@@ -176,6 +176,13 @@ def test_passive_and_negated_clauses_are_not_ui_activation_even_if_model_claims_
     from minecraft_mod_ai.source_owned_ui_event import author_typed_ui_occurrence
     class Router:
         def generate_structured_data(self, *args, data_name, **kwargs):
+            if data_name == "source_owned_player_action_evidence":
+                quote = trigger
+                if "the server selects" in trigger:
+                    quote = "the server selects a target automatically"
+                elif "click or confirm" in trigger:
+                    quote = "click or confirm anything"
+                return {"activation": "typed_ui_action", "request_field": "trigger", "request_quote": quote}
             return {"source_owned_ui_activation": {"activation": "typed_ui_action", "trigger_quote": trigger},
                     "ui_action_label": {"label": "Allocate plot"},
                     "ui_action_input_count": {"count": 0}}[data_name]

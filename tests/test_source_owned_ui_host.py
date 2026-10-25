@@ -103,3 +103,34 @@ def test_full_source_compiler_stages_new_producer_dependencies(tmp_path, monkeyp
     assert any(p.endswith("/AuthoredActions.java") for p in staged)
     assert any(p.endswith("/AuthoredProgram.java") for p in staged)
     assert not any(p.startswith("src/client/") for p in staged)
+
+
+def test_eligibility_trigger_and_action_effect_use_the_same_production_source_branch(tmp_path, monkeypatch):
+    from minecraft_mod_ai.source_owned_ui_event import read_verified_typed_ui_events
+
+    _, behavior, spec, context, _ = _fixture(tmp_path, monkeypatch)
+    behavior.update({
+        "trigger": "Player has enough resources and wants to expand the settlement",
+        "effects": "Player commissions a new building for the settlement",
+    })
+    spec["bindings"]["construction_behaviors_json"] = json.dumps([behavior])
+    context["source_owned_work_graph"] = build_source_work_graph(
+        [behavior], producer_obligations=[], inspected_hooks=[])
+
+    class Router:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            return {
+                "source_owned_player_action_evidence": {
+                    "activation": "typed_ui_action", "request_field": "effects",
+                    "request_quote": "Player commissions a new building for the settlement"},
+                "ui_action_label": {"label": "Commission building"},
+                "ui_action_input_count": {"count": 0},
+            }[data_name]
+
+    source = compose_first_pass_java(Router(), spec, [], construction_context=context,
+                                     behaviors=[behavior])
+    events = read_verified_typed_ui_events(project_root=tmp_path, symbols=context["symbols"],
+                                         behaviors=[behavior], package="example")
+    assert len(events) == 1
+    validate_registered_event_sources(source, [behavior], [], materialized_events=events)
+    assert events[0]["behavior_id"] == "allocate"

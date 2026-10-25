@@ -59,7 +59,6 @@ def _player_activation(text):
 
 def _require_target(behavior, symbols, minecraft_version):
     if (str(minecraft_version) != "26.2"
-            or not _player_activation(str(behavior.get("trigger") or ""))
             or any(not any(isinstance(row, Mapping) and row.get("kind") == "CLASS"
                            and row.get("owner") == owner for row in symbols.values())
                    for owner in (_ACTOR, "net.fabricmc.fabric.api.event.Event",
@@ -70,12 +69,9 @@ def _require_target(behavior, symbols, minecraft_version):
             reason="original_occurrence_requires_non_ui_source_owner", inspected=0)
 
 
-def author_typed_ui_occurrence(router, behavior, *, symbols, package, mod_id,
-                               minecraft_version):
-    """Resolve one explicit player activation, never invent a passive trigger."""
-    _require_target(behavior, symbols, minecraft_version)
+def _author_explicit_activation(router, behavior):
+    """Retain the established explicit-control decision and recipe ABI."""
     from .fixed_template_generation import _validate_native_arguments
-    from .typed_action_authoring import author_action_metadata
 
     schema = {"type": "object", "properties": {
         "activation": {"type": "string", "enum": ["typed_ui_action", "unavailable"]},
@@ -100,20 +96,70 @@ def author_typed_ui_occurrence(router, behavior, *, symbols, package, mod_id,
         raise SourceHookUnavailable(
             str(behavior.get("behavior_id") or ""),
             reason="original_trigger_has_no_owned_ui_activation", inspected=0)
-    metadata = author_action_metadata(router, {
-        "trigger": behavior["trigger"], "server_action": str(behavior["intent"]),
-        "original_behavior": dict(behavior),
-    }, requested_prompt=str(behavior.get("source_quote") or ""))
+
+
+def _activation_evidence(router, behavior):
+    if _player_activation(str(behavior.get("trigger") or "")):
+        _author_explicit_activation(router, behavior)
+        return None
+    # An eligibility condition is not necessarily the requested action.
+    # Interpret the full immutable behavior; never use the legacy vocabulary
+    # as evidence that all other player actions are unsupported.
+    from .player_action_evidence import author_player_action_evidence
+
+    return author_player_action_evidence(router, behavior)
+
+
+def _action_record(behavior, evidence):
+    record = {"trigger": behavior["trigger"], "server_action": str(behavior["intent"]),
+              "original_behavior": dict(behavior)}
+    if evidence is not None:
+        record["activation_evidence"] = evidence
+    return record
+
+
+def _require_activation(behavior, activation_evidence):
+    if activation_evidence is None:
+        # Preserve the validation and byte identity of existing v1 recipes.
+        if not _player_activation(str(behavior.get("trigger") or "")):
+            raise SourceHookUnavailable(
+                str(behavior.get("behavior_id") or ""),
+                reason="original_occurrence_requires_non_ui_source_owner", inspected=0)
+    else:
+        from .player_action_evidence import validate_player_action_evidence
+
+        validate_player_action_evidence(behavior, activation_evidence)
+
+
+def _occurrence_recipe(behavior, metadata, package, mod_id, minecraft_version, activation_evidence):
+    recipe = {"schema": _SCHEMA, "behavior": deepcopy(dict(behavior)),
+              "action_metadata": metadata, "package": package,
+              "mod_id": mod_id, "minecraft_version": str(minecraft_version)}
+    if activation_evidence is not None:
+        recipe["activation_evidence"] = deepcopy(dict(activation_evidence))
+    return recipe
+
+
+def author_typed_ui_occurrence(router, behavior, *, symbols, package, mod_id,
+                               minecraft_version):
+    """Plan an original player action and preserve its complete conditions."""
+    _require_target(behavior, symbols, minecraft_version)
+    from .typed_action_authoring import author_action_metadata
+
+    evidence = _activation_evidence(router, behavior)
+    metadata = author_action_metadata(router, _action_record(behavior, evidence),
+                                     requested_prompt=str(behavior.get("source_quote") or ""))
     return plan_typed_ui_occurrence(
-        behavior=behavior, action_metadata=metadata, package=package, mod_id=mod_id,
-        minecraft_version=minecraft_version, symbols=symbols,
+        behavior=behavior, action_metadata=metadata, activation_evidence=evidence,
+        package=package, mod_id=mod_id, minecraft_version=minecraft_version, symbols=symbols,
     )
 
 
 def plan_typed_ui_occurrence(*, behavior, action_metadata, package, mod_id,
-                             minecraft_version, symbols):
+                             minecraft_version, symbols, activation_evidence=None):
     """Pure renderer for a concrete form -> validated server input -> event ABI."""
     _require_target(behavior, symbols, minecraft_version)
+    _require_activation(behavior, activation_evidence)
     from .typed_action_authoring import validate_action_metadata
     from .typed_action_client import render_action_client_java
     from .typed_action_java import (
@@ -126,9 +172,7 @@ def plan_typed_ui_occurrence(*, behavior, action_metadata, package, mod_id,
             or not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", mod_id)):
         raise ValueError("UI_OCCURRENCE_IDENTITY_INVALID")
     metadata = validate_action_metadata(action_metadata)
-    recipe = {"schema": _SCHEMA, "behavior": deepcopy(dict(behavior)),
-              "action_metadata": metadata, "package": package,
-              "mod_id": mod_id, "minecraft_version": str(minecraft_version)}
+    recipe = _occurrence_recipe(behavior, metadata, package, mod_id, minecraft_version, activation_evidence)
     digest = hashlib.sha256(_canonical(recipe).encode()).hexdigest()[:20]
     namespace = package + ".occurrence" + digest
     action = {"id": "occurrence_" + digest, "label": metadata["intent"],
@@ -248,7 +292,8 @@ def _render_recipe(recipe, symbols):
     return plan_typed_ui_occurrence(
         behavior=recipe["behavior"], action_metadata=recipe["action_metadata"],
         symbols=symbols, package=recipe["package"], mod_id=recipe["mod_id"],
-        minecraft_version=recipe["minecraft_version"])
+        minecraft_version=recipe["minecraft_version"],
+        activation_evidence=recipe.get("activation_evidence"))
 
 
 def _obsolete_producers(root, planned, symbols):

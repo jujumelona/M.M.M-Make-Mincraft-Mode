@@ -13,17 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .fixed_template_generation import _validate_native_arguments
-
-
-class SourceHookUnavailable(ValueError):
-    def __init__(self, behavior_id: str, *, reason: str, inspected: int):
-        super().__init__("SOURCE_HOOK_PRODUCER_REQUIRED: " + json.dumps({
-            "behavior_id": behavior_id, "reason": reason,
-            "inspected_callback_count": inspected,
-            "required_action": "materialize a custom event/mixin source owner "
-                               "or bind a real observable Fabric callback before effects",
-        }, ensure_ascii=False))
-
+from .source_occurrence_error import SourceHookUnavailable
 
 
 def _event_candidates_for_occurrence(behavior, candidates):
