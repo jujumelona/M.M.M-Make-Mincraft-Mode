@@ -109,3 +109,34 @@ def test_host_action_with_automatic_server_side_effect_keeps_manual_producer():
     })
     assert contract is not None
     assert contract["request_quote"].startswith("Player purchases supplies")
+
+
+def test_production_trade_java_compiles_against_real_fabric_26_2_sdk(tmp_path):
+    """Enabled only on the CI lane that provisions the actual 26.2 SDK."""
+    import os
+    import shutil
+    import subprocess
+
+    classpath = os.environ.get("MMM_ACTION_COMPILE_CLASSPATH")
+    if not classpath:
+        pytest.skip("real Minecraft 26.2 SDK lane required")
+    javac = shutil.which("javac")
+    assert javac, "Minecraft SDK test requires JDK 25"
+    plan = author_host_owned_player_occurrence(
+        SmallMiMo(), TRADE, symbols=SYMBOLS,
+        package="example.generated", mod_id="trade_test",
+        minecraft_version="26.2",
+    )
+    files = []
+    for name, content in plan["files"].items():
+        if not name.endswith(".java"):
+            continue
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        files.append(str(target))
+    result = subprocess.run(
+        [javac, "-cp", classpath, "-d", str(tmp_path / "classes"), *files],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr

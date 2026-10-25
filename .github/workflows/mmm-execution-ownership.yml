@@ -35,6 +35,7 @@ jobs:
           export MMM_ACTION_COMPILE_CLASSPATH
           python -m pytest \
             tests/test_typed_ui_action_contract.py \
+            tests/test_host_action_occurrence.py \
             tests/test_typed_ui_action_authoring.py \
             tests/test_typed_state_context.py \
             tests/test_production_state_compiler.py \
