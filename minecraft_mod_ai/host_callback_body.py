@@ -507,6 +507,26 @@ def _author_operation(router, scoped, name, index, action, context, verified_cal
                 lower=lower_operation)
 
 
+def _native_callback_choices(scoped, frame, runtime_targets, verified_calls):
+    if not runtime_targets:
+        return verified_calls, []
+    if "host_verified_runtime_mutation_candidates" in frame:
+        return [], frame["host_verified_runtime_mutation_candidates"]
+    from .host_verified_callback_ops import verified_runtime_mutation_candidates
+    return verified_calls, verified_runtime_mutation_candidates(scoped, frame)
+
+
+def author_indexed_callback_body(router, messages, *, data_name, frame, api_index,
+                                 task, predicate=False, effect_receipt=False):
+    """Attach host authority after message serialization, then author one body."""
+    if effect_receipt and frame["host_behavior_contract"].get("runtime_state_writes"):
+        from .host_runtime_mutation_catalog import bind_runtime_mutation_catalog
+        frame["host_verified_runtime_mutation_candidates"] = bind_runtime_mutation_catalog(
+            api_index, task, frame)
+    return author_callback_body(router, messages, data_name=data_name, frame=frame,
+                                predicate=predicate, effect_receipt=effect_receipt)
+
+
 def author_callback_body(router, messages, *, data_name, frame, predicate=False,
                          effect_receipt=False, rejected_compiler_member=None,
                          compiler_diagnostic="") -> str:
@@ -557,15 +577,8 @@ def author_callback_body(router, messages, *, data_name, frame, predicate=False,
     statements, blocks, locals_ = [], [], []
     semantic_statements = []
     verified_calls = verified_callback_choices(scoped, frame, predicate=False)
-    from .host_verified_callback_ops import verified_runtime_mutation_candidates
-    native_verified_calls = verified_calls
-    typed_mutation_candidates = []
-    if runtime_targets:
-        if "host_verified_runtime_mutation_candidates" in frame:
-            typed_mutation_candidates = frame["host_verified_runtime_mutation_candidates"]
-            native_verified_calls = []  # A prompt sample cannot override the host catalogue.
-        else:
-            typed_mutation_candidates = verified_runtime_mutation_candidates(scoped, frame)
+    native_verified_calls, typed_mutation_candidates = _native_callback_choices(
+        scoped, frame, runtime_targets, verified_calls)
     if runtime_targets and not (native_verified_calls or typed_mutation_candidates):
         # This is missing implementation authority, NOT permission to infer
         # arbitrary Java source or claim success with a disconnected scalar.

@@ -286,7 +286,6 @@ def compose_first_pass_java(
 
     host_mode = construction_context is not None
     callback_api_index = None
-    native_callback_catalogs = {}
     task = {
         "package": package_name,
         "class": class_name,
@@ -979,22 +978,10 @@ def compose_first_pass_java(
             # The small coder chooses semantic operations and expression
             # values. The host compiles all statement/control-flow syntax;
             # effects can never emit a callback result or return statement.
-            from .host_callback_body import author_callback_body
-
-            if selected_host_unit.get("host_effect_behavior") and (
-                owned_behavior or {}
-            ).get("runtime_state_writes"):
-                from .host_runtime_mutation_catalog import bind_runtime_mutation_catalog
-                # Attach only after body_messages has been serialized. The
-                # complete catalogue is compiler authority, not prompt text.
-                catalogue_key = json.dumps(parts.get("parameters", ()), sort_keys=True)
-                if catalogue_key not in native_callback_catalogs:
-                    native_callback_catalogs[catalogue_key] = bind_runtime_mutation_catalog(
-                        callback_api_index, body_task, frame)
-                frame["host_verified_runtime_mutation_candidates"] = native_callback_catalogs[
-                    catalogue_key]
-            parts["source"] = author_callback_body(
+            from .host_callback_body import author_indexed_callback_body
+            parts["source"] = author_indexed_callback_body(
                 router, body_messages, data_name=action, frame=frame,
+                api_index=callback_api_index, task=body_task,
                 predicate=bool(selected_host_unit.get("host_condition_behavior")),
                 effect_receipt=bool(selected_host_unit.get("host_effect_behavior")),
             )

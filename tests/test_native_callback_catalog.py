@@ -196,6 +196,7 @@ def test_nested_scalar_catalog_preserves_each_verified_receiver_identity():
 
 def test_compiler_repair_updates_only_the_repaired_native_effect_proof():
     from minecraft_mod_ai.construction_host_member_repair import repair_compiler_member
+    from minecraft_mod_ai.runtime_mutation_author import RuntimeRepairBindings
 
     identity = "native"
     method = "applyBehavior" + hashlib.sha256(identity.encode()).hexdigest()[:20]
@@ -211,7 +212,7 @@ def test_compiler_repair_updates_only_the_repaired_native_effect_proof():
         "Bridge.java:3: error: incompatible types: possible lossy conversion from double to float",
         filename="Bridge.java", target_path="src/main/java/example/Bridge.java",
         symbols=_symbols(), owner="example.Bridge", api_evidence={}, prerequisite_api=[],
-        behaviors=behaviors, runtime_mutation_receipts=receipts, attempt=1,
+        behaviors=behaviors, runtime_state_bindings=RuntimeRepairBindings({}, receipts), attempt=1,
     )
     assert "target.setHealth(6.0f);" in revised
     verify_native_runtime_mutation_coverage(revised, behaviors, receipts)

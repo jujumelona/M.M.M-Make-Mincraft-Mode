@@ -12,6 +12,42 @@ import re
 from collections.abc import Mapping, Sequence
 
 
+class RuntimeRepairBindings(dict):
+    """Existing runtime bindings plus the draft proof owned by their repair."""
+
+    def __init__(self, bindings, mutation_receipts):
+        super().__init__(bindings)
+        self.mutation_receipts = mutation_receipts
+
+
+def _mutation_page_context(name, frame, options, signatures, statements, start, total):
+    return {
+        "instruction": (
+            "Select the real inspected mutator for the EXACT original "
+            "Minecraft state and event participant named below. Select "
+            "'unavailable' if THIS PAGE has none; the host will search "
+            "the remaining catalogue. A log, getter, callback registration, "
+            "unrelated owner/setter or detached scalar cannot satisfy it. "
+            "An existing exact invocation may cover another state it "
+            "actually changes; the host emits identical invocations once. "
+            "Actual semantic success still requires gameplay tests."
+        ),
+        "required_native_state": name,
+        "behavior": frame.get("host_behavior_contract"),
+        "catalogue_page": start // 32,
+        "catalogue_candidates": total,
+        "catalogue_has_more": start + 32 < total,
+        "inspected_calls": [
+            {"verified_call_id": identifier, "signature": item["signature"],
+             "expression": item.get("expression"), "receiver": item.get("receiver"),
+             "typed_arguments": item.get("arguments")}
+            for identifier, item in options.items()
+        ],
+        "prior_verified_signatures": sorted(signatures),
+        "accepted_native_effects": list(statements),
+    }
+
+
 def mutation_targets(behavior: Mapping | None) -> tuple[str, ...]:
     if not isinstance(behavior, Mapping):
         return ()
@@ -157,32 +193,9 @@ def author_runtime_mutation_calls(
                     }},
                     "required": ["verified_call_id"], "additionalProperties": False,
                 },
-                context={
-                    "instruction": (
-                        "Select the real inspected mutator for the EXACT original "
-                        "Minecraft state and event participant named below. Select "
-                        "'unavailable' if THIS PAGE has none; the host will search "
-                        "the remaining catalogue. A log, getter, callback registration, "
-                        "unrelated owner/setter or detached scalar cannot satisfy it. "
-                        "An existing exact invocation may cover another state it "
-                        "actually changes; the host emits identical invocations once. "
-                        "Actual semantic success still requires gameplay tests."
-                    ),
-                    "required_native_state": name,
-                    "behavior": frame.get("host_behavior_contract"),
-                    "catalogue_page": start // 32,
-                    "catalogue_candidates": len(ordered),
-                    "catalogue_has_more": start + 32 < len(ordered),
-                    "inspected_calls": [
-                        {"verified_call_id": identifier, "signature": item["signature"],
-                         "expression": item.get("expression"),
-                         "receiver": item.get("receiver"),
-                         "typed_arguments": item.get("arguments")}
-                        for identifier, item in options.items()
-                    ],
-                    "prior_verified_signatures": sorted(used_signatures),
-                    "accepted_native_effects": list(semantic_statements),
-                }, lower=lower,
+                context=_mutation_page_context(name, frame, options, used_signatures,
+                                               semantic_statements, start, len(ordered)),
+                lower=lower,
             )
             if selected_result is not None:
                 break

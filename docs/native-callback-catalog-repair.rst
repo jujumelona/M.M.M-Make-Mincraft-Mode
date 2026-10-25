@@ -50,3 +50,9 @@ dependency downloads reporting ``Network is unreachable``:
 
 These observations establish the callback repair contracts and preserve
 the outstanding full-runtime checks explicitly.
+
+Catalogue discovery, receiver validation, model-page presentation and repair
+publication have separate helpers. Runtime repair bindings retain receipt
+ownership while preserving existing repair signatures. The architecture
+regression audit against the original source reports zero violations; the
+95 related tests also pass after this responsibility split.

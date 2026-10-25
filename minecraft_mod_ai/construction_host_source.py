@@ -22,6 +22,13 @@ class HostJavaConstructionError(ValueError):
     """A host-assembled compilation unit did not satisfy the target contract."""
 
 
+def _repair_runtime_bindings(spec, receipts):
+    from .runtime_mutation_author import RuntimeRepairBindings
+
+    return RuntimeRepairBindings(json.loads(spec.get("bindings", {}).get(
+        "runtime_state_bindings_json") or "{}"), receipts)
+
+
 def _build_host_java_prompt(router, spec: dict, context: dict, *,
                             package: str, name: str, owner: str,
                             behaviors, source_context):
@@ -336,9 +343,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         prerequisite_api=prompt["materialized_prerequisite_api"],
                         state_access=state_access,
                         behaviors=behavior_rows,
-                        runtime_state_bindings=json.loads(spec.get("bindings", {}).get(
-                            "runtime_state_bindings_json") or "{}"),
-                        runtime_mutation_receipts=mutation_receipts,
+                        runtime_state_bindings=_repair_runtime_bindings(spec, mutation_receipts),
                         attempt=attempt + 1,
                     )
                 else:

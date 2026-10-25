@@ -7,63 +7,74 @@ choices after binding their operands. No full catalogue goes to the model.
 """
 from __future__ import annotations
 
+import json
+
 from .construction_file_api_evidence import prompt_symbol_record
 from .construction_type_contracts import canonical_type_name
+
+
+def _catalogue_owner(evidence, owner):
+    options = evidence._member_options(owner)
+    members = [row for _, row in options
+               if row.get("kind") == "METHOD"
+               and not (row.get("static") or int(row.get("access", 0)) & 8)
+               and row.get("owner") != "java.lang.Object"]
+    return {
+        "verified_class": owner,
+        "members": [prompt_symbol_record(row) for row in members],
+        "member_count": len(members), "members_truncated": False,
+        "evidence": "actual_target_symbol_index", "behavior_verified": False,
+    }, options
+
+
+def _receiver_target(evidence, root, key, row):
+    if (row.get("kind") != "METHOD" or row.get("parameters")
+            or row.get("static") or int(row.get("access", 0)) & 8 or row.get("throws")):
+        return None
+    name = str(row.get("name") or "")
+    if not name or name.startswith(("set", "register", "wait", "notify")):
+        return None
+    target = canonical_type_name(row.get("return_type") or "")
+    if not evidence._accessible(target) or target.startswith(
+        ("java.", "javax.", "jdk.", "sun.", "com.sun.", "org.lwjgl.")
+    ):
+        return None
+    return {"source_type": root, "source_method": name,
+            "destination_type": target, "inspected_source_ref": key}
 
 
 def runtime_mutation_api_records(evidence, owners):
     roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
     roots = [name for name in roots if evidence._accessible(name)]
-    records, options = {}, {}
-
-    def include(owner):
-        if owner in records:
-            return
-        options[owner] = evidence._member_options(owner)
-        members = [row for _, row in options[owner]
-                   if row.get("kind") == "METHOD"
-                   and not (row.get("static") or int(row.get("access", 0)) & 8)
-                   and row.get("owner") != "java.lang.Object"]
-        records[owner] = {
-            "verified_class": owner,
-            "members": [prompt_symbol_record(row) for row in members],
-            "member_count": len(members), "members_truncated": False,
-            "evidence": "actual_target_symbol_index", "behavior_verified": False,
-        }
-
+    owned = {root: _catalogue_owner(evidence, root) for root in roots}
+    records = {root: row[0] for root, row in owned.items()}
     for root in roots:
-        include(root)
-    for root in roots:
-        for key, row in options[root]:
-            if (row.get("kind") != "METHOD" or row.get("parameters")
-                    or row.get("static") or int(row.get("access", 0)) & 8
-                    or row.get("throws")):
+        for key, row in owned[root][1]:
+            bridge = _receiver_target(evidence, root, key, row)
+            if bridge is None:
                 continue
-            name = str(row.get("name") or "")
-            if not name or name.startswith(("set", "register", "wait", "notify")):
-                continue
-            target = canonical_type_name(row.get("return_type") or "")
-            if (not evidence._accessible(target)
-                    or target.startswith(("java.", "javax.", "jdk.", "sun.",
-                                          "com.sun.", "org.lwjgl."))):
-                continue
-            include(target)
-            records[target].setdefault("verified_receiver_paths", []).append({
-                "source_type": root, "source_method": name,
-                "destination_type": target, "inspected_source_ref": key,
-            })
+            target = bridge["destination_type"]
+            if target not in records:
+                records[target] = _catalogue_owner(evidence, target)[0]
+            records[target].setdefault("verified_receiver_paths", []).append(bridge)
     return list(records.values())
 
 
 def bind_runtime_mutation_catalog(evidence, task, frame):
     """Bind complete inspected ABIs to one exact host-owned callback frame."""
-    from .host_verified_callback_ops import verified_runtime_mutation_candidates
+    from .host_verified_callback_ops import _callback_parameters, verified_runtime_mutation_candidates
 
     event = task["verified_event_callback"]
+    key = (json.dumps(task.get("declaration_metadata", {}).get("parameters"), sort_keys=True),
+           tuple(_callback_parameters(frame)))
+    cache = evidence.__dict__.setdefault("native_mutation_catalogs", {})
+    if key in cache:
+        return cache[key]
     native = {
         "verified_event_callback": event,
         "declaration_metadata": task.get("declaration_metadata", {}),
         "callback_input_api": runtime_mutation_api_records(
             evidence, event.get("parameters", ())),
     }
-    return verified_runtime_mutation_candidates([], frame, api_task=native)
+    cache[key] = verified_runtime_mutation_candidates([], frame, api_task=native)
+    return cache[key]

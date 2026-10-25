@@ -155,6 +155,43 @@ def verified_callback_choices(messages, frame, *, predicate=False):
     return choices[:32]
 
 
+def _checked_receiver_getter(apis, start, method, owner):
+    return any(
+        isinstance(row, dict) and row.get("kind") == "METHOD"
+        and row.get("name") == method and row.get("return_type") == owner
+        and not row.get("parameters") and not row.get("static")
+        and not int(row.get("access", 0)) & 8
+        for row in apis.get(start, {}).get("members", ())
+    )
+
+
+def _valid_native_bridge(bridge, owner, declared, apis):
+    if not isinstance(bridge, dict) or bridge.get("destination_type") != owner:
+        return False
+    start, method = bridge.get("source_type"), bridge.get("source_method")
+    return (start in declared and isinstance(method, str)
+            and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", method)
+            and _checked_receiver_getter(apis, start, method, owner))
+
+
+def _extend_native_receivers(records, declared, params, apis, inputs):
+    """Every one-hop path starts from an immutable original event input."""
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        owner = record.get("verified_class")
+        bridges = list(record.get("verified_receiver_paths") or ())
+        if isinstance(record.get("verified_receiver_path"), dict):
+            bridges.append(record["verified_receiver_path"])
+        for bridge in bridges:
+            if not _valid_native_bridge(bridge, owner, declared, apis):
+                continue
+            for origin in (name for kind, name in params if kind == bridge["source_type"]):
+                receiver = origin + "." + bridge["source_method"] + "()"
+                if receiver not in inputs.setdefault(owner, []):
+                    inputs[owner].append(receiver)
+
+
 def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
     """Expose grounded receiver+method ABIs with typed *value* holes.
 
@@ -215,37 +252,7 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
         "containsKey", "containsValue", "size", "length", "iterator",
         "stream", "spliterator", "clone", "copy", "matches",
     }
-    # Retain every inspected path to a receiver type. Choosing the first bag,
-    # hand or entity of that type can silently change the effect's owner.
-    for record in task["callback_input_api"]:
-        if not isinstance(record, dict):
-            continue
-        owner = record.get("verified_class")
-        bridges = list(record.get("verified_receiver_paths") or ())
-        if isinstance(record.get("verified_receiver_path"), dict):
-            bridges.append(record["verified_receiver_path"])
-        for bridge in bridges:
-            if not isinstance(bridge, dict) or bridge.get("destination_type") != owner:
-                continue
-            start, method = bridge.get("source_type"), bridge.get("source_method")
-            if (start not in declared or not isinstance(method, str)
-                    or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", method)):
-                continue
-            if not any(
-                isinstance(row, dict) and row.get("kind") == "METHOD"
-                and row.get("name") == method and row.get("return_type") == owner
-                and not row.get("parameters") and not row.get("static")
-                and not int(row.get("access", 0)) & 8
-                for row in apis.get(start, {}).get("members", ())
-            ):
-                continue
-            # A self-type getter or a path back to another callback root
-            # must start from the immutable event inputs, never from paths
-            # appended above. This keeps the promised one-hop boundary.
-            for origin in (name for kind, name in params if kind == start):
-                receiver = origin + "." + method + "()"
-                if receiver not in inputs.setdefault(owner, []):
-                    inputs[owner].append(receiver)
+    _extend_native_receivers(task["callback_input_api"], declared, params, apis, inputs)
     candidates, seen = [], set()
     for record in task["callback_input_api"]:
         if not isinstance(record, dict):
@@ -254,26 +261,6 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
         if not isinstance(owner, str):
             continue
         receivers = list(inputs.get(owner, ()))
-        if not receivers:
-            bridge = record.get("verified_receiver_path")
-            if isinstance(bridge, dict) and bridge.get("destination_type") == owner:
-                start, method = bridge.get("source_type"), bridge.get("source_method")
-                declared_owner = apis.get(start, {})
-                if isinstance(method, str) and re.fullmatch(
-                    r"[A-Za-z_$][A-Za-z0-9_$]*", method
-                ) and any(
-                    isinstance(row, dict) and row.get("kind") == "METHOD"
-                    and row.get("name") == method
-                    and row.get("return_type") == owner
-                    and not row.get("parameters") and not row.get("static")
-                    for row in declared_owner.get("members", ())
-                ):
-                    receivers = [
-                        source + "." + method + "()"
-                        for source in inputs.get(start, ())
-                    ]
-                    if receivers:
-                        inputs[owner] = receivers
         if not receivers:
             continue
         for row in record.get("members", ()):
