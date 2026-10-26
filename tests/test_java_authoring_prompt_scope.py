@@ -96,7 +96,10 @@ def test_every_direct_authoring_stage_uses_its_own_small_context_and_reaches_exe
         def generate_java_source(self, role, messages, *, data_name, source_frame):
             self._observe(messages, data_name)
             task = json.loads(messages[-1]["content"])
-            assert task["available_fabric_callbacks"][0]["event_id"] == "example.RealEvents#ACTION"
+            if source_frame["kind"] == "field":
+                assert task["available_fabric_callbacks"] == []
+            else:
+                assert task["available_fabric_callbacks"][0]["event_id"] == "example.RealEvents#ACTION"
             assert task["retained_typed_behavior"]["ui_owned_records"][0]["action"] == "existingPurchase"
             assert task["host_state_access"][0]["methods"] == payload["host_state_access"][0]["methods"][:2]
             assert "readState_other_" not in messages[-1]["content"]
@@ -307,6 +310,73 @@ def test_plan_scalar_pages_do_not_reintroduce_callback_or_classpath_catalogs():
     assert task["retained_typed_behavior"]["ui_owned_records"]
     assert "available_fabric_callbacks" not in task
     assert "inspected_target_api" not in task
+
+
+def test_helper_plan_sees_existing_registrar_ownership_before_choosing_member_kind():
+    behavior, spec, context = _fixture()
+    seen = []
+
+    class PlanCoder(SourceCoder):
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name.startswith("submit_java_construction_plan"):
+                task = json.loads(messages[-1]["content"])
+                members = task["host_owned_members"]
+                assert len(members) == 1
+                assert members[0]["kind"] == "method"
+                assert members[0]["signature"].startswith("private void registerBehavior")
+                assert behavior["trigger"] in members[0]["purpose"]
+                assert "Only plan additional storage" in "\n".join(m["content"] for m in messages)
+                seen.append(data_name)
+            return super().generate_structured_data(role, messages, data_name=data_name, parameters=parameters)
+
+    compose_first_pass_java(PlanCoder(), spec, [], construction_context=context, behaviors=[behavior])
+    assert seen.index("submit_java_construction_plan_1_value_purpose") < seen.index(
+        "submit_java_construction_plan_1_value_kind")
+
+
+def test_field_request_and_live_projection_only_instruct_one_value_not_registration():
+    from minecraft_mod_ai.construction_java_context import scoped_java_member_messages
+    from minecraft_mod_ai.java_authoring_prompt import java_body_messages, java_correction_messages
+
+    task = {**_large_host_context(), "host_java_authoring": True,
+            "current_unit_purpose": "Store claimed locations", "member_role": "supporting_member",
+            "declaration_metadata": {"type": "java.util.Set<String>"},
+            "declared_member_api": [{"name": "registerBehavior", "signature": "private void registerBehavior()"}]}
+    frame = {"kind": "field", "prefix": "private final java.util.Set<String> claimed = ", "suffix": ";"}
+    original = java_body_messages([{"role": "user", "content": json.dumps(task)}], frame)
+    correction = java_correction_messages(original, frame=frame,
+        response='{"implementation":"packageai.examplepublicclassFeature{}"}', diagnostic="invalid expression")
+    for messages in (original, scoped_java_member_messages(original, frame), correction):
+        systems = "\n".join(m["content"] for m in messages if m["role"] == "system")
+        assert "Initialize only this field's value" in systems
+        assert "Register real event listeners" not in systems
+        payload = json.loads(messages[-1]["content"])
+        assert payload["current_unit_purpose"] == task["current_unit_purpose"]
+        assert payload["declared_member_api"] == task["declared_member_api"]
+        assert payload["retained_typed_behavior"]["ui_owned_records"]
+        assert payload["immutable_signature"]["kind"] == "field"
+        assert payload["available_fabric_callbacks"] == []
+
+
+def test_listener_field_keeps_the_matching_sam_without_the_registration_catalog():
+    from minecraft_mod_ai.java_authoring_prompt import java_body_messages
+
+    callback = _large_host_context()["available_fabric_callbacks"][0]
+    context = {"host_java_authoring": True, "available_fabric_callbacks": [callback, {
+        **callback, "event_id": "Other#OTHER", "event_interface": "example.Other.Listener"}],
+        "declaration_metadata": {"type": "example.RealEvents.Action"}}
+    frame = {"kind": "field", "prefix": "private final example.RealEvents.Action listener = ", "suffix": ";"}
+    messages = java_body_messages([{"role": "user", "content": json.dumps(context)}], frame)
+    task = json.loads(messages[-1]["content"])
+    assert [row["event_id"] for row in task["available_fabric_callbacks"]] == [callback["event_id"]]
+
+    context["declaration_metadata"] = {"type": "example.Handler"}
+    context["materialized_prerequisite_api"] = [{"types": [{"owner": "example.Handler", "members": [
+        "public Handler(example.RealEvents.Action listener);"]}]}]
+    frame["prefix"] = "private final example.Handler handler = "
+    messages = java_body_messages([{"role": "user", "content": json.dumps(context)}], frame)
+    task = json.loads(messages[-1]["content"])
+    assert [row["event_id"] for row in task["available_fabric_callbacks"]] == [callback["event_id"]]
 
 
 def test_callback_catalog_keeps_exact_sam_without_repeating_event_owner_and_field():

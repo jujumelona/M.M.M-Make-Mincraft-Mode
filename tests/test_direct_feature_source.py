@@ -142,6 +142,15 @@ def test_direct_source_authors_new_state_and_event_code_before_any_existing_site
                for row in registrar_task["declared_member_api"])
 
 
+def test_direct_registrar_name_uses_the_canonical_behavior_identifier():
+    behavior, spec, context = _fixture()
+    behavior["behavior_id"] = " new_gameplay "
+    expected = "registerBehavior" + hashlib.sha256(b"new_gameplay").hexdigest()[:20]
+    source = compose_first_pass_java(SourceCoder(), spec, [], construction_context=context, behaviors=[behavior])
+    assert "private void " + expected + "()" in source
+    assert "this." + expected + "();" in source
+
+
 def test_production_entrypoint_does_not_run_capability_or_proof_planning(tmp_path, monkeypatch):
     import minecraft_mod_ai.construction_host_source as host
 

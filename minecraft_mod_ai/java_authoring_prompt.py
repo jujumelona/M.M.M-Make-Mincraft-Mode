@@ -15,6 +15,7 @@ _SEMANTIC = (
     "host_entrypoint", "class_declaration", "current_unit", "current_unit_purpose",
     "all_units", "previous_declaration_metadata", "current_field", "completed_plan_fields",
     "field", "index", "count", "previous_entries", "owned_runtime_records",
+    "host_owned_members",
 )
 _BODY = _SEMANTIC + (
     "member_role", "verified_event_callback", "handler_signature", "owner_type", "owner",
@@ -97,6 +98,23 @@ def _callbacks(records):
     return [_event_interface(row) for row in records or ()]
 
 
+def _member_callbacks(records, context, frame):
+    if frame["kind"] != "field":
+        return _callbacks(records)
+    # Listener-valued fields still need their exact SAM. Other initializers do
+    # not choose the feature's registration event: that is a method's work.
+    # A constructor/factory argument can require a SAM absent from the field's
+    # own type (new Handler(listener)). Keep callback interfaces referenced by
+    # any already-retained callable ABI as well as by the field itself.
+    references = [frame["prefix"], *(context.get(key) for key in (
+        "declaration_metadata", "declared_member_api", "inspected_target_api", "inspected_api",
+        "materialized_prerequisite_api", "callback_input_api"))]
+    types = set(re.findall(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", json.dumps(references)))
+    return _callbacks(row for row in records or ()
+                      if row.get("event_interface") in types
+                      or str(row.get("event_interface") or "").rsplit(".", 1)[-1] in types)
+
+
 def _retained_interfaces(record):
     # These functions are already compiled upstream. Their bodies are not
     # coding work for this member, but their signatures and UI ownership are.
@@ -127,11 +145,19 @@ def _runtime_binding_view(context, names):
             if key in names or isinstance(value, Mapping) and value.get("binding") == "typed_input"}}
 
 
-def _body_messages(other, task, focus):
+def _member_instructions(other, kind, focus):
+    from .direct_feature_source import member_implementation_instruction
+    instruction = {"role": "system", "content": member_implementation_instruction(True, kind)}
     if focus:
-        from .direct_feature_source import member_implementation_instruction
-        other = [{"role": "system", "content": member_implementation_instruction(True)}]
-    return _messages(other, task)
+        return [instruction]
+    if kind == "field":
+        previous = {member_implementation_instruction(True), instruction["content"]}
+        return [message for message in other if message.get("content") not in previous] + [instruction]
+    return other
+
+
+def _body_messages(other, task, focus):
+    return _messages(_member_instructions(other, task["immutable_signature"]["kind"], focus), task)
 
 
 def java_data_messages(messages, action):
@@ -175,7 +201,7 @@ def java_body_messages(messages, frame, *, focus=False):
         if isinstance(context.get(key), Mapping):
             task[key] = target_interfaces(context[key])
     if "available_fabric_callbacks" in context:
-        task["available_fabric_callbacks"] = _callbacks(context["available_fabric_callbacks"])
+        task["available_fabric_callbacks"] = _member_callbacks(context["available_fabric_callbacks"], task, frame)
     if "retained_typed_behavior" in context:
         task["retained_typed_behavior"] = _retained_interfaces(context["retained_typed_behavior"])
     return _body_messages(other, task, focus)

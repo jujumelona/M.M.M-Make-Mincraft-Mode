@@ -31,7 +31,8 @@ from .fixed_template_generation import (
 )
 from .model_output_atomicity_contract import assert_atomic_model_schema
 from .direct_feature_source import (
-    direct_behavior_registrar, direct_feature_mode, member_implementation_instruction,
+    behavior_registrar_name, direct_feature_mode, member_implementation_instruction,
+    plan_direct_support, support_plan_instruction,
 )
 from .java_authoring_prompt import java_data_messages, java_body_messages
 
@@ -335,6 +336,7 @@ def compose_first_pass_java(
         host_mode and (construction_context or {}).get("authoring_contract", {})
         .get("host_requirements", {}).get("java_class_header") == "plain"
     )
+    direct_registrars = plan_direct_support(task, plan_schema, behaviors)
     if plain_host_header:
         # A registry holder is a plain Java owner, not an EntityType or
         # Registry implementation. Never ask a small coder to invent
@@ -382,8 +384,8 @@ def compose_first_pass_java(
                 "When host_entrypoint is present, its public constructor, interface and "
                 "initialization method are already owned by the host. Plan only needed "
                 "supporting members; do not plan a second lifecycle method. The host "
-                "assigns internal helper names and later authors the required lifecycle body. "
-                "Plan only real necessary supporting members, at most ten; "
+                + support_plan_instruction(direct_feature)
+                + "Plan only real necessary supporting members, at most ten; "
                 "each planned unit is one complete declaration with one coherent "
                 "responsibility. No code in the plan units."
             ),
@@ -581,14 +583,13 @@ def compose_first_pass_java(
             if not behavior_id or behavior_id in seen_behaviors or not row.get("intent"):
                 raise ValueError("JAVA_HOST_BEHAVIOR_INVALID")
             seen_behaviors.add(behavior_id)
-            registrar = "registerBehavior" + hashlib.sha256(
-                behavior_id.encode("utf-8")).hexdigest()[:20]
+            registrar = behavior_registrar_name(behavior_id)
             if direct_feature:
                 # New gameplay is source work. Let the coder implement its
                 # real activation/interaction using the target APIs and the
                 # helper declarations planned above, without first requiring
                 # an existing custom method, semantic hook or proof ledger.
-                units.append(direct_behavior_registrar(row, registrar))
+                units.append(direct_registrars[registrar])
                 continue
             # The registrar installs the verified trigger and is NOT the owner
             # of all gameplay state, UI, economy and effects. Previously a
@@ -946,7 +947,7 @@ def compose_first_pass_java(
         )
         body_messages = [
             *member_messages,
-            {"role": "system", "content": member_implementation_instruction(direct_feature)},
+            {"role": "system", "content": member_implementation_instruction(direct_feature, kind)},
             {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
         ]
         if host_mode and unit_event and owned_behavior_id and kind == "method":

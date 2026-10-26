@@ -72,6 +72,49 @@ inner-code ::= inner-sep* (inner-value inner-sep+)* inner-value?
 '''
 
 
+_FIELD_EXPRESSION = r'''
+gap ::= blank*
+space ::= blank+
+type-argument ::= "?" (space ("extends" | "super") space type-reference)? | type-reference
+type-arguments ::= "<" gap (type-argument (gap "," gap type-argument)*)? gap ">"
+type-name ::= identifier (gap type-arguments)? (gap "." gap identifier (gap type-arguments)?)*
+type-reference ::= type-name (gap "[" gap "]")*
+array-initializer ::= "{" gap (array-value (gap "," gap array-value)* (gap ",")?)? gap "}"
+array-value ::= expression | array-initializer
+creation ::= "new" space (type-arguments gap)? type-name gap (round (gap curly)? | ("[" inner-code "]" gap)+ array-initializer?)
+field-literal ::= number | "." [0-9] [A-Za-z0-9_.]* | java-string | java-char | text-block
+type-method-reference ::= type-reference gap "::" gap (type-arguments gap)? (identifier | "new")
+primary ::= field-literal | identifier | type-method-reference | "(" gap expression gap ")" | creation | "switch" gap round gap curly
+selector ::= "." gap (type-arguments gap)? (identifier | "class" | "new" space type-name gap round (gap curly)?)
+postfix ::= selector | round | square | "::" gap (type-arguments gap)? (identifier | "new")
+cast ::= "(" gap type-reference (gap "&" gap type-reference)* gap ")" gap (unary | lambda)
+unary ::= ("++" | "--" | "+" | "-" | "!" | "~") gap unary | cast | primary (gap postfix)* (gap ("++" | "--"))?
+binary-operator ::= "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<=" | ">=" | "<" | ">" | "&&" | "||" | "&" | "|" | "^" | "<<" | ">>" | ">>>"
+binary ::= unary (gap binary-operator gap unary | space "instanceof" space type-reference (space identifier)?)*
+assignment-operator ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>="
+lambda ::= (identifier | round) gap "->" gap (curly | expression)
+expression ::= lambda | binary (gap "?" gap expression gap ":" gap expression)? (gap assignment-operator gap expression)?
+'''
+
+
+def _fragment_structure(kind, optional, semicolon):
+    if kind == "field":
+        # A lexical token bag let `package` become `packageai`, and let a
+        # qualified identifier be followed by an outer class body. Require
+        # expression operators/selectors; braces attach only to an array,
+        # creation, lambda or switch. Nested Java remains AST/compiler checked.
+        return _FIELD_EXPRESSION + f'\nfragment ::= gap (array-value){optional} gap\n'
+    return f'''
+first-sep ::= atom | round | square | curly
+top-sep ::= blank | first-sep{semicolon}
+top-value ::= identifier | number | java-string | java-char | text-block
+code ::= top-sep* (top-value top-sep+)* top-value?
+rest ::= top-sep+ code | ""
+fragment ::= blank* (top-value rest | first-sep code){optional}
+'''
+
+
+
 @lru_cache(maxsize=6)
 def native_java_implementation_grammar(kind, allow_empty=False):
     """Constrain a field expression or body without a full recursive Java PEG."""
@@ -87,15 +130,8 @@ def native_java_implementation_grammar(kind, allow_empty=False):
         semicolon = ' | ";"'
     envelope = ('root ::= ws "{" ws ' + json.dumps('"implementation"')
                 + ' ws ":" ws ' + json.dumps('"') + ' fragment ' + json.dumps('"') + ' ws "}" ws')
-    structure = f'''
-first-sep ::= atom | round | square | curly
-top-sep ::= blank | first-sep{semicolon}
-top-value ::= identifier | number | java-string | java-char | text-block
-code ::= top-sep* (top-value top-sep+)* top-value?
-rest ::= top-sep+ code | ""
-fragment ::= blank* (top-value rest | first-sep code){optional}
-'''
-    return '\n'.join((envelope, _identifier_grammar(forbidden), _lexical_rules(), structure))
+    return '\n'.join((envelope, _identifier_grammar(forbidden), _lexical_rules(),
+                      _fragment_structure(kind, optional, semicolon)))
 
 
 def constrain_java_implementation(payload, request):
