@@ -19,6 +19,7 @@ from .first_pass_java_declarations import (
     IDENTIFIER,
     MEMBER_KINDS,
     canonicalize_field_type_metadata,
+    callback_parameter_metadata,
     declaration_frame,
     declaration_header,
     metadata_schema,
@@ -29,6 +30,9 @@ from .fixed_template_generation import (
     _validate_native_arguments,
 )
 from .model_output_atomicity_contract import assert_atomic_model_schema
+from .direct_feature_source import (
+    direct_behavior_registrar, direct_feature_mode, member_implementation_instruction,
+)
 
 _PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -285,6 +289,7 @@ def compose_first_pass_java(
     package_name, class_name = identity
 
     host_mode = construction_context is not None
+    direct_feature = direct_feature_mode(spec, construction_context)
     callback_api_index = None
     task = {
         "package": package_name,
@@ -341,7 +346,8 @@ def compose_first_pass_java(
         for field in ("superclass", "interfaces"):
             plan_schema["properties"].pop(field, None)
         unit_schema = plan_schema["properties"]["units"]["items"]
-        unit_schema["properties"].pop("name")
+        if not direct_feature:
+            unit_schema["properties"].pop("name")
         unit_schema["properties"]["kind"]["enum"] = [kind for kind in MEMBER_KINDS if kind != "constructor"]
         unit_schema["required"] = list(unit_schema["properties"])
         plan_schema["properties"]["units"]["minItems"] = 0
@@ -382,7 +388,7 @@ def compose_first_pass_java(
         },
         {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)},
     ]
-    if host_mode and bindings.get("request_feature_entrypoint"):
+    if host_mode and bindings.get("request_feature_entrypoint") and not direct_feature:
         # The host already owns the exact behavior set and Fabric entrypoint.
         # Asking the model to also invent "optional" members caused it to
         # choose a random int field, then emit registrar calls as that FIELD'S
@@ -429,7 +435,7 @@ def compose_first_pass_java(
     source_owned = bool(host_mode and (construction_context or {}).get("host_source_owned"))
     source_work_graph = ((construction_context or {}).get("source_owned_work_graph")
                          if source_owned else None)
-    if host_mode and bindings.get("request_feature_entrypoint"):
+    if host_mode and bindings.get("request_feature_entrypoint") and not direct_feature:
         from .host_fabric_callback_abi import callback_interfaces
         symbol_index = (construction_context or {}).get("symbols") or {}
         event_candidates = callback_interfaces(symbol_index, side=str(spec.get("side") or "COMMON"))
@@ -557,7 +563,7 @@ def compose_first_pass_java(
     units = []
     for index, item in enumerate(plan["units"], 1):
         unit = dict(item)
-        if entrypoint_interface:
+        if entrypoint_interface and not direct_feature:
             # These helpers have no preexisting public API. Select their names
             # before inference, outside the reserved entrypoint namespace.
             unit["name"] = ("MmmMember" if unit["kind"] in {"class", "record", "enum"} else "mmmMember") + str(index)
@@ -575,6 +581,13 @@ def compose_first_pass_java(
             seen_behaviors.add(behavior_id)
             registrar = "registerBehavior" + hashlib.sha256(
                 behavior_id.encode("utf-8")).hexdigest()[:20]
+            if direct_feature:
+                # New gameplay is source work. Let the coder implement its
+                # real activation/interaction using the target APIs and the
+                # helper declarations planned above, without first requiring
+                # an existing custom method, semantic hook or proof ledger.
+                units.append(direct_behavior_registrar(row, registrar))
+                continue
             # The registrar installs the verified trigger and is NOT the owner
             # of all gameplay state, UI, economy and effects. Previously a
             # single no-argument registrar was asked to implement the entire
@@ -721,24 +734,7 @@ def compose_first_pass_java(
             # A callback's inputs/return value belong to Fabric's actual SAM.
             # Never ask a 9B model to invent 'player' or other locals in a
             # no-argument lifecycle method.
-            from .java_operation_ir import KEYWORDS
-            names = []
-            used = set()
-            for index_arg, type_name in enumerate(event_callback["parameters"]):
-                simple = type_name.rsplit(".", 1)[-1].replace("[]", "Array")
-                name_arg = (simple[:1].lower() + simple[1:]
-                            if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", simple)
-                            and simple[:1].lower() + simple[1:] not in KEYWORDS
-                            else f"eventArg{index_arg}")
-                if event_callback.get("provenance") == "host_typed_ui_action":
-                    # The host's form ABI owns input names as well as types.
-                    # Two strings with different meanings cannot collapse to
-                    # anonymous callback-local names.
-                    name_arg = event_callback["parameter_names"][index_arg]
-                while name_arg in used:
-                    name_arg += str(index_arg)
-                used.add(name_arg)
-                names.append({"type": type_name, "name": name_arg})
+            names = callback_parameter_metadata(event_callback)
             parts = {"visibility": "private", "static": False,
                      "return_type": ("boolean" if unit.get("host_condition_behavior")
                                      else "boolean" if unit.get("host_effect_behavior")
@@ -949,24 +945,7 @@ def compose_first_pass_java(
         )
         body_messages = [
             *member_messages,
-            {"role": "system", "content": (
-                "Return JSON with one implementation string containing only the field "
-                "initializer or method/constructor body. The host fixes the signature "
-                "and adds all declaration delimiters. Do not repeat the signature. "
-                "An empty string may select an approved uninitialized field. "
-                "Never return package/import directives, an outer class or extra members. "
-                "Respect implementation_requirements, "
-                "side, current_unit_purpose and actual prerequisite/member APIs. "
-                "For shared state use only host_state_access typed readState_/writeState_ "
-                "methods; the host owns state keys, value casts and context signatures. "
-                "An undeclared work-order state is NOT a Java accessor: use only "
-                "verified callback/world inputs when that preserves behavior, never "
-                "substitute an unrelated state field. Persistent state absent from "
-                "the canonical plan must be resolved upstream, not fabricated in Java. "
-                "declared_member_api contains the exact signatures of all helpers, "
-                "including forward references. Implement the requested behavior "
-                "without placeholders or TODOs."
-            )},
+            {"role": "system", "content": member_implementation_instruction(direct_feature)},
             {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
         ]
         if host_mode and unit_event and owned_behavior_id and kind == "method":

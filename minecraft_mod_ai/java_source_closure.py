@@ -126,7 +126,21 @@ def _package_source_paths(package, referenced, *, root, roots):
                     yield tree / base / item.name
 
 
-def _referenced_source_paths(source, *, root, roots):
+def _qualified_project_paths(visible, *, root, roots, enabled):
+    """Resolve qualified project APIs against actual local Java source files."""
+    if not enabled:
+        return
+    for match in re.finditer(r'\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+', visible):
+        names = match[0].split('.')
+        for stop in range(len(names), 1, -1):
+            qualified = Path(*names[:stop]).with_suffix('.java')
+            for tree in roots:
+                relative = tree / qualified
+                if (root / relative).is_file():
+                    yield relative
+
+
+def _referenced_source_paths(source, *, root, roots, include_qualified_sources=False):
     """Discover existing files; javac still decides the actual Java identities."""
     visible = _mask_non_java_code(source)
     referenced = set(re.findall(r'\b[A-Za-z_$][\w$]*\b', visible))
@@ -148,9 +162,14 @@ def _referenced_source_paths(source, *, root, roots):
                 relative = tree / qualified
                 if (root / relative).is_file():
                     yield relative
+    # Direct authors can use qualified project APIs without an import.
+    # Resolve local files without semantic receipts or external source search.
+    yield from _qualified_project_paths(visible, root=root, roots=roots,
+                                         enabled=include_qualified_sources)
 
 
-def _discover_closure(source: str, *, root: Path, target: Path, source_context) -> list[tuple[Path, Path]]:
+def _discover_closure(source: str, *, root: Path, target: Path, source_context,
+                      include_qualified_sources=False) -> list[tuple[Path, Path]]:
     """Resolve bounded prerequisites without replacing the current candidate."""
     roots = _java_roots(target)
     queue, queued = deque(), {target}
@@ -162,7 +181,8 @@ def _discover_closure(source: str, *, root: Path, target: Path, source_context) 
     enqueue(_relative_java_path(record['path']) for record in source_context
             if isinstance(record, dict) and isinstance(record.get('path'), str)
             and record['path'].endswith('.java'))
-    enqueue(_referenced_source_paths(source, root=root, roots=roots))
+    enqueue(_referenced_source_paths(source, root=root, roots=roots,
+                                     include_qualified_sources=include_qualified_sources))
     visited: set[Path] = {target}
     result = []
     total_bytes = 0
@@ -182,7 +202,8 @@ def _discover_closure(source: str, *, root: Path, target: Path, source_context) 
             raise ValueError('CONSTRUCTION_COMPILE_SOURCE_CLOSURE_TOO_LARGE')
         result.append((relative, original))
         actual_source = original.read_text(encoding='utf-8')
-        enqueue(_referenced_source_paths(actual_source, root=root, roots=roots))
+        enqueue(_referenced_source_paths(actual_source, root=root, roots=roots,
+                                         include_qualified_sources=include_qualified_sources))
     return result
 
 

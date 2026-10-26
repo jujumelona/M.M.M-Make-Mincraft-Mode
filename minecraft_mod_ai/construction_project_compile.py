@@ -29,9 +29,10 @@ def verify_java_source_with_dependencies(source: str, *, context: dict,
     relative_target = _relative_java_path(target_path)
     if relative_target.name != filename:
         raise ValueError('CONSTRUCTION_COMPILE_TARGET_IDENTITY_MISMATCH')
-    from .java_source_snapshot import materialized_java_sources
+    from .java_source_snapshot import materialized_java_sources, direct_source_dependencies
+    source_options = direct_source_dependencies(context)
     companions = materialized_java_sources(source, project_root=root,
-        target_path=target_path, source_context=source_context)
+        target_path=target_path, source_context=source_context, **source_options)
     from .java_lsp import _resolve_project_java_home
     jdk = Path(_resolve_project_java_home(int(java_version), require_compiler=True))
     compiler = jdk / 'bin' / ('javac.exe' if os.name == 'nt' else 'javac')

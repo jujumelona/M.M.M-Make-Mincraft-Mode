@@ -338,7 +338,9 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         raise ConstructionFileError("CONSTRUCTION_FILE_TARGET_CLASSPATH_REQUIRED")
     from .construction_project_compile import verify_java_source_with_dependencies
     registered_ui = []
-    if spec.get("bindings", {}).get("request_feature_entrypoint") and context.get("symbols"):
+    use_source_receipts = (spec.get("bindings", {}).get("request_feature_entrypoint")
+                           and context.get("symbols") and not context.get("host_direct_feature_source"))
+    if use_source_receipts:
         from .source_owned_ui_event import read_verified_typed_ui_events
         registered_ui = read_verified_typed_ui_events(
             project_root=context["project_root"], symbols=context["symbols"],
@@ -357,7 +359,7 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         source_context=source_context)
     _check_identity(source, package, name)
     _check_entrypoint(source, spec)
-    if spec.get("bindings", {}).get("request_feature_entrypoint") and context.get("symbols"):
+    if use_source_receipts:
         # An initializer that calls an invented registrar is NOT a gameplay
         # hook. The exact source and all project prerequisites have already
         # compiled. Now require an actual installed Fabric callback field

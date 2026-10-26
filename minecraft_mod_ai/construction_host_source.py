@@ -107,6 +107,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     if not root.is_dir():
         raise HostJavaConstructionError("JAVA_HOST_WORKSPACE_NOT_FOUND")
 
+    # A requested feature is new implementation work. Do not ask a capability
+    # picker to prove that its state, event or original source method already
+    # exists before allowing the source writer to create it.
+    direct_feature = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
+    context = {**context, "host_direct_feature_source": direct_feature}
+
     identifier = _digest({
         "schema": "mmm/host-java-compilation-unit-v1",
         "spec": spec, "owner": owner, "target": context["target"],
@@ -118,7 +124,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     candidate = root / ".mmm" / "construction_host_candidates" / (identifier + ".json")
     proof_path = root / ".mmm" / "construction_host_mutations" / (identifier + ".json")
     from .runtime_mutation_author import verify_native_runtime_mutation_coverage
-    required_native = any(row.get("runtime_state_writes") for row in behaviors)
+    required_native = not direct_feature and any(
+        row.get("runtime_state_writes") for row in behaviors)
     mutation_receipts = []
     with _claim_checkpoint(checkpoint):
         saved = _read_checkpoint(checkpoint, identifier)
@@ -142,105 +149,30 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             else:
                 return saved["source"]
 
-        rule_mode = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
-        feature_route = None
-        source_work = None
-        if rule_mode:
-            # Route by *executable* source evidence before any model decisions.
-            # A planner-only world_state label is not an installed producer,
-            # and an unnamed occurrence is not an authorized Fabric event.
-            from .feature_execution_route import select_feature_execution_route
+        contract, requirement, behavior_rows, prompt, state_access = (
+            _build_host_java_prompt(
+                router, spec, context, package=package, name=name,
+                owner=owner, behaviors=behaviors, source_context=source_context,
+            )
+        )
+        if direct_feature:
             from .host_fabric_callback_abi import callback_interfaces
 
-            runtime_bindings = json.loads(spec.get("bindings", {}).get(
-                "runtime_state_bindings_json") or "{}")
-            available_callbacks = callback_interfaces(
+            bindings = spec.get("bindings", {})
+            # API signatures are coding context, not an existence/semantic
+            # admission decision. Missing gameplay owners are authored below.
+            prompt["available_fabric_callbacks"] = callback_interfaces(
                 context.get("symbols") or {}, side=str(spec.get("side") or "COMMON"))
-            feature_route = select_feature_execution_route(
-                behaviors, runtime_bindings, context.get("symbols") or {},
-                available_callbacks)
-            if feature_route["route"] == "source_owned_java":
-                rule_mode = False
-            print("FEATURE_EXECUTION_ROUTE: " + json.dumps({
-                "owner": owner,
-                "route": feature_route["route"],
-                "producer_obligations": feature_route["producer_obligations"],
-                "verified_behavior_ids": feature_route["verified_behavior_ids"],
-                "target_compilation_verified": False, "runtime_verified": False,
+            prompt["runtime_state_bindings"] = json.loads(
+                bindings.get("runtime_state_bindings_json") or "{}")
+            prompt["retained_typed_behavior"] = json.loads(
+                bindings.get("retained_typed_behavior_json") or "{}")
+            prompt["owned_runtime_records"] = json.loads(
+                bindings.get("owned_runtime_records_json") or "[]")
+            print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
+                "owner": owner, "mode": "direct_member_source",
+                "assigned_behaviors": len(behavior_rows),
             }, ensure_ascii=False), flush=True)
-        if rule_mode:
-            # Rule authoring queries the authoritative typed symbol index in
-            # bounded pages. Do not first ask for whole-feature API retrieval
-            # or send the previous Java/body prompt to each small decision.
-            from .host_prerequisite_api import read_prerequisite_apis
-            from .host_typed_state_access import state_access_contract
-            contract = context.get("authoring_contract") or {}
-            requirement = str(spec.get("requirement") or "")
-            behavior_rows = [dict(row) for row in behaviors]
-            prerequisite_api = read_prerequisite_apis(
-                context, target_path=spec["target_path"], source_context=source_context)
-            state_access = state_access_contract(prerequisite_api)
-            prompt = {"materialized_prerequisite_api": prerequisite_api,
-                      "inspected_target_api": {}, "host_state_work_order_scope": {}}
-        else:
-            contract, requirement, behavior_rows, prompt, state_access = (
-                _build_host_java_prompt(
-                    router, spec, context, package=package, name=name,
-                    owner=owner, behaviors=behaviors, source_context=source_context,
-                )
-            )
-            if feature_route is not None:
-                bindings = spec.get("bindings", {})
-                prompt["source_owned_producer_obligations"] = feature_route[
-                    "producer_obligations"]
-                # Give the bounded source author actual inspected hook ABIs.
-                # It owns a real registration expression and its receiver,
-                # rather than being forced back into an earlier LLM hook
-                # selection that already declared its source unimplemented.
-                candidates = callback_interfaces(
-                    context.get("symbols") or {},
-                    side=str(spec.get("side") or "COMMON"))
-                def _hook_priority(row):
-                    scopes = ("ServerLevel", "ServerWorld", "MinecraftServer",
-                              "ServerPlayer", "ServerPlayerEntity")
-                    score = sum(any(str(kind).endswith(scope) for scope in scopes)
-                                for kind in row.get("parameters", ()))
-                    return (-score, str(row.get("event_id") or ""))
-                prompt["source_owned_inspected_hooks"] = [
-                    {key: row.get(key) for key in
-                     ("event_id", "event_owner", "event_field",
-                      "parameters", "return_type")}
-                    for row in sorted(candidates, key=_hook_priority)[:32]
-                ]
-                prompt["runtime_state_bindings"] = {
-                    key: value for key, value in runtime_bindings.items()
-                    if any(key in (*row.get("runtime_state_reads", ()),
-                                           *row.get("runtime_state_writes", ()))
-                           for row in behavior_rows)
-                }
-                prompt["retained_typed_behavior"] = json.loads(
-                    bindings.get("retained_typed_behavior_json") or "{}")
-                prompt["owned_runtime_records"] = json.loads(
-                    bindings.get("owned_runtime_records_json") or "[]")
-                from .feature_source_work_graph import build_source_work_graph
-                source_work = build_source_work_graph(
-                    behavior_rows,
-                    producer_obligations=feature_route["producer_obligations"],
-                    inspected_hooks=candidates,
-                    verified_behavior_ids=feature_route["verified_behavior_ids"],
-                )
-                # The full task ledger is host-owned. Never repeat the entire
-                # inspected event catalogue or every behavior's dependency chain
-                # on each 9B member request.
-                print("FEATURE_SOURCE_WORK_GRAPH: " + json.dumps({
-                    "owner": owner,
-                    "task_count": len(source_work["tasks"]),
-                    "unverified_obligations": source_work["unverified_obligations"],
-                    "runtime_verified": False,
-                }, ensure_ascii=False), flush=True)
-                # These obligations are implementation work, NOT proof that
-                # any state getter/hook already exists. The ordinary target
-                # compiler/coverage contract remains mandatory.
         instructions = (
             "Implement the specified Fabric/Minecraft task using only inspected "
             "target APIs and materialized project source. The host builds every "
@@ -268,17 +200,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 source = pending["source"]
             else:
                 from .host_verified_entity_type import verified_entity_type_source
-                if rule_mode:
-                    from .host_rule_feature import compose_rule_feature
-                    source = compose_rule_feature(
-                        router, effective_spec, context, package=package, name=name,
-                        behaviors=behavior_rows, state_access=state_access,
-                        prerequisite_apis=prerequisite_api)
-                else:
-                    source = verified_entity_type_source(
-                        effective_spec, contract, prompt["inspected_target_api"],
-                        package=package, name=name, behaviors=behavior_rows,
-                    )
+                source = verified_entity_type_source(
+                    effective_spec, contract, prompt["inspected_target_api"],
+                    package=package, name=name, behaviors=behavior_rows,
+                )
                 if source is None:
                     from .host_verified_entity_registry import (
                         verified_entity_registry_source,
@@ -298,9 +223,6 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         construction_context={
                             **context, "host_state_access": state_access,
                             "host_state_work_order_scope": prompt["host_state_work_order_scope"],
-                            "host_source_owned": bool(
-                                feature_route and feature_route["route"] == "source_owned_java"),
-                            "source_owned_work_graph": source_work,
                             "runtime_mutation_receipts": mutation_receipts,
                         },
                         behaviors=behavior_rows,
@@ -309,11 +231,6 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             budget = acceptance.get("max_compiler_repair_attempts", 2)
             if type(budget) is not int or budget < 0:
                 raise HostJavaConstructionError("JAVA_HOST_REPAIR_BUDGET_INVALID")
-            if rule_mode:
-                # A compiler defect in host lowering is not a request for the
-                # model to rewrite generated Java and escape the typed IR.
-                # Retain source + diagnostic for host investigation.
-                budget = 0
             from .construction_host_member_repair import repair_compiler_member
             from .construction_journal import JournaledConstructionRouter
             # Parsed declarations are not compiler-verified repairs. Replaying
@@ -332,20 +249,26 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     })
                     if attempt == budget:
                         raise
-                    source = repair_compiler_member(
-                        repair_router, source, str(compiler_error), filename=name + ".java",
-                        target_path=spec["target_path"],
+                    repair_context = {
+                        "filename": name + ".java", "target_path": spec["target_path"],
                         # The 26.2 index holds ~872K symbols. Repair reads
                         # it without mutation; cloning it per failed member
                         # needlessly multiplies memory pressure on Colab.
-                        symbols=context.get("symbols") or {}, owner=owner,
-                        api_evidence=prompt["inspected_target_api"],
-                        prerequisite_api=prompt["materialized_prerequisite_api"],
-                        state_access=state_access,
-                        behaviors=behavior_rows,
-                        runtime_state_bindings=_repair_runtime_bindings(spec, mutation_receipts),
-                        attempt=attempt + 1,
-                    )
+                        "symbols": context.get("symbols") or {}, "owner": owner,
+                        "api_evidence": prompt["inspected_target_api"],
+                        "prerequisite_api": prompt["materialized_prerequisite_api"],
+                        "state_access": state_access, "behaviors": behavior_rows,
+                        "runtime_state_bindings": _repair_runtime_bindings(spec, mutation_receipts),
+                        "attempt": attempt + 1,
+                    }
+                    if direct_feature:
+                        from .direct_feature_repair import repair_direct_feature_member
+                        source = repair_direct_feature_member(
+                            repair_router, source, str(compiler_error),
+                            context={**repair_context, "implementation_context": prompt})
+                    else:
+                        source = repair_compiler_member(
+                            repair_router, source, str(compiler_error), **repair_context)
                 else:
                     # A compiler-valid edit may still delete a mandatory
                     # checked mutation. Re-prove final source after every

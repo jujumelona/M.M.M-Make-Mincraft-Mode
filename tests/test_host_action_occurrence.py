@@ -9,7 +9,6 @@ from minecraft_mod_ai.host_action_occurrence import (
 from minecraft_mod_ai.source_owned_ui_event import (
     materialize_typed_ui_occurrence, read_verified_typed_ui_events,
 )
-from minecraft_mod_ai.source_occurrence_error import SourceHookUnavailable
 
 
 TRADE = {

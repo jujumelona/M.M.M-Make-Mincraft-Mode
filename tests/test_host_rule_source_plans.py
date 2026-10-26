@@ -209,9 +209,9 @@ class SourceRuleRouter:
         raise AssertionError("No Java source fallback")
 
 
-def test_production_entity_handoff_compiles_and_executes_rule(tmp_path, monkeypatch):
+def test_production_entity_handoff_compiles_and_executes_direct_source(tmp_path, monkeypatch):
     import json
-    from test_host_rule_feature import LEVEL, compile_run, index
+    from test_host_rule_feature import LEVEL, TICKS, compile_run, index
     from minecraft_mod_ai.construction_host_source import compose_host_java_source
 
     symbols = {**production_index(), **index()}
@@ -219,7 +219,18 @@ def test_production_entity_handoff_compiles_and_executes_rule(tmp_path, monkeypa
     path = tmp_path / PATH
     path.parent.mkdir(parents=True)
     path.write_text(SOURCE)
-    router = SourceRuleRouter()
+    class SourceRouter:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "submit_java_construction_plan_count"
+            return {"count": 0}
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            body = (TICKS + ".END_LEVEL_TICK.register(world -> {"
+                    "for (net.minecraft.world.entity.Entity entity : world.getAllEntities()) {"
+                    "if (entity instanceof " + ALIEN + ") {world.effects++; break;}}});")
+            return source_frame["prefix"] + body + source_frame["suffix"]
+
+    router = SourceRouter()
 
     def verify(source, *args, **kwargs):
         compile_run(tmp_path, source, """
@@ -237,6 +248,7 @@ def test_production_entity_handoff_compiles_and_executes_rule(tmp_path, monkeypa
         })
 
     monkeypatch.setattr("minecraft_mod_ai.construction_file_author._verify_full_source", verify)
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._evidence", lambda *a, **kw: {})
     monkeypatch.setattr("minecraft_mod_ai.construction_coverage.record_authored_source_calls", lambda *a, **kw: None)
     source = compose_host_java_source(router, {
         "language": "java", "side": "COMMON", "target_path": "src/main/java/example/Bridge.java",
@@ -249,11 +261,8 @@ def test_production_entity_handoff_compiles_and_executes_rule(tmp_path, monkeypa
                     "state_reads": [], "state_writes": [], "runtime_state_reads": ["Alien presence"]}],
         source_context=[{"path": PATH}])
     assert "instanceof " + ALIEN in source
-    assert router.calls[:4] == ["rule_observation", "rule_activation", "rule_value_operation", "rule_operand"]
-    receipts = list((tmp_path / ".mmm/construction_rule_ir").glob("*.json"))
-    record = json.loads(receipts[0].read_text())["members"]
-    assert record["rules"][0]["runtime_source_plans"]["Alien presence"]["entity_owner"] == ALIEN
-    assert record["runtime_verified"] is False
+    assert TICKS + ".END_LEVEL_TICK.register(" in source
+    assert not (tmp_path / ".mmm/construction_rule_ir").exists()
 
 
 def test_complete_multihop_source_skips_absent_receiver_then_reads_live_values(tmp_path):

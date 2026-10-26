@@ -10,6 +10,10 @@ def _source_digest(source):
     return hashlib.sha256(source.strip().replace("\r\n", "\n").encode("utf-8")).hexdigest()
 
 
+def direct_source_dependencies(context):
+    return {'include_qualified_sources': True} if context.get('host_direct_feature_source') else {}
+
+
 def _source_records(sources):
     return tuple({"path": name, "sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
                   "authority": "materialized_prerequisite_source"}
@@ -79,7 +83,8 @@ def verified_java_companions(
     return result
 
 
-def materialized_java_sources(source, *, project_root, target_path, source_context=()):
+def materialized_java_sources(source, *, project_root, target_path, source_context=(),
+                              include_qualified_sources=False):
     """Read the compiler closure once, preserving every admitted hash constraint."""
     from .java_source_closure import (
         MAX_CLOSURE_BYTES, MAX_SOURCE_BYTES, _discover_closure,
@@ -91,7 +96,8 @@ def materialized_java_sources(source, *, project_root, target_path, source_conte
     verified_java_companions(project_root=root, source_context=admitted)
     expected = {entry["path"]: entry["sha256"] for entry in admitted}
     related = _discover_closure(source, root=root, target=_relative_java_path(target_path),
-                                source_context=source_context)
+                                source_context=source_context,
+                                include_qualified_sources=include_qualified_sources)
     result, total = {}, 0
     for relative, _ in related:
         path = _materialized_file(root, relative)

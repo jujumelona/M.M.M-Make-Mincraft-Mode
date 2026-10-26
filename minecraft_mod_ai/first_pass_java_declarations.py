@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+import re
 from typing import Any
 
 IDENTIFIER = {"type": "string", "minLength": 1, "maxLength": 80,
@@ -136,6 +137,27 @@ def declaration_frame(kind: str, name: str, parts: Mapping[str, Any], *, allow_u
     if empty is not None:
         frame["empty_value"] = empty
     return frame
+
+
+def callback_parameter_metadata(event_callback):
+    """Keep callback input names unique while preserving authored UI input names."""
+    from .java_operation_ir import KEYWORDS
+
+    names, used = [], set()
+    for index, type_name in enumerate(event_callback["parameters"]):
+        simple = type_name.rsplit(".", 1)[-1].replace("[]", "Array")
+        proposed = simple[:1].lower() + simple[1:]
+        name = (proposed if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", simple) and proposed not in KEYWORDS
+                else f"eventArg{index}")
+        if event_callback.get("provenance") == "host_typed_ui_action":
+            name = event_callback["parameter_names"][index]
+        while name in used:
+            name += str(index)
+        used.add(name)
+        names.append({"type": type_name, "name": name})
+    return names
+
+
 
 
 

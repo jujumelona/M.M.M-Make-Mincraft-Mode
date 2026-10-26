@@ -178,20 +178,21 @@ def test_gate_and_rising_edge_execute_real_effects_with_explicit_first_policy(tm
 
 
 @pytest.mark.parametrize("compiler_failure", [False, True])
-def test_production_construction_uses_rules_and_never_source_repair(tmp_path, monkeypatch, compiler_failure):
+def test_production_construction_authors_source_and_repairs_the_failing_member(tmp_path, monkeypatch, compiler_failure):
     from minecraft_mod_ai.construction_host_source import compose_host_java_source
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("Legacy API/source authoring must not run for production rules")
+        raise AssertionError("Direct production must not enter the legacy rule author")
 
-    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._evidence", forbidden)
-    monkeypatch.setattr("minecraft_mod_ai.first_pass_java_source.compose_first_pass_java", forbidden)
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._evidence", lambda *a, **kw: {})
+    monkeypatch.setattr("minecraft_mod_ai.host_rule_feature.compose_rule_feature", forbidden)
     monkeypatch.setattr("minecraft_mod_ai.construction_host_member_repair.repair_compiler_member", forbidden)
     monkeypatch.setattr("minecraft_mod_ai.construction_coverage.record_authored_source_calls", lambda *a, **k: None)
 
     def verify(source, *args, **kwargs):
-        if compiler_failure:
-            raise RuntimeError("target-compiler-diagnostic")
+        if "missing();" in source:
+            line = next(i for i, text in enumerate(source.splitlines(), 1) if "missing();" in text)
+            raise RuntimeError(f"Bridge.java:{line}: error: cannot find symbol\nmissing();")
         compile_run(tmp_path, source, "ServerLevel w=new ServerLevel(); tick(w,0); tick(w,10); check(w.effects==1);")
 
     monkeypatch.setattr("minecraft_mod_ai.construction_file_author._verify_full_source", verify)
@@ -200,18 +201,28 @@ def test_production_construction_uses_rules_and_never_source_repair(tmp_path, mo
                "prerequisite_hashes": {}}
     spec = {"language": "java", "side": "COMMON", "target_path": "src/main/java/example/Bridge.java",
             "bindings": {"request_feature_entrypoint": "example.Bridge"}}
-    def call():
-        return compose_host_java_source(Router(), spec, context, package="example", name="Bridge", owner="example.Bridge",
+    class SourceRouter:
+        repairs = 0
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            assert data_name == "submit_java_construction_plan_count"
+            return {"count": 0}
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            repair = data_name.startswith("repair_direct_feature_member_")
+            self.repairs += int(repair)
+            body = ("missing();" if compiler_failure and not repair else
+                    TICKS + ".END_LEVEL_TICK.register(world -> {"
+                    "if (world.isReady() && world.getGameTime() > 0 && world.getGameTime() % 10 == 0) world.effects++;});")
+            return source_frame["prefix"] + body + source_frame["suffix"]
+
+    router = SourceRouter()
+    source = compose_host_java_source(router, spec, context, package="example", name="Bridge", owner="example.Bridge",
             behaviors=[{"behavior_id": "world-boundary", "trigger": "Game time reaches a boundary",
                         "intent": "Observe a boundary", "effects": "Increment effects", "state_reads": [], "state_writes": []}])
-    if compiler_failure:
-        with pytest.raises(RuntimeError, match="target-compiler-diagnostic"):
-            call()
-        assert not list((tmp_path / ".mmm/construction_host_files").glob("*.json"))
-    else:
-        source = call()
-        assert "handleRule" in source
-        assert list((tmp_path / ".mmm/construction_host_files").glob("*.json"))
+    assert TICKS + ".END_LEVEL_TICK.register(" in source
+    assert router.repairs == int(compiler_failure)
+    assert list((tmp_path / ".mmm/construction_host_files").glob("*.json"))
 
 
 def test_tracking_context_excludes_scalar_temporaries():

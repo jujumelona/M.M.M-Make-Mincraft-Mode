@@ -6,11 +6,10 @@ import json
 from minecraft_mod_ai.construction_host_source import compose_host_java_source
 
 
-def test_unimplemented_runtime_producer_uses_source_author_not_rule_paging(
+def test_unimplemented_runtime_producer_reaches_direct_source_author(
     tmp_path, monkeypatch,
 ):
     from minecraft_mod_ai import construction_host_source as host
-    import minecraft_mod_ai.feature_execution_route as routing
     import minecraft_mod_ai.host_fabric_callback_abi as callbacks
     import minecraft_mod_ai.first_pass_java_source as first_pass
     import minecraft_mod_ai.construction_file_author as verifier
@@ -22,13 +21,6 @@ def test_unimplemented_runtime_producer_uses_source_author_not_rule_paging(
     monkeypatch.setattr(callbacks, "callback_interfaces", lambda *_args, **_kwargs: [
         {"event_id": "verified:tick", "parameters": ["example.World"]}
     ])
-    monkeypatch.setattr(routing, "select_feature_execution_route",
-                        lambda *_args: {
-                            "route": "source_owned_java", "verified_behavior_ids": [],
-                            "producer_obligations": [{
-                                "behavior_id": "test-1", "name": "unbuilt_state",
-                                "reason": "no_inspected_semantic_source"}],
-                        })
     monkeypatch.setattr(host, "_build_host_java_prompt",
                         lambda _router, _spec, _context, **_kwargs: (
                             {}, "Implement original feature",
@@ -42,8 +34,9 @@ def test_unimplemented_runtime_producer_uses_source_author_not_rule_paging(
 
     def author(_router, spec, messages, **kwargs):
         payload = json.loads(messages[1]["content"])
-        assert payload["source_owned_producer_obligations"][0]["name"] == "unbuilt_state"
         assert "unbuilt_state" in payload["runtime_state_bindings"]
+        assert payload["available_fabric_callbacks"][0]["event_id"] == "verified:tick"
+        assert kwargs["construction_context"]["host_direct_feature_source"] is True
         assert kwargs["behaviors"][0]["behavior_id"] == "test-1"
         called.append(True)
         return "package example; public class Bridge {}"
