@@ -28,6 +28,28 @@ _CURRENT_MEMBER_FIELDS = (
 )
 
 
+def _java_payloads(messages):
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        try:
+            parsed = json.loads(message.get("content") or "")
+        except (ValueError, TypeError):
+            continue
+        if isinstance(parsed, dict):
+            yield parsed
+
+
+def _has_member_contract(messages):
+    return any(any(key in payload for key in (
+        "response_source_frame", "immutable_source_frame", "immutable_signature"))
+        for payload in _java_payloads(messages))
+
+
+def _unknown_member_overflow(messages, remaining, required):
+    return remaining < required and not _has_member_contract(messages)
+
+
 
 def _callback_type_api(current: Mapping[str, Any]) -> tuple[list[dict], set[str]]:
     """Project only exact callable ABI for this member's Fabric callback.
@@ -225,23 +247,18 @@ def scoped_java_member_messages(
     current: dict[str, Any] | None = None
     inspected: Mapping[str, Any] | None = None
     prerequisite: Any = None
-    for message in messages:
-        if str(message.get("role", "")) != "user":
-            continue
-        try:
-            parsed = json.loads(str(message.get("content") or ""))
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(parsed, dict):
-            continue
+    for parsed in _java_payloads(messages):
         if isinstance(parsed.get("inspected_target_api"), Mapping):
             inspected = parsed["inspected_target_api"]
         if "materialized_prerequisite_api" in parsed:
             prerequisite = parsed["materialized_prerequisite_api"]
-        if "response_source_frame" in parsed or "immutable_source_frame" in parsed:
+        if any(key in parsed for key in ("response_source_frame", "immutable_source_frame", "immutable_signature")):
             current = parsed
     if current is None:
         return tuple(dict(m) for m in messages)
+    if current.get("host_java_authoring"):
+        from .java_authoring_prompt import java_body_messages
+        return tuple(java_body_messages(messages, frame, focus=True))
 
     task = {key: current[key] for key in _CURRENT_MEMBER_FIELDS if key in current}
     # Only a behavior-owned member has an explicit state allowlist. A
@@ -354,7 +371,7 @@ def ensure_live_java_source_capacity(adapter: Any, config: Any, request: Any,
     scoped = scoped_java_member_messages(original_messages, source_frame)
     if scoped == tuple(original_messages):
         required = max(512, min(2048, int(before.context_tokens) // 16))
-        if before.remaining_tokens < required:
+        if _unknown_member_overflow(original_messages, before.remaining_tokens, required):
             raise ModelConfigurationError(
                 "CONSTRUCTION_JAVA_CONTEXT_NOT_SCOPABLE: no current member "
                 f"contract; input_tokens={before.input_tokens} "

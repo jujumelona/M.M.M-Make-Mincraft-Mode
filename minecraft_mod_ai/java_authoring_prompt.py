@@ -83,10 +83,18 @@ def _prerequisite_interfaces(records, names):
     return answer
 
 
+def _event_interface(row):
+    event = {key: row[key] for key in ("event_id", "event_owner", "event_field", "event_interface", "method",
+                                      "parameters", "return_type", "type_parameters", "throws")
+             if key in row and (row[key] != [] or key == "parameters")}
+    if row.get("event_id") == f'{row.get("event_owner")}#{row.get("event_field")}':
+        event.pop("event_owner", None)
+        event.pop("event_field", None)
+    return event
+
+
 def _callbacks(records):
-    return [{key: row[key] for key in ("event_id", "event_owner", "event_field", "event_interface", "method",
-                                     "parameters", "return_type", "type_parameters", "throws")
-             if key in row} for row in records or ()]
+    return [_event_interface(row) for row in records or ()]
 
 
 def _retained_interfaces(record):
@@ -112,6 +120,20 @@ def _messages(other, task):
         task, ensure_ascii=False, separators=(",", ":"), default=str)}]
 
 
+def _runtime_binding_view(context, names):
+    if "runtime_state_bindings" not in context:
+        return {}
+    return {"runtime_state_bindings": {key: value for key, value in (context.get("runtime_state_bindings") or {}).items()
+            if key in names or isinstance(value, Mapping) and value.get("binding") == "typed_input"}}
+
+
+def _body_messages(other, task, focus):
+    if focus:
+        from .direct_feature_source import member_implementation_instruction
+        other = [{"role": "system", "content": member_implementation_instruction(True)}]
+    return _messages(other, task)
+
+
 def java_data_messages(messages, action):
     """Counts/layout see intent; declaration metadata sees types, never source bodies."""
     views, other = _views(messages)
@@ -121,7 +143,7 @@ def java_data_messages(messages, action):
     task = {key: context[key] for key in _SEMANTIC if key in context}
     if "retained_typed_behavior" in context:
         task["retained_typed_behavior"] = _retained_interfaces(context["retained_typed_behavior"])
-    if action != "submit_java_construction_plan_count":
+    if not action.startswith("submit_java_construction_plan"):
         names = _state_names(context)
         task["host_state_access"] = _state_interfaces(context.get("host_state_access"), names)
         task["materialized_prerequisite_api"] = _prerequisite_interfaces(
@@ -134,7 +156,7 @@ def java_data_messages(messages, action):
     return _messages(other, task)
 
 
-def java_body_messages(messages, frame):
+def java_body_messages(messages, frame, *, focus=False):
     """Keep exact callable interfaces and current semantics without duplicate inventories."""
     views, other = _views(messages)
     if not any(view.get("host_java_authoring") for view in views):
@@ -142,6 +164,7 @@ def java_body_messages(messages, frame):
     context = _merge(views)
     names = _state_names(context)
     task = {key: context[key] for key in _BODY if key in context}
+    task.update(_runtime_binding_view(context, names))
     task["immutable_signature"] = {key: frame[key] for key in ("kind", "prefix", "suffix")}
     task["host_state_access"] = _state_interfaces(
         context.get("host_state_access") or frame.get("host_state_access"), names)
@@ -155,7 +178,7 @@ def java_body_messages(messages, frame):
         task["available_fabric_callbacks"] = _callbacks(context["available_fabric_callbacks"])
     if "retained_typed_behavior" in context:
         task["retained_typed_behavior"] = _retained_interfaces(context["retained_typed_behavior"])
-    return _messages(other, task)
+    return _body_messages(other, task, focus)
 
 
 def java_implementation_from_response(response):

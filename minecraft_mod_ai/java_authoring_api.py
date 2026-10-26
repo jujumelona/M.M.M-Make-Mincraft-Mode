@@ -77,8 +77,15 @@ def scoped_body_api_records(evidence):
     return [answer[name] for name in sorted(answer)]
 
 
+def _present_abi_fields(record):
+    optional = {"type_parameters", "throws", "generic_throws", "interfaces", "generic_interfaces",
+                "generic_parameters"}
+    return ((key, record[key]) for key in _ABI if key in record and record[key] != ""
+            and record[key] is not None and not (key in optional and record[key] == []))
+
+
 def _abi(record):
-    return {key: record[key] for key in _ABI if key in record}
+    return dict(_present_abi_fields(record))
 
 
 def target_interfaces(evidence):

@@ -272,3 +272,128 @@ def test_actual_parser_retry_keeps_small_member_context_and_full_host_validation
     assert len(calls) == 2
     assert "return value instanceof java.lang.String;" in source
     assert len(frame["host_state_access"][0]["methods"]) == 2002
+
+
+def test_live_capacity_projection_recognizes_direct_signature_without_reexpanding_host_state():
+    from minecraft_mod_ai.construction_java_context import scoped_java_member_messages
+    from minecraft_mod_ai.java_authoring_prompt import java_body_messages
+
+    payload = {**_large_host_context(), "host_java_authoring": True,
+               "assigned_behaviors": [{"state_reads": ["balance"]}],
+               "host_signature": "private int balance()", "member_role": "supporting_member"}
+    frame = {"kind": "method", "prefix": "private int balance() {\n", "suffix": "\n}",
+             "host_state_access": payload["host_state_access"]}
+    original = java_body_messages([{"role": "user", "content": json.dumps(payload)}], frame)
+    projected = scoped_java_member_messages(original, frame)
+    assert projected != tuple(original), "the live capacity path must recognize immutable_signature"
+    task = json.loads(projected[-1]["content"])
+    assert task["original_feature_goal"] == payload["original_feature_goal"]
+    assert task["retained_typed_behavior"]["ui_owned_records"]
+    assert task["owned_runtime_records"] == payload["owned_runtime_records"]
+    assert len(task["host_state_access"][0]["methods"]) == 2
+    assert len(frame["host_state_access"][0]["methods"]) == 2002
+
+
+def test_plan_scalar_pages_do_not_reintroduce_callback_or_classpath_catalogs():
+    from minecraft_mod_ai.java_authoring_prompt import java_data_messages
+
+    context = {**_large_host_context(), "host_java_authoring": True,
+               "current_field": "kind", "completed_plan_fields": {}}
+    projected = java_data_messages([{"role": "user", "content": json.dumps(context)}],
+                                   "submit_java_construction_plan_1_value_kind")
+    task = json.loads(projected[-1]["content"])
+    assert task["current_field"] == "kind"
+    assert task["requirement"] == context["requirement"]
+    assert task["retained_typed_behavior"]["ui_owned_records"]
+    assert "available_fabric_callbacks" not in task
+    assert "inspected_target_api" not in task
+
+
+def test_callback_catalog_keeps_exact_sam_without_repeating_event_owner_and_field():
+    from minecraft_mod_ai.java_authoring_prompt import java_body_messages
+
+    event = {"event_id": "example.RealEvents#ACTION", "event_owner": "example.RealEvents",
+             "event_field": "ACTION", "event_interface": "example.RealEvents.Action",
+             "method": "onAction", "parameters": ["example.Player", "java.lang.String"],
+             "return_type": "boolean", "type_parameters": ["T extends example.Entity"],
+             "throws": ["java.io.IOException"]}
+    context = {"host_java_authoring": True, "available_fabric_callbacks": [event]}
+    frame = {"kind": "method", "prefix": "void start() {\n", "suffix": "\n}"}
+    task = json.loads(java_body_messages([{"role": "user", "content": json.dumps(context)}], frame)[-1]["content"])
+    assert task["available_fabric_callbacks"] == [{
+        key: value for key, value in event.items() if key not in {"event_owner", "event_field"}}]
+
+
+def test_runtime_bindings_are_scoped_to_current_work_without_dropping_owned_rules():
+    from minecraft_mod_ai.java_authoring_prompt import java_body_messages
+
+    context = {"host_java_authoring": True, "assigned_behavior": {
+        "state_reads": ["balance"], "runtime_state_reads": ["Nearby enemies"]},
+        "runtime_state_bindings": {"Nearby enemies": {"observation": "Nearby enemies"},
+                                   "Unrelated stock": {"observation": "Unrelated stock"},
+                                   "selected_location": {"binding": "typed_input"}},
+        "owned_runtime_records": [{"record": {"condition": "Only combat-ready players"}}]}
+    frame = {"kind": "method", "prefix": "void start() {\n", "suffix": "\n}"}
+    task = json.loads(java_body_messages([{"role": "user", "content": json.dumps(context)}], frame)[-1]["content"])
+    assert task["runtime_state_bindings"] == {
+        key: context["runtime_state_bindings"][key] for key in ("Nearby enemies", "selected_location")}
+    assert task["owned_runtime_records"] == context["owned_runtime_records"]
+
+
+def test_live_capacity_and_field_parse_retry_reach_executable_generated_java(tmp_path, monkeypatch):
+    from math import ceil
+    from types import SimpleNamespace
+    from test_first_pass_java_data_transport import DataRouter
+    from minecraft_mod_ai.model_adapters.base import AdapterConfig
+
+    monkeypatch.setattr("minecraft_mod_ai.model_context_budget.fit_messages_to_context",
+                        lambda messages, **kwargs: tuple(messages))
+    behavior, spec, context = _fixture()
+    behavior.update({"state_reads": ["balance"], "state_writes": ["balance"]})
+    task = {**_large_host_context(), "host_java_authoring": True, "assigned_behaviors": [behavior]}
+    task["available_fabric_callbacks"] *= 112
+    task["runtime_state_bindings"] = {name: {"observation": name} for name in ("balance", "other")}
+    context["host_state_access"] = task["host_state_access"]
+    counts, requests = [], []
+
+    def accounting(request):
+        # Deterministic constrained-runtime fixture, not a llama tokenizer claim.
+        tokens = ceil(len(json.dumps(request.messages, ensure_ascii=False)) / 3)
+        counts.append(tokens)
+        return SimpleNamespace(input_tokens=tokens, context_tokens=32768, remaining_tokens=32768-tokens)
+
+    class LiveCoder(SourceCoder):
+        rejected_field = False
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            def generate(request):
+                requests.append(request)
+                payload = json.loads(next(m["content"] for m in reversed(request.messages) if m["role"] == "user"))
+                assert payload["retained_typed_behavior"]["ui_owned_records"]
+                assert payload["owned_runtime_records"] == task["owned_runtime_records"]
+                assert payload["runtime_state_bindings"] == {"balance": {"observation": "balance"}}
+                assert len(payload["host_state_access"][0]["methods"]) == 2
+                if source_frame["kind"] == "field" and not self.rejected_field:
+                    self.rejected_field = True
+                    return json.dumps({"implementation": "import example.GameEvents; public class Feature {}"})
+                source = SourceCoder.generate_java_source(
+                    self, role, [{"role": "user", "content": json.dumps(payload)}],
+                    data_name=data_name, source_frame=source_frame)
+                return json.dumps({"implementation": source[len(source_frame["prefix"]):-len(source_frame["suffix"])]})
+
+            adapter = SimpleNamespace(config=AdapterConfig(role="coder", adapter="llama_cpp",
+                max_context=32768, max_new_tokens=8192), input_context_accounting=accounting, generate=generate)
+            return DataRouter(adapter).generate_java_source(
+                role, messages, data_name=data_name, source_frame=source_frame)
+
+    coder = LiveCoder()
+    source = compose_first_pass_java(coder, spec, [{"role": "user", "content": json.dumps(task)}],
+                                     construction_context=context, behaviors=[behavior])
+    _run_java(tmp_path, source)
+    assert coder.rejected_field and len(requests) == 5
+    correction = json.loads(requests[1].messages[-1]["content"])
+    assert correction["diagnostic"]
+    assert correction["immutable_signature"]["kind"] == "field"
+    assert "public class Feature" in correction["previous_implementation"]
+    assert max(counts) < 32768 - 2048
+    assert len(context["host_state_access"][0]["methods"]) == 2002
