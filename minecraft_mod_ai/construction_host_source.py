@@ -60,6 +60,7 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
           for name in (row.get(field) or ())),
     ))
     prompt = {
+        "host_java_authoring": bool(context.get("host_direct_feature_source")),
         "requirement": requirement,
         "original_feature_goal": str(spec.get("requirement") or ""),
         "assigned_behaviors": behavior_rows,

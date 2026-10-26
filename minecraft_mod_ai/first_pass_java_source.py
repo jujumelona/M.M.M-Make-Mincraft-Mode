@@ -33,6 +33,7 @@ from .model_output_atomicity_contract import assert_atomic_model_schema
 from .direct_feature_source import (
     direct_behavior_registrar, direct_feature_mode, member_implementation_instruction,
 )
+from .java_authoring_prompt import java_data_messages, java_body_messages
 
 _PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -151,7 +152,7 @@ def _one_structured_action(
         return _validate_native_arguments({field: values}, schema)
 
     response = router.generate_structured_data(
-        "coder", messages, data_name=name,
+        "coder", java_data_messages(messages, name), data_name=name,
         parameters=dict(schema),
     )
     if not isinstance(response, Mapping):
@@ -292,6 +293,7 @@ def compose_first_pass_java(
     direct_feature = direct_feature_mode(spec, construction_context)
     callback_api_index = None
     task = {
+        "host_java_authoring": direct_feature,
         "package": package_name,
         "class": class_name,
         "requirement": spec.get("requirement", ""),
@@ -674,6 +676,7 @@ def compose_first_pass_java(
             # Retain the full evidence once; only the task-specific metadata
             # is added here. No feature requirements or verified APIs are cut.
             unit_task = {
+                "host_java_authoring": direct_feature,
                 "target_path": task["target_path"],
                 "side": task["side"],
                 "class_declaration": declaration,
@@ -835,10 +838,7 @@ def compose_first_pass_java(
             )
             parts["source"] = frame["prefix"] + statement + frame["suffix"]
             return
-        # The surrounding user message already contains the full inspected API
-        # evidence and materialized project source. Re-sending **task duplicates
-        # the whole design/context on every body action (observed at 69K chars
-        # for a single registrar), exhausting the 9B model before one edit.
+        # Inference receives a projected view of this member's signatures and behavior.
         selected_host_unit = next((
             unit for unit in units
             if unit["kind"] == kind and unit["name"] == name
@@ -860,6 +860,7 @@ def compose_first_pass_java(
                         raise ValueError("NATIVE_MUTATION_RECEIPT_COLLECTOR_INVALID")
                     frame["host_runtime_mutation_receipts"] = collector
         body_task = {
+            "host_java_authoring": direct_feature,
             "target_path": task["target_path"],
             "class": class_name,
             "requirement": purpose if (
@@ -960,7 +961,7 @@ def compose_first_pass_java(
                 effect_receipt=bool(selected_host_unit.get("host_effect_behavior")),
             )
         else:
-            parts["source"] = router.generate_java_source("coder", body_messages,
+            parts["source"] = router.generate_java_source("coder", java_body_messages(body_messages, frame),
                 data_name=action, source_frame=frame)
     for index, (unit, parts) in enumerate(declarations, 1):
         kind, member_name = unit["kind"], unit["name"]

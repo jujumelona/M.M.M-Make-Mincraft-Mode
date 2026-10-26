@@ -11,6 +11,7 @@ from collections import ChainMap, Counter, defaultdict
 
 from .construction_type_contracts import canonical_type_name, class_accessible
 from .java_operation_ir import parameter_types
+from .java_authoring_api import scoped_body_api_records as scoped_body_api_records
 
 
 def prompt_symbol_record(row):
@@ -29,52 +30,6 @@ def prompt_symbol_record(row):
     if row.get('kind') in {'METHOD', 'CONSTRUCTOR'}:
         answer['parameters'] = parameter_types(row)
     return answer
-
-
-def scoped_body_api_records(evidence):
-    """Keep selected calls and the callable contracts of selected class types.
-
-    A CLASS anchor is not a method named after the class. Filtering its
-    members by (owner, CLASS, name) erased every actual method and all builder
-    dependencies. Follow only inspected type edges within this bounded view.
-    """
-    selected = {(row.get('owner'), row.get('kind'), row.get('name'))
-                for row in evidence.get('target_api', ()) if isinstance(row, dict)}
-    full_owners = {owner for owner, kind, _ in selected if kind == 'CLASS'}
-    records = {row.get('verified_class'): row for row in evidence.get('class_members', ())
-               if isinstance(row, dict) and isinstance(row.get('verified_class'), str)}
-    pending = sorted({owner for owner, _, _ in selected})
-    answer, seen = {}, set()
-    while pending:
-        owner = pending.pop(0)
-        mode = owner in full_owners
-        if (owner, mode) in seen or owner not in records:
-            continue
-        seen.add((owner, mode))
-        entry = records[owner]
-        members = [row for row in entry.get('members', ()) if isinstance(row, dict)
-                   and (mode or
-                        (row.get('owner'), row.get('kind'), row.get('name')) in selected)]
-        if not members and not mode:
-            continue
-        answer[owner] = {**entry, 'members': members, 'body_context_selects_only_target_api': True}
-        dependencies = set()
-        if mode:
-            # Static nested factories are accessed as types, even when no
-            # root method returns them. Use inspected enclosure, not names.
-            dependencies.update(name for name, nested in records.items()
-                if canonical_type_name((nested.get('declaration') or {}).get('enclosing_owner', '')) == owner)
-        for row in members:
-            types = [row.get('return_type', ''), *row.get('parameters', ()),
-                     row.get('generic_return_type', ''), *row.get('generic_parameters', ())]
-            for type_ in types:
-                dependencies.update(canonical_type_name(name) for name in re.findall(
-                    r'[A-Za-z_$][\w$]*(?:[./][A-Za-z_$][\w$]*)*', str(type_)))
-        for name in sorted(dependencies & records.keys() - full_owners):
-            full_owners.add(name)
-            pending.append(name)
-    return [answer[name] for name in sorted(answer)]
-
 
 
 class FileAPIEvidence:

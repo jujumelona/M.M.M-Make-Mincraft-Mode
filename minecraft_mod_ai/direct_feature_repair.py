@@ -11,6 +11,7 @@ from .java_member_diagnostics import (
 from .first_pass_java_declarations import validate_source_frame
 from .host_java_imports import host_add_verified_imports
 from .java_region_parser import _parse
+from .java_authoring_prompt import java_body_messages
 
 
 def _field_initializer(source, diagnostic, filename):
@@ -40,6 +41,7 @@ def _field_initializer(source, diagnostic, filename):
 def _repair_payload(context, source, original, frame, diagnostic):
     implementation = context.get("implementation_context") or {}
     return {
+        "host_java_authoring": True,
         **{key: implementation.get(key) for key in (
             "original_feature_goal", "implementation_requirements",
             "retained_typed_behavior", "owned_runtime_records")},
@@ -52,6 +54,7 @@ def _repair_payload(context, source, original, frame, diagnostic):
         "inspected_api": context.get("api_evidence") or {},
         "materialized_prerequisite_api": list(context.get("prerequisite_api") or ()),
         "host_state_access": list(context.get("state_access") or ()),
+        "available_fabric_callbacks": implementation.get("available_fabric_callbacks", []),
     }
 
 
@@ -73,8 +76,8 @@ def _write_repair(router, payload, frame, original, attempt):
             task["rejected_member"] = original
             task["correction_obligation"] = "The prior response made no change; fix the displayed compiler error."
         revised = router.generate_java_source(
-            "coder", [{"role": "system", "content": instruction},
-                      {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)}],
+            "coder", java_body_messages([{"role": "system", "content": instruction},
+                      {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)}], frame),
             data_name=f"repair_direct_feature_member_{attempt}_{retry}_{fingerprint}",
             source_frame=frame)
         validate_source_frame(revised, frame)
