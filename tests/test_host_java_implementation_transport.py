@@ -136,17 +136,18 @@ def test_persistent_invalid_response_stops_after_one_member_correction():
     assert len(router.requests) == 2
 
 
-def test_native_payload_enforces_json_without_installing_a_java_grammar():
+def test_native_payload_enforces_member_boundaries_without_a_full_java_peg():
     from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
+    from minecraft_mod_ai.java_fragment_grammar import native_java_implementation_grammar
 
     router = BackendRouter('{"implementation": "super(type, level);"}')
     _run(router)
     adapter = SimpleNamespace(config=SimpleNamespace(
         role="coder", model_id="local", max_new_tokens=2048, extra={}))
     payload = _server_payload(adapter, router.requests[0])
-    assert payload["response_format"] == {"type": "json_object"}
-    assert "json_schema" not in payload  # JSON envelope parsed and validated by host
-    assert "grammar" not in payload
+    assert "response_format" not in payload
+    assert "json_schema" not in payload  # No schema-derived source string cap.
+    assert payload["grammar"] == native_java_implementation_grammar("constructor")
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 

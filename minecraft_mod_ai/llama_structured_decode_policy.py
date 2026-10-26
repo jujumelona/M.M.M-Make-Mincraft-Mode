@@ -72,6 +72,13 @@ def _apply_llama_json_schema(
 
     if getattr(request, "response_format", None) != "json":
         return
+    from .java_fragment_grammar import constrain_java_implementation
+    if not constrain_java_implementation(payload, request):
+        _apply_json_object_schema(payload, request)
+
+
+def _apply_json_object_schema(payload, request):
+    """Structured data uses its finite JSON schema; Java uses its fragment decoder."""
 
     payload.pop("grammar", None)
     payload["response_format"] = {"type": "json_object"}
