@@ -38,7 +38,7 @@ def _unconnected(builder, body, declared_ids):
              if row["id"] in declared_ids}
     return [
         identifier for identifier, name in names.items()
-        if re.search(r"(?<![\\w$])" + re.escape(name) + r"(?![\\w$])", accepted) is None
+        if re.search(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", accepted) is None
     ]
 
 
@@ -60,6 +60,7 @@ def frontier_options(builder, current, body, options, declared_ids):
     outstanding = _unconnected(builder, body, declared_ids)
     ancestor = _waiting_ancestor(builder, current)
     blocked = bool(outstanding or ancestor)
+    builder.frontier_unconnected = outstanding
     builder.frontier_feedback = {}
     if blocked and current["kind"] not in {"class", "record", "enum"}:
         options = [op for op in options if op != "method"]
@@ -76,7 +77,9 @@ def frontier_options(builder, current, body, options, declared_ids):
 
 def helper_delegation_allowed(builder):
     """Use the same dependency invariant for expression-level new_helper."""
-    return _waiting_ancestor(builder, builder.member) is None
+    return (not getattr(builder, "frontier_unconnected", ())
+            and _waiting_ancestor(builder, builder.member) is None)
+
 
 def _purpose(value):
     return re.sub(r"\s+", " ", str(value).strip()).casefold()
