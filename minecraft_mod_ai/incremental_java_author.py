@@ -63,6 +63,7 @@ class IncrementalJavaBuilder:
         self.drafts, self.declaration_draft = [], {}
         self.value_stack, self.type_stack = [], []
         self.last_declaration = {}
+        self.frontier_feedback = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
 
@@ -87,6 +88,7 @@ class IncrementalJavaBuilder:
         task.update(value_stack=self.value_stack, type_stack=self.type_stack)
         from .incremental_java_progress import declaration_feedback
         task["last_declaration"] = declaration_feedback(self)
+        task["progress_frontier"] = self.frontier_feedback
         task.update(self.rejection)
         task.update(extra or {})
         return task
@@ -169,13 +171,15 @@ class IncrementalJavaBuilder:
     def author_block(self, member, scope, path, body=None):
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
-        from .incremental_java_progress import finish_new_members
+        from .incremental_java_progress import finish_new_members, frontier_options
         previous = self.member, self.scope, self.path, self.block, self.current_operation
         body = [] if body is None else body
         self.member, self.scope, self.path, self.block = member, scope, path, body
         blocked_declarations = set()
+        declared_helpers = set()
         while True:
             options = operation_options(member, scope, body, blocked_declarations)
+            options = frontier_options(self, member, body, options, declared_helpers)
             self.current_operation = ""
             operation = self.ask(choice("op", options), "kind")["op"]
             self.current_operation = operation
@@ -186,8 +190,11 @@ class IncrementalJavaBuilder:
                 continue
             if operation in {*DECLARATION_OPS, "constructor", "override"}:
                 pending_before = len(self.pending)
-                author_declaration(self, operation)
+                declared = author_declaration(self, operation)
                 finish_new_members(self, pending_before)
+                if (operation == "method" and self.last_declaration.get("outcome") == "created"
+                        and member["kind"] not in {"class", "record", "enum"}):
+                    declared_helpers.add(declared["id"])
                 if self.last_declaration.get("outcome") in {"reused", "active"}:
                     blocked_declarations.add(operation)
                 continue
