@@ -56,8 +56,8 @@ class ValueAuthor:
                    if allow_update and not writable
                    else ["local", "field", "index", "lookup"] if writable
                    else list(VALUE_KINDS))
-        if not helper_delegation_allowed(self.builder):
-            options.remove("new_helper") if "new_helper" in options else None
+        if not helper_delegation_allowed(self.builder) and "new_helper" in options:
+            options.remove("new_helper")
         excluded = set()
         if self.builder.scope.get("static"):
             excluded.add("this")
