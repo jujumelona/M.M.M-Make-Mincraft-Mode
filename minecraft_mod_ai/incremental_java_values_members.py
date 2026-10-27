@@ -132,16 +132,25 @@ def _can_declare(builder, receiver):
     return generated_type(builder, receiver.java_type) is not None
 
 
-def select_call(author, node, *, nonvoid=False, reference=False):
+def _select_call_contract(author, node, *, nonvoid, reference):
     builder = author.builder
+    allow_helper = True
     while True:
         receiver = select_receiver(author, "call_receiver", reference=reference)
         node.update(receiver=receiver.source, receiver_type=receiver.java_type)
         selected = select_member(builder, receiver, "METHOD", "call_member", nonvoid=nonvoid,
-                                 allow_helper=_can_declare(builder, receiver))
+                                 allow_helper=allow_helper and _can_declare(builder, receiver))
         if selected == "change_receiver":
             continue
         if selected == "new_helper":
             selected = author.helper_contract(nonvoid=nonvoid, owner=receiver.java_type, static=receiver.static)
-        node.update(method=selected["name"], call_contract=_signature(selected))
-        return receiver
+            if selected is None:
+                allow_helper = False
+                continue
+        return receiver, selected
+
+
+def select_call(author, node, *, nonvoid=False, reference=False):
+    receiver, selected = _select_call_contract(author, node, nonvoid=nonvoid, reference=reference)
+    node.update(method=selected["name"], call_contract=_signature(selected))
+    return receiver

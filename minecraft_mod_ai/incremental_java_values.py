@@ -29,17 +29,25 @@ class ValueAuthor:
         with value_frame(self.builder, slot, expected, writable=writable) as frame:
             frame["statement_expression"] = allow_update
             options = self._options(expected, writable=writable, allow_update=allow_update)
-            while True:
-                kind = request(self.builder, choice("kind", options), "value_kind")["kind"]
-                frame["kind"] = kind
-                if kind != "lookup":
-                    break
-                self.builder.lookup()
-            value = self._render(kind, expected, writable=writable)
+            value = self._value_choice(expected, options, writable=writable)
             validate_expression(value.source, allow_update=allow_update)
             if writable and not value.writable:
                 raise ValueError("JAVA_STRUCTURED_VALUE_NOT_WRITABLE")
             return value
+
+    def _value_choice(self, expected, options, *, writable):
+        while True:
+            kind = request(self.builder, choice("kind", options), "value_kind")["kind"]
+            self.frame["kind"] = kind
+            if kind == "lookup":
+                self.builder.lookup()
+                continue
+            value = self._render(kind, expected, writable=writable)
+            if value is not None:
+                return value
+            # A repeated active declaration is still this operand's work.
+            # Ask for its value instead of turning delegation into recursion.
+            options.remove(kind)
 
     def _options(self, expected, *, writable=False, allow_update=False):
         if allow_update and not writable:
@@ -153,6 +161,12 @@ class ValueAuthor:
         before = len(builder.pending)
         member = builder.new_method(owner=owner, purpose=details["purpose"], behavior=builder.member.get("behavior", {}), metadata=metadata)
         self.frame["helper"]["member_id"] = member["id"]
+        return self._finish_helper(member, before)
+
+    def _finish_helper(self, member, before):
+        if member.get("implementation_status") == "authoring":
+            return None
+        builder = self.builder
         previous = builder.value_stack
         try:
             builder.value_stack = []
@@ -170,6 +184,9 @@ class ValueAuthor:
 
     def _helper(self):
         contract = self.helper_contract(nonvoid=not self.frame.get("statement_expression", False))
+        return self._helper_value(contract) if contract is not None else None
+
+    def _helper_value(self, contract):
         receiver = contract["owner"] if contract.get("static") else "this"
         self.frame.update(receiver=receiver, receiver_type=contract["owner"], method=contract["name"], call_contract=_signature(contract))
         return self._invoke(self.frame)

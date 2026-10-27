@@ -213,3 +213,52 @@ def test_registration_repair_resumes_selection_after_cancel():
     assert node["id"] == "n1" and node["event_field"] == "ACTION"
     listener = next(member for member in builder.program["members"] if member.get("name") == node["handler"])
     assert listener["event"] == event
+
+
+def test_repeated_active_value_helper_resumes_value_instead_of_calling_itself(tmp_path):
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+    helper = {"id": "m2", "kind": "method", "owner": "Feature", "name": "mmmHelper2", "body": [],
+              "purpose": "Compute twelve", "behavior": {"behavior_id": "integration", "intent": "Compute a value"},
+              "implementation_status": "authoring", "metadata": method_metadata("int")}
+
+    def continue_value(schema, task):
+        assert "new_helper" not in schema["properties"]["kind"]["enum"]
+        assert task["last_declaration"]["next_action"] == "implement_current_work"
+        return {"kind": "literal"}
+    steps = [("value_kind", {"kind": "new_helper"}), ("helper_return_type", {"type": "int"}),
+             ("value_helper", {"purpose": "Compute twelve", "static": False}), ("parameters_count", {"count": 0}),
+             ("value_kind", continue_value), ("literal_type", {"type": "int"}), ("literal", {"value": 12})]
+    builder = real_builder(steps, members=[helper])
+    builder.member = builder.program["members"][-1]
+    builder.scope = initial_scope(builder.member)
+    value = builder.expression("value", "int")
+    assert value == "12"
+    assert len(builder.program["members"]) == 2
+    compile_run(tmp_path, {"demo/Feature.java": "package demo; public class Feature {int mmmHelper2(){return "
+        + value + ";}public static void main(String[] args){if(new Feature().mmmHelper2()!=12)throw new AssertionError();}}"}, "demo.Feature")
+
+
+def test_active_helper_request_in_call_resumes_selection_of_existing_methods(tmp_path):
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+    active = {"id": "m2", "kind": "method", "owner": "Feature", "name": "mmmHelper2", "body": [],
+              "purpose": "Compute twelve", "behavior": {"behavior_id": "integration", "intent": "Compute a value"},
+              "implementation_status": "authoring", "metadata": method_metadata("int")}
+    complete = {**deepcopy(active), "id": "m3", "name": "mmmHelper3", "purpose": "Read computed result",
+                "implementation_status": "complete"}
+
+    def choose_completed(schema, task):
+        assert "new_helper" not in schema["properties"]["member_id"]["enum"]
+        assert task["last_declaration"]["next_action"] == "implement_current_work"
+        return {"member_id": "m3"}
+    steps = [("value_kind", {"kind": "call"}), ("call_receiver", {"receiver_kind": "this"}),
+             ("call_member", {"member_id": "new_helper"}), ("helper_return_type", {"type": "int"}),
+             ("value_helper", {"purpose": "Compute twelve", "static": False}), ("parameters_count", {"count": 0}),
+             ("call_receiver", {"receiver_kind": "this"}), ("call_member", choose_completed)]
+    builder = real_builder(steps, members=[active, complete])
+    builder.member = builder.program["members"][1]
+    builder.scope = initial_scope(builder.member)
+    value = builder.expression("value", "int")
+    assert value == "this.mmmHelper3()"
+    compile_run(tmp_path, {"demo/Feature.java": "package demo; public class Feature {int mmmHelper3(){return 12;}"
+        + "int mmmHelper2(){return " + value
+        + ";}public static void main(String[] args){if(new Feature().mmmHelper2()!=12)throw new AssertionError();}}"}, "demo.Feature")
