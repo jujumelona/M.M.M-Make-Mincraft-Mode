@@ -11,7 +11,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from .remote_store_defaults import apply_remote_store_defaults
+from .remote_store_defaults import apply_remote_store_defaults, retired_remote_repository
 
 CONSENT_ENV = "MMM_REMOTE_TRAJECTORY_STORE_CONSENT"
 _SENSITIVE_KEY_PARTS = (
@@ -48,7 +48,7 @@ apply_remote_store_defaults()
 def remote_write_allowed() -> bool:
     """Return True only for the explicit affirmative Colab/runtime choice."""
 
-    return os.environ.get(CONSENT_ENV, "0").strip().lower() in {
+    return not retired_remote_repository() and os.environ.get(CONSENT_ENV, "0").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -62,8 +62,8 @@ def require_remote_write_consent() -> None:
     if not remote_write_allowed():
         raise PermissionError(
             "Remote trajectory/temporary-skill persistence is disabled. "
-            "Enable ALLOW_REMOTE_TRAJECTORY_STORE explicitly in the Colab "
-            "configuration cell before setup if you want remote persistence."
+            "Configure a separate explicitly authorized remote destination and consent "
+            "outside the standard MMM Colab notebook to enable remote persistence."
         )
 
 

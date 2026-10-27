@@ -8,12 +8,28 @@ GitHub token from Colab Secrets into the current process environment.
 """
 
 import os
+from urllib.parse import urlsplit
 
-DEFAULT_REMOTE_STORE_BACKEND = "github"
-DEFAULT_REMOTE_STORE_REPO = "jujumelona/mmm-data"
+DEFAULT_REMOTE_STORE_BACKEND = "none"
+DEFAULT_REMOTE_STORE_REPO = ""
 DEFAULT_REMOTE_STORE_BRANCH = "main"
 _CONSENT_ENV = "MMM_REMOTE_TRAJECTORY_STORE_CONSENT"
 _TRUE = {"1", "true", "yes", "on"}
+
+
+def retired_remote_repository() -> bool:
+    """Reject the former MMM data repository, which now belongs to another project."""
+    if os.environ.get("MMM_TRAJECTORY_STORE_BACKEND", "none").strip().casefold() != "github":
+        return False
+    target = os.environ.get("MMM_TRAJECTORY_STORE_REPO", "").strip().casefold()
+    if "://" in target:
+        parsed = urlsplit(target)
+        if parsed.hostname not in {"github.com", "www.github.com"}:
+            return False
+        target = parsed.path.lstrip("/")
+    elif target.startswith("github.com/"):
+        target = target[len("github.com/"):]
+    return target.rstrip("/").removesuffix(".git").rstrip("/") == "jujumelona/mmm-data"
 
 
 def _consented() -> bool:
@@ -23,7 +39,11 @@ def _consented() -> bool:
 def _load_colab_github_token_if_available() -> None:
     """Use an existing environment token or an opted-in Colab Secret, never persist it."""
 
-    if not _consented():
+    if not _consented() or retired_remote_repository():
+        return
+    if os.environ.get("MMM_TRAJECTORY_STORE_BACKEND", "none").casefold() != "github":
+        return
+    if not os.environ.get("MMM_TRAJECTORY_STORE_REPO", "").strip():
         return
     if os.environ.get("MMM_TRAJECTORY_GITHUB_TOKEN", "").strip() or os.environ.get(
         "GITHUB_TOKEN", ""
@@ -58,4 +78,5 @@ __all__ = [
     "DEFAULT_REMOTE_STORE_BRANCH",
     "DEFAULT_REMOTE_STORE_REPO",
     "apply_remote_store_defaults",
+    "retired_remote_repository",
 ]

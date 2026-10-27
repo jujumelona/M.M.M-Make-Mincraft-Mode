@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .remote_store_defaults import retired_remote_repository
 from .remote_skill_store_consent import (
     remote_write_allowed,
     require_remote_write_consent,
@@ -271,6 +272,8 @@ def _merge_rows(existing: Sequence[Mapping[str, Any]], pending: Sequence[Mapping
 
 
 def _github_request(method: str, path: str, *, body: Mapping[str, Any] | None = None) -> Any:
+    if retired_remote_repository():
+        raise PermissionError("Retired MMM data repository is no longer an allowed trajectory destination.")
     token = _github_token()
     if not token:
         raise RuntimeError("GitHub trajectory store requires GITHUB_TOKEN or MMM_TRAJECTORY_GITHUB_TOKEN.")
