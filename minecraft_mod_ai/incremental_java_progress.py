@@ -7,7 +7,6 @@ from .incremental_java_context import _generated
 from .incremental_java_model import initial_scope
 
 
-
 def _observable_work(body, members, visited=frozenset()):
     """Follow generated-helper calls to executable leaves, not just declarations.
 
@@ -47,8 +46,8 @@ def _linked_in_ast(node, name):
     if isinstance(node, list):
         return any(_linked_in_ast(value, name) for value in node)
     if isinstance(node, str):
-        return bool(re.search(r"(?<![\\w$])" + re.escape(name) + r"\\s*\\("
-                              r"|::" + re.escape(name) + r"(?![\\w$])", node))
+        return bool(re.search(r"(?<![\w$])" + re.escape(name) + r"\s*\("
+                              r"|::" + re.escape(name) + r"(?![\w$])", node))
     return False
 
 
