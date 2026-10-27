@@ -201,7 +201,8 @@ def declaration_feedback(builder):
 def finish_member(builder, member):
     """A child's locals, open operations, and diagnostics cannot leak to its caller."""
     previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
-                builder.rejection, builder.last_declaration)
+                builder.rejection, builder.last_declaration,
+                builder.frontier_unconnected, builder.frontier_feedback)
     with builder.declaration_scope(member):
         builder.current_operation, builder.declaration_draft = "", {}
         builder.latest_api, builder.rejection, builder.last_declaration = {}, {}, {}
@@ -214,7 +215,8 @@ def finish_member(builder, member):
             member["implementation_status"] = "complete"
         finally:
             (builder.current_operation, builder.declaration_draft, builder.latest_api,
-             builder.rejection, builder.last_declaration) = previous
+             builder.rejection, builder.last_declaration,
+             builder.frontier_unconnected, builder.frontier_feedback) = previous
 
 
 def finish_new_members(builder, pending_before):
