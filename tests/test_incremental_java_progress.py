@@ -265,7 +265,7 @@ def test_frontier_rejects_unconnected_distinct_helpers_but_accepts_connected_gro
     builder = SimpleNamespace(program={"members": [current, helper]}, member=current)
     choices = ["method", "call", "if", "complete"]
     blocked = frontier_options(builder, current, current["body"], choices, {"child"})
-    assert blocked == ["call", "if", "complete"]
+    assert blocked == ["call", "if"]
     assert not helper_delegation_allowed(builder)
     assert builder.frontier_feedback["unconnected_member_ids"] == ["child"]
     assert builder.frontier_feedback["state"] == "implementation_required"
@@ -354,3 +354,46 @@ def test_helper_name_in_string_literal_is_not_a_call_reference():
     builder = SimpleNamespace(program={"members": [owner, child]}, member=owner)
     # The parser must not take an unrelated literal as a completed dependency.
     assert "method" not in frontier_options(builder, owner, owner["body"], ["method", "call"], {"helper"})
+
+
+
+def test_unconnected_helper_cannot_complete_parent_before_linking():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    parent = {"id": "root", "kind": "method", "body": []}
+    helper = {"id": "helper", "name": "mmmHelper", "kind": "method",
+              "created_by": "root", "body": [], "implementation_status": "complete"}
+    builder = SimpleNamespace(program={"members": [parent, helper]}, member=parent)
+    pending = frontier_options(builder, parent, [], ["method", "call", "complete"], set())
+    assert pending == ["call"]
+    parent["body"].append({"op": "call", "method": "mmmHelper", "arguments": []})
+    assert frontier_options(builder, parent, parent["body"], ["method", "call", "complete"], set()) == [
+        "method", "call", "complete"
+    ]
+
+
+def test_helper_intent_text_does_not_count_as_code_usage():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    parent = {"id": "root", "kind": "method",
+              "body": [{"op": "local", "purpose": "Call helperTarget() later", "value": "0"}]}
+    helper = {"id": "helper", "name": "helperTarget", "kind": "method",
+              "created_by": "root", "body": []}
+    builder = SimpleNamespace(program={"members": [parent, helper]}, member=parent)
+    assert frontier_options(builder, parent, parent["body"], ["method", "call", "complete"], set()) == ["call"]
+
+
+def test_created_helper_in_nested_body_is_not_lost_to_parent_frontier():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    parent = {"id": "root", "kind": "method",
+              "body": [{"op": "if", "condition": "true", "body": []}]}
+    helper = {"id": "helper", "name": "innerHelper", "kind": "method",
+              "created_by": "root", "body": []}
+    builder = SimpleNamespace(program={"members": [parent, helper]}, member=parent)
+    assert frontier_options(builder, parent, parent["body"], ["method", "call", "complete"], set()) == ["call"]
+    parent["body"][0]["body"].append({"op": "call", "method": "innerHelper", "arguments": []})
+    assert "complete" in frontier_options(builder, parent, parent["body"], ["method", "call", "complete"], set())

@@ -7,52 +7,75 @@ from .incremental_java_context import _generated
 from .incremental_java_model import initial_scope
 
 
-def _observable_work(body, members, visited=frozenset()):
-    """Follow generated-helper calls to executable leaves, not just declarations.
+_REFERENCE_FIELDS = frozenset((
+    "body", "otherwise", "finally", "cases", "catches", "value",
+    "condition", "target", "iterable", "update", "monitor", "selector",
+    "arguments", "initializer", "receiver", "label",
+))
+_BLOCK_FIELDS = frozenset(("body", "otherwise", "finally", "cases", "catches"))
+_JAVA_LITERAL = re.compile(r""""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'""")
 
-    A chain of helpers that only calls itself (or another empty helper) is not
-    an effect. This graph walk terminates for cyclic call graphs.
-    """
-    by_name = {row["name"]: row for row in members
-               if row.get("kind") == "method" and row.get("name")}
-    for node in body or ():
-        if not isinstance(node, dict):
+
+def _operation_effect(node, members, visited):
+    operation = node.get("op")
+    if operation in {"assign", "register", "throw", "constructor_call"}:
+        return True
+    if operation == "return":
+        return bool(node.get("value"))
+    if operation != "call":
+        return False
+    callee = next((row for row in members
+                   if row.get("kind") == "method" and row.get("name") == node.get("method")), None)
+    if callee is None:
+        return True  # External API calls remain subject to compiler verification.
+    if callee["id"] in visited:
+        return False
+    return _observable_work(callee.get("body"), members, visited | {callee["id"]})
+
+
+def _nested_effect(node, members, visited):
+    for key, child in node.items():
+        if key not in _BLOCK_FIELDS:
             continue
-        operation = node.get("op")
-        if operation in {"assign", "register", "throw", "constructor_call"}:
+        if isinstance(child, dict):
+            child = [child]
+        if isinstance(child, list) and _observable_work(child, members, visited):
             return True
-        if operation == "return" and node.get("value"):
-            return True
-        if operation == "call":
-            callee = by_name.get(node.get("method"))
-            if callee is None:
-                return True  # An API call; the normal verifier still owns correctness.
-            if (callee["id"] not in visited and
-                    _observable_work(callee.get("body"), members, visited | {callee["id"]})):
-                return True
-        for child in node.values():
-            if isinstance(child, list) and _observable_work(child, members, visited):
-                return True
-            if isinstance(child, dict) and _observable_work([child], members, visited):
-                return True
     return False
+
+
+def _observable_work(body, members, visited=frozenset()):
+    """Cyclic generated-call chains cannot fake executable implementation work."""
+    for node in body or ():
+        if isinstance(node, dict) and (
+            _operation_effect(node, members, visited)
+            or _nested_effect(node, members, visited)
+        ):
+            return True
+    return False
+
+
+def _java_reference(expression, name):
+    source = _JAVA_LITERAL.sub("", expression)
+    escaped = re.escape(name)
+    return bool(re.search(r"(?<![\w$])" + escaped + r"\s*\("
+                          r"|::" + escaped + r"(?![\w$])", source))
 
 
 def _linked_in_ast(node, name):
-    """A matching string literal is not proof of calling a helper."""
-    if isinstance(node, dict):
-        if ((node.get("op") == "call" and node.get("method") == name)
-                or (node.get("op") == "register" and node.get("handler") == name)):
-            return True
-        return any(_linked_in_ast(value, name) for value in node.values())
-    if isinstance(node, list):
-        return any(_linked_in_ast(value, name) for value in node)
+    """Only accepted statement and expression fields prove a helper reference."""
     if isinstance(node, str):
-        # A name inside a quoted Java string/character literal is not a call.
-        expression = re.sub(r""" "(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*' """.strip(), "", node)
-        return bool(re.search(r"(?<![\w$])" + re.escape(name) + r"\s*\("
-                              r"|::" + re.escape(name) + r"(?![\w$])", expression))
-    return False
+        return _java_reference(node, name)
+    if isinstance(node, list):
+        return any(_linked_in_ast(item, name) for item in node)
+    if not isinstance(node, dict):
+        return False
+    if node.get("op") == "call" and node.get("method") == name:
+        return True
+    if node.get("op") == "register" and node.get("handler") == name:
+        return True
+    return any(_linked_in_ast(value, name) for key, value in node.items()
+               if key in _REFERENCE_FIELDS)
 
 
 def _unconnected(builder, body, declared_ids):
@@ -92,12 +115,12 @@ def frontier_options(builder, current, body, options, declared_ids):
     """
     outstanding = _unconnected(builder, body, declared_ids)
     ancestor = _waiting_ancestor(builder, current)
-    blocked = bool(outstanding or ancestor)
     builder.frontier_unconnected = (outstanding if current["kind"] not in
                                     {"class", "record", "enum"} else [])
     builder.frontier_feedback = {}
-    if blocked and current["kind"] not in {"class", "record", "enum"}:
-        options = [op for op in options if op != "method"]
+    if (outstanding or ancestor) and current["kind"] not in {"class", "record", "enum"}:
+        excluded = {"method", "complete"} if outstanding else {"method"}
+        options = [op for op in options if op not in excluded]
         builder.frontier_feedback = {
             "state": "implementation_required",
             "unconnected_member_ids": outstanding,
@@ -113,6 +136,12 @@ def helper_delegation_allowed(builder):
     """Use the same dependency invariant for expression-level new_helper."""
     return (not getattr(builder, "frontier_unconnected", ())
             and _waiting_ancestor(builder, builder.member) is None)
+
+
+def constrain_helper_value_choices(builder, options):
+    if not helper_delegation_allowed(builder):
+        return [name for name in options if name != "new_helper"]
+    return options
 
 
 def _purpose(value):
@@ -155,7 +184,7 @@ def declare_method(builder, *, owner, purpose, behavior, metadata, name=None, ki
     method = {"id": identifier, "owner": owner, "kind": kind,
               "name": name or "mmmHelper" + identifier[1:], "metadata": metadata,
               "purpose": purpose, "behavior": behavior, "body": [], "implementation_status": "pending",
-              "created_by": (builder.member or {}).get("id")}
+              "created_by": builder.member["id"]}
     builder.program["members"].append(method)
     builder.pending.append(method)
     record_declaration(builder, method, kind)

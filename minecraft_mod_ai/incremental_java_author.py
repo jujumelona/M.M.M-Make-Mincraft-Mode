@@ -178,10 +178,9 @@ class IncrementalJavaBuilder:
         body = [] if body is None else body
         self.member, self.scope, self.path, self.block = member, scope, path, body
         blocked_declarations = set()
-        declared_helpers = set()
         while True:
             options = operation_options(member, scope, body, blocked_declarations)
-            options = frontier_options(self, member, body, options, declared_helpers)
+            options = frontier_options(self, member, body, options, set())
             self.current_operation = ""
             operation = self.ask(choice("op", options), "kind")["op"]
             self.current_operation = operation
@@ -192,11 +191,8 @@ class IncrementalJavaBuilder:
                 continue
             if operation in {*DECLARATION_OPS, "constructor", "override"}:
                 pending_before = len(self.pending)
-                declared = author_declaration(self, operation)
+                author_declaration(self, operation)
                 finish_new_members(self, pending_before)
-                if (operation == "method" and self.last_declaration.get("outcome") == "created"
-                        and member["kind"] not in {"class", "record", "enum"}):
-                    declared_helpers.add(declared["id"])
                 if self.last_declaration.get("outcome") in {"reused", "active"}:
                     blocked_declarations.add(operation)
                 continue

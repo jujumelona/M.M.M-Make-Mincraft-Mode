@@ -50,14 +50,13 @@ class ValueAuthor:
             options.remove(kind)
 
     def _options(self, expected, *, writable=False, allow_update=False):
-        from .incremental_java_progress import helper_delegation_allowed
+        from .incremental_java_progress import constrain_helper_value_choices
 
         options = (["update", "call", "new", "new_helper", "lookup"]
                    if allow_update and not writable
                    else ["local", "field", "index", "lookup"] if writable
                    else list(VALUE_KINDS))
-        if not helper_delegation_allowed(self.builder) and "new_helper" in options:
-            options.remove("new_helper")
+        options = constrain_helper_value_choices(self.builder, options)
         excluded = set()
         if self.builder.scope.get("static"):
             excluded.add("this")
