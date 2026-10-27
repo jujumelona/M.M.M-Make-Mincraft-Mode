@@ -41,7 +41,8 @@ def _observable_work(body, members, visited=frozenset()):
 def _linked_in_ast(node, name):
     """A matching string literal is not proof of calling a helper."""
     if isinstance(node, dict):
-        if node.get("op") == "call" and node.get("method") == name:
+        if ((node.get("op") == "call" and node.get("method") == name)
+                or (node.get("op") == "register" and node.get("handler") == name)):
             return True
         return any(_linked_in_ast(value, name) for value in node.values())
     if isinstance(node, list):
@@ -55,11 +56,22 @@ def _linked_in_ast(node, name):
 
 
 def _unconnected(builder, body, declared_ids):
-    """Helpers become connected only through accepted Java code references."""
-    return [
-        row["id"] for row in builder.program["members"]
-        if row["id"] in declared_ids and not _linked_in_ast(body, row["name"])
-    ]
+    """Track every helper created by this member, including nested lexical blocks."""
+    members = builder.program["members"]
+    created = set(declared_ids)
+    created.update(row["id"] for row in members
+                   if row.get("created_by") == builder.member["id"] and not row.get("event"))
+    outstanding = []
+    for target in members:
+        if target["id"] not in created:
+            continue
+        # A helper may be connected from a sibling listener, not only its
+        # lexical parent. Ignore the helper's own body as proof of connection.
+        sources = [body, getattr(builder, "drafts", [])]
+        sources.extend(row.get("body", []) for row in members if row is not target)
+        if not any(_linked_in_ast(source, target["name"]) for source in sources):
+            outstanding.append(target["id"])
+    return outstanding
 
 
 def _waiting_ancestor(builder, current):
@@ -142,7 +154,8 @@ def declare_method(builder, *, owner, purpose, behavior, metadata, name=None, ki
     identifier = builder.allocate("m")
     method = {"id": identifier, "owner": owner, "kind": kind,
               "name": name or "mmmHelper" + identifier[1:], "metadata": metadata,
-              "purpose": purpose, "behavior": behavior, "body": [], "implementation_status": "pending"}
+              "purpose": purpose, "behavior": behavior, "body": [], "implementation_status": "pending",
+              "created_by": (builder.member or {}).get("id")}
     builder.program["members"].append(method)
     builder.pending.append(method)
     record_declaration(builder, method, kind)
