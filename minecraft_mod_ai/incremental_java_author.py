@@ -63,6 +63,7 @@ class IncrementalJavaBuilder:
         self.drafts, self.declaration_draft = [], {}
         self.value_stack, self.type_stack = [], []
         self.last_declaration = {}
+        self.frontier_unconnected = []
         self.frontier_feedback = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
@@ -172,7 +173,8 @@ class IncrementalJavaBuilder:
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
         from .incremental_java_progress import finish_new_members, frontier_options
-        previous = self.member, self.scope, self.path, self.block, self.current_operation
+        previous = (self.member, self.scope, self.path, self.block, self.current_operation,
+                    self.frontier_unconnected, self.frontier_feedback)
         body = [] if body is None else body
         self.member, self.scope, self.path, self.block = member, scope, path, body
         blocked_declarations = set()
@@ -209,7 +211,8 @@ class IncrementalJavaBuilder:
             finish_new_members(self, pending_before)
             if operation in {"return", "throw", "break", "continue"}:
                 break
-        self.member, self.scope, self.path, self.block, self.current_operation = previous
+        (self.member, self.scope, self.path, self.block, self.current_operation,
+         self.frontier_unconnected, self.frontier_feedback) = previous
         return body
 
     def finish(self):
