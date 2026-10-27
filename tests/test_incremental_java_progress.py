@@ -244,9 +244,13 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
     scope = initial_scope(member)
     scope["locals"].append({"type": "int", "name": "parentValue"})
     builder.drafts = [{"id": "parentGuard", "op": "if", "condition": "true"}]
+    builder.frontier_unconnected = ["previousHelper"]
+    builder.frontier_feedback = {"state": "outer_block"}
     body = builder.author_block(member, scope, ["parentGuard", "body"])
     assert body[0]["value"] == "parentValue"
     assert builder.drafts == [{"id": "parentGuard", "op": "if", "condition": "true"}]
+    assert builder.frontier_unconnected == ["previousHelper"]
+    assert builder.frontier_feedback == {"state": "outer_block"}
 
 
 def test_frontier_rejects_unconnected_distinct_helpers_but_accepts_connected_growth():
