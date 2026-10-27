@@ -7,6 +7,77 @@ from .incremental_java_context import _generated
 from .incremental_java_model import initial_scope
 
 
+
+def _observable_work(body):
+    """A declaration is not implementation progress.
+
+    Ignore local-only scaffolding, empty returns, and unopened control blocks.
+    Nested effects still count: a guard containing a call is real work.
+    """
+    for node in body or ():
+        if not isinstance(node, dict):
+            continue
+        if node.get("op") in {"call", "assign", "register", "throw", "constructor_call"}:
+            return True
+        if node.get("op") == "return" and node.get("value"):
+            return True
+        for value in node.values():
+            if isinstance(value, list) and _observable_work(value):
+                return True
+            if isinstance(value, dict) and _observable_work([value]):
+                return True
+    return False
+
+
+def _unconnected(builder, body, declared_ids):
+    """A helper is connected by a real accepted reference, not by being declared."""
+    import json
+
+    accepted = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    names = {row["id"]: row["name"] for row in builder.program["members"]
+             if row["id"] in declared_ids}
+    return [
+        identifier for identifier, name in names.items()
+        if re.search(r"(?<![\\w$])" + re.escape(name) + r"(?![\\w$])", accepted) is None
+    ]
+
+
+def _waiting_ancestor(builder, current):
+    """Prevent an unimplemented helper from outsourcing its entire body forever."""
+    return next((row for row in builder.program["members"]
+                 if row is not current and row.get("implementation_status") == "authoring"
+                 and not row.get("registrar") and row.get("kind") in {"method", "constructor"}
+                 and not _observable_work(row.get("body"))), None)
+
+
+def frontier_options(builder, current, body, options, declared_ids):
+    """Host-owned liveness gate; independent of feature names and model prompts.
+
+    There is deliberately no arbitrary number-of-operations limit. New helpers
+    remain possible after their predecessors are connected. The host refuses
+    recursive delegation without implementation and orphan-declaration growth.
+    """
+    outstanding = _unconnected(builder, body, declared_ids)
+    ancestor = _waiting_ancestor(builder, current)
+    blocked = bool(outstanding or ancestor)
+    builder.frontier_feedback = {}
+    if blocked and current["kind"] not in {"class", "record", "enum"}:
+        options = [op for op in options if op != "method"]
+        builder.frontier_feedback = {
+            "state": "implementation_required",
+            "unconnected_member_ids": outstanding,
+            "waiting_ancestor_id": ancestor["id"] if ancestor else None,
+            "next_action": ("Reference an already completed helper in an executable "
+                            "operation, or implement this method directly; a new "
+                            "declaration is not an implementation."),
+        }
+    return options
+
+
+def helper_delegation_allowed(builder):
+    """Use the same dependency invariant for expression-level new_helper."""
+    return _waiting_ancestor(builder, builder.member) is None
+
 def _purpose(value):
     return re.sub(r"\s+", " ", str(value).strip()).casefold()
 
