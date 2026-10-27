@@ -47,8 +47,10 @@ def _linked_in_ast(node, name):
     if isinstance(node, list):
         return any(_linked_in_ast(value, name) for value in node)
     if isinstance(node, str):
+        # A name inside a quoted Java string/character literal is not a call.
+        expression = re.sub(r""" "(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*' """.strip(), "", node)
         return bool(re.search(r"(?<![\w$])" + re.escape(name) + r"\s*\("
-                              r"|::" + re.escape(name) + r"(?![\w$])", node))
+                              r"|::" + re.escape(name) + r"(?![\w$])", expression))
     return False
 
 
