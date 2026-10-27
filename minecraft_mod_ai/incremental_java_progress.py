@@ -67,7 +67,7 @@ def _unconnected(builder, body, declared_ids):
             continue
         # A helper may be connected from a sibling listener, not only its
         # lexical parent. Ignore the helper's own body as proof of connection.
-        sources = [body, getattr(builder, "drafts", [])]
+        sources = [body]
         sources.extend(row.get("body", []) for row in members if row is not target)
         if not any(_linked_in_ast(source, target["name"]) for source in sources):
             outstanding.append(target["id"])
