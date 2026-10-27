@@ -2,6 +2,7 @@
 from collections import deque
 import importlib
 import json
+from incremental_value_model import structured_values
 import shutil
 import subprocess
 
@@ -96,7 +97,7 @@ class Router:
         assert data_name == expected
         return reply
 
-    def generate_java_source(self, *args, **kwargs):
+    def value_answer(self, *args, **kwargs):
         raise AssertionError("Rule production must never request Java source")
 
 
@@ -148,6 +149,7 @@ def compile_run(tmp_path, source, probe, *, callback_return="void", extra_source
     assert result.returncode == 0, result.stderr
 
 
+@structured_values
 class IncrementalSourceRouter:
     """Script operation pages while allowing source only for leaf expressions."""
 
@@ -164,7 +166,7 @@ class IncrementalSourceRouter:
         self.requests.append(task)
         return reply
 
-    def generate_java_source(self, role, messages, *, data_name, source_frame):
+    def value_answer(self, role, messages, *, data_name, source_frame):
         task = json.loads(messages[-1]["content"])
         slot, expression = self.expressions.popleft()
         assert source_frame["kind"] == "field"
@@ -191,7 +193,7 @@ def _boundary_source_router(compiler_failure):
     expressions = [
         ("condition", "{input}.isReady() && {input}.getGameTime() > 0 && {input}.getGameTime() % 10 == 0"),
         ("target", "{input}.effects"),
-        ("value", "missingAmount" if compiler_failure else "1"),
+        ("value", '"missingAmount"' if compiler_failure else "1"),
     ]
     if compiler_failure:
         steps.append(("repair_target", {"repair": "mapped_operand"}))
@@ -268,9 +270,9 @@ def test_production_construction_authors_source_and_repairs_the_failing_member(t
     assert len(router.expression_requests) == 3 + int(compiler_failure)
     if repairs:
         assert repairs[0]["repair_slot"] == "value"
-        assert repairs[0]["rejected_operation"]["value"] == "missingAmount"
+        assert repairs[0]["rejected_operation"]["value"] == '"missingAmount"'
         assert repairs[0]["rejected_operation"]["operator"] == "+="
-        assert "cannot find symbol" in repairs[0]["javac_diagnostic"]
+        assert "String" in repairs[0]["javac_diagnostic"]
     assert not router.steps and not router.expressions
     assert list((tmp_path / ".mmm/construction_host_files").glob("*.json"))
 
@@ -283,6 +285,7 @@ def test_tracking_context_excludes_scalar_temporaries():
     gate = p.value("literal", type="boolean", value=True)
     temporary = p.value("literal", type="java.lang.String", value="all-worlds")
 
+    @structured_values
     class Author:
         def ask(self, name, purpose, properties, **context):
             if name == "rule_tracking_context":
@@ -370,6 +373,7 @@ def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
         ("rule_effect_operation", {"operation": "complete"}),
     ])
 
+    @structured_values
     class Replay:
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             assert replies, f"Unexpected extra inference for {data_name}"
@@ -377,7 +381,7 @@ def test_rule_materializes_computed_inventory_and_executes_real_gate(tmp_path):
             assert data_name == expected, (data_name, expected)
             return value
 
-        def generate_java_source(self, *args, **kwargs):
+        def value_answer(self, *args, **kwargs):
             raise AssertionError("Host must own Java syntax")
 
     source = compose_rule_feature(Replay(), {

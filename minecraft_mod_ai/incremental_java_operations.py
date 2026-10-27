@@ -4,8 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from .incremental_java_schema import SCHEMAS
-from .incremental_java_render import validate_expression, validate_type, validate_value_type
-from .java_operation_ir import identifier
+from .incremental_java_render import validate_type
 
 
 def _child(builder, node, key, *, scope=None, **changes):
@@ -22,24 +21,16 @@ def _local(builder, node):
     builder.scope["locals"].append({"type": values["type"], "name": node["name"]})
 
 
-def _validate_call(values):
-    identifier(values["method"])
-    if values["receiver"] and values["receiver"] != "super":
-        validate_expression(values["receiver"])
-    if values["result_type"]:
-        validate_value_type(values["result_type"], allow_void=True)
-
-
 def _call(builder, node):
-    values = builder.checked(SCHEMAS["call"], "call", _validate_call)
-    result_type = values["result_type"].strip()
-    if result_type == "void":
-        result_type = ""
-    if result_type:
-        validate_type(result_type)
-    node.update(values, result_type=result_type)
+    from .incremental_java_values import author_call_head
+    author_call_head(builder, node)
     builder.arguments(node)
-    if result_type:
+    contract = node["call_contract"]
+    returns = contract.get("generic_return_type", contract.get("return_type", "void"))
+    node["result_type"] = ""
+    if returns != "void" and builder.enabled("call_capture"):
+        result_type = builder.select_java_type("call_result_type", expected=returns)
+        node["result_type"] = result_type
         node["name"] = "mmmValue" + builder.allocate("v")[1:]
         builder.scope["locals"].append({"type": result_type, "name": node["name"]})
 
@@ -47,7 +38,7 @@ def _call(builder, node):
 def _assign(builder, node):
     node.update(builder.ask(SCHEMAS["assign"], "assign"))
     node["target"] = builder.expression("target")
-    node["value"] = builder.expression("value")
+    node["value"] = builder.expression("value", getattr(builder, "last_value_type", "java.lang.Object"))
 
 
 def _conditional(builder, node):

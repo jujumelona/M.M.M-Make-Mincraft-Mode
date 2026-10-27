@@ -1,4 +1,4 @@
-"""Small declaration/operation data pages; Java expressions use their own transport."""
+"""Small closed declaration and operation pages for host-rendered Java."""
 from __future__ import annotations
 
 from .structured_json_schema import closed_object_schema as obj
@@ -16,7 +16,6 @@ def choice(name, values):
 
 COUNT = obj({"count": {"type": "integer", "minimum": 0, "maximum": 255}})
 SCHEMAS = {
-    "call": obj({"receiver": TEXT, "method": NAME, "result_type": TEXT}),
     "local": obj({"type": TYPE}),
     "assign": obj({"operator": {"type": "string", "enum": ["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>="]}}),
     "foreach": obj({"type": TYPE}),

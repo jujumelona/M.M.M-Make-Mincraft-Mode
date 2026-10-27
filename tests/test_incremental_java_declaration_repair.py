@@ -67,7 +67,16 @@ def test_api_signatures_can_be_looked_up_during_repair_before_choosing_the_corre
                 return {"repair": "mapped_operand"}
             if data_name.endswith("_lookup"):
                 return {"query": "java.lang.Integer#toString", "offset": 0}
-            return {"name": "toString"}
+            page = task["requested_page"]
+            if page == "call_receiver":
+                return {"receiver_kind": "static"}
+            if page == "static_owner":
+                return {"type": "java.lang.Integer"}
+            if page == "call_member":
+                return {"member_id": next(key for key, row in task["member_candidates"].items() if row["name"] == "toString")}
+            if page == "value_kind":
+                return {"kind": "literal"}
+            return {"type": "int"} if page == "literal_type" else {"value": 1}
     source, program = _repair(Coder(), data, failed.stderr)
     assert program["members"][0]["body"][0]["arguments"] == ["1"]
     assert _java(tmp_path, source).returncode == 0

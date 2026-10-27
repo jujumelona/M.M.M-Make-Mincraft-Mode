@@ -132,6 +132,20 @@ def _method_body(code: str, name: str) -> str | None:
     return None
 
 
+def _contains_unimplemented_source(source: str, code: str) -> bool:
+    """Distinguish unfinished Java from literal text that happens to name it."""
+    if re.search(r"\bUnsupportedOperationException\b", code):
+        return True
+    from .java_region_parser import _parser, _walk_named
+    encoded = source.encode("utf-8")
+    root = _parser().parse(encoded).root_node
+    return any(
+        re.search(rb"\b(?:TODO|FIXME)\b", encoded[node.start_byte:node.end_byte])
+        for node in _walk_named(root)
+        if node.type in {"line_comment", "block_comment"}
+    )
+
+
 def _check_identity(source: str, package: str, name: str, *, reject_placeholders=True) -> None:
     code = _lexical_code(source)
     package_decls = re.findall(r"(?m)^\s*package\s+([\w.]+)\s*;", code)
@@ -140,7 +154,7 @@ def _check_identity(source: str, package: str, name: str, *, reject_placeholders
     pattern = r"\bpublic\s+(?:(?:final|abstract)\s+)?class\s+" + re.escape(name) + r"\b"
     if not re.search(pattern, code):
         raise ConstructionFileError("CONSTRUCTION_FILE_PUBLIC_CLASS_MISMATCH")
-    if reject_placeholders and re.search(r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", source):
+    if reject_placeholders and _contains_unimplemented_source(source, code):
         raise ConstructionFileError("CONSTRUCTION_FILE_UNIMPLEMENTED_PLACEHOLDER")
     if not re.search(r"\{[^}]*[;{]", code, re.DOTALL):
         raise ConstructionFileError("CONSTRUCTION_FILE_EMPTY_CLASS")

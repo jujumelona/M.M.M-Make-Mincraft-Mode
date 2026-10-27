@@ -8,9 +8,18 @@ import shutil
 import pytest
 
 from test_direct_feature_source import _fixture
+from incremental_value_model import structured_values
 
 
+@structured_values
 class OperationCoder:
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        structured_values(cls)
+
+    def generate_java_source(self, *args, **kwargs):
+        raise AssertionError("Requested-feature values must use structured model pages")
+
     def __init__(self):
         self.requests = []
         self.expression_requests = []
@@ -42,7 +51,7 @@ class OperationCoder:
             return {"enabled": False}
         return self.details
 
-    def generate_java_source(self, role, messages, *, data_name, source_frame):
+    def value_answer(self, role, messages, *, data_name, source_frame):
         # Only leaf expressions may ever reach source decoding, never a method.
         assert source_frame["kind"] == "field"
         task = json.loads(messages[-1]["content"])
@@ -56,6 +65,10 @@ class OperationCoder:
 
 def _inputs():
     behavior, spec, context = _fixture()
+    context["symbols"].update({
+        "java.lang.String": {"kind": "CLASS", "owner": "java.lang.String", "access": 1},
+        "String#isBlank": {"kind": "METHOD", "owner": "java.lang.String", "name": "isBlank",
+                            "parameters": [], "return_type": "boolean", "access": 1}})
     callback = {"event_id": "example.Events#ACTION", "event_owner": "example.Events", "event_field": "ACTION",
                 "event_interface": "java.util.function.Consumer<String>", "method": "accept",
                 "parameters": ["String"], "parameter_names": ["arg0"], "return_type": "void", "throws": [], "type_parameters": []}
@@ -113,12 +126,13 @@ def test_javac_error_repairs_only_one_ast_value_and_preserves_accepted_work(tmp_
         _compile_claims(tmp_path, broken)
     diagnostic = str(error.value)
 
+    @structured_values
     class RepairCoder:
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             assert "repair_target" in data_name
             return {"repair": "mapped_operand"}
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             assert source_frame["kind"] == "field"
             assert task["repair_slot"] == "value"
@@ -140,6 +154,7 @@ def test_operand_requests_include_selected_call_prior_effects_and_enclosing_bran
     from minecraft_mod_ai.incremental_java_operations import author_operation
     behavior, spec, context, messages = _inputs()
 
+    @structured_values
     class OperandCoder:
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             task = json.loads(messages[-1]["content"])
@@ -150,7 +165,7 @@ def test_operand_requests_include_selected_call_prior_effects_and_enclosing_bran
                 return {"count": 2}
             raise AssertionError(data_name)
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             node = task["operation_stack"][-1]
             assert node["receiver"] == "this" and node["method"] == "newHelper"
@@ -164,6 +179,9 @@ def test_operand_requests_include_selected_call_prior_effects_and_enclosing_bran
     builder.member = builder.program["members"][0]
     from minecraft_mod_ai.incremental_java_model import initial_scope
     builder.scope = initial_scope(builder.member)
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+    builder.new_method(owner="Feature", purpose="Apply both inputs", behavior=behavior, name="newHelper",
+                       metadata=method_metadata(parameters=[{"type": "int", "name": "arg0"}, {"type": "int", "name": "arg1"}]))
     builder.drafts = [{"id": "guard", "op": "if", "condition": "ready", "body": []}]
     builder.block = [{"id": "prior", "op": "assign", "target": "this.stock", "operator": "+=", "value": "7"}]
     result = author_operation(builder, "call")

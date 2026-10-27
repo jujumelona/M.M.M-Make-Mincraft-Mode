@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from incremental_value_model import structured_values
 
 from test_incremental_java_author import _inputs
 from test_incremental_java_render import _program, _method, _java
@@ -33,8 +34,9 @@ def test_missing_lambda_return_is_added_inside_the_lambda_without_replacing_its_
     failed = _java(tmp_path, data[0])
     assert failed.returncode != 0 and "missing return value" in failed.stderr
 
+    @structured_values
     class Coder:
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             assert {"name": "amount", "type": "int"} in task["scope"]["locals"]
             assert task["scope"]["return_type"] == "int"
@@ -54,6 +56,7 @@ def test_closure_capture_repair_can_insert_a_snapshot_before_the_enclosing_lambd
     failed = _java(tmp_path, data[0])
     assert failed.returncode != 0 and "effectively final" in failed.stderr
 
+    @structured_values
     class Coder:
         inserting = True
 
@@ -66,7 +69,7 @@ def test_closure_capture_repair_can_insert_a_snapshot_before_the_enclosing_lambd
                 return {"op": "local"}
             return {"type": "int"}
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             if self.inserting:
                 assert task["scope"]["locals"] == [{"type": "int", "name": "mmmValue1"}]
@@ -94,6 +97,7 @@ def test_unreachable_call_can_be_moved_before_the_guard_while_retaining_all_effe
     failed = _java(tmp_path, data[0])
     assert failed.returncode != 0 and "unreachable statement" in failed.stderr
 
+    @structured_values
     class Coder:
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             if data_name.endswith("repair_target"):

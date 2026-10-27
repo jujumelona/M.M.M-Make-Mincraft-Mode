@@ -7,11 +7,10 @@ from contextlib import contextmanager
 from copy import deepcopy
 
 from .incremental_java_model import initial_program, initial_scope, allocation_counters
-from .first_pass_java_declarations import declaration_frame
 from jsonschema import Draft202012Validator
 from .incremental_java_context import IncrementalJavaContext
 from .incremental_java_schema import COUNT, DECLARATION_OPS, SCHEMAS, choice, obj, BOOL, operation_options
-from .incremental_java_render import render_program, validate_expression, validate_value_type
+from .incremental_java_render import render_program
 from .incremental_java_history import operation_view, walk_nodes, lookup_work, PAGE
 
 _INSTRUCTION = (
@@ -24,9 +23,13 @@ _INSTRUCTION = (
     "those declarations immediately enter generated_declarations and their bodies are queued. "
     "The host implements newly declared bodies before returning to their caller. "
     "last_declaration reports the actual created or reused signature and implementation status; "
-    "use call with a completed helper's exact name to connect the result. When next_action is "
+    "use call and select the completed helper's member_id to connect the result. When next_action is "
     "implement_current_work, implement the current body directly instead of delegating it back to an active helper. "
     "Repeating a declaration does not implement a call. "
+    "value_kind chooses a value's form; value_stack shows its pending operands and accepted choices. "
+    "literal.value is typed data, never Java source. Calls and fields select member_id from member_candidates. "
+    "new_helper creates and implements missing supporting work. type_stack identifies the type being "
+    "constructed, its argument index and earlier arguments; @lookup discovers additional API types. "
     "A missing gameplay implementation is coding work, never SOURCE_REQUIRED. lookup reads "
     "exact platform/project API signatures; it is not a search for a completed feature. "
     "register installs an actual indexed event and creates a separately authored listener; "
@@ -58,6 +61,7 @@ class IncrementalJavaBuilder:
         self.member, self.scope, self.path, self.block = None, {}, [], []
         self.current_operation = ""
         self.drafts, self.declaration_draft = [], {}
+        self.value_stack, self.type_stack = [], []
         self.last_declaration = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
@@ -80,6 +84,7 @@ class IncrementalJavaBuilder:
                      "accepted_operations_total": len(self.block),
                      "accepted_operations_offset": max(0, len(self.block) - PAGE),
                      "requested_api_page": self.latest_api})
+        task.update(value_stack=self.value_stack, type_stack=self.type_stack)
         from .incremental_java_progress import declaration_feedback
         task["last_declaration"] = declaration_feedback(self)
         task.update(self.rejection)
@@ -112,50 +117,26 @@ class IncrementalJavaBuilder:
         raise AssertionError("unreachable")
 
     def typed(self, schema, suffix, *fields, extra=None, **type_options):
-        def validate(values):
-            for field in fields:
-                value = values[field]
-                if value:
-                    validate_value_type(value, **type_options)
-        return self.checked(schema, suffix, validate, extra)
+        from .incremental_java_type_choices import author_typed_metadata
+        return author_typed_metadata(self, schema, suffix, fields, extra=extra, **type_options)
+
+    def select_java_type(self, suffix, **options):
+        from .incremental_java_type_choices import select_java_type
+        return select_java_type(self, suffix, **options)
 
     @contextmanager
     def declaration_scope(self, member):
-        previous = self.member, self.scope, self.path, self.block, self.drafts
+        previous = self.member, self.scope, self.path, self.block, self.drafts, self.value_stack, self.type_stack
         self.member, self.scope, self.path, self.block, self.drafts = member, initial_scope(member), [], [], []
+        self.value_stack, self.type_stack = [], []
         try:
             yield
         finally:
-            self.member, self.scope, self.path, self.block, self.drafts = previous
+            self.member, self.scope, self.path, self.block, self.drafts, self.value_stack, self.type_stack = previous
 
     def expression(self, slot, expected="java.lang.Object", *, allow_update=False):
-        expected = expected or "java.lang.Object"
-        validate_value_type(expected)
-        frame = declaration_frame("field", "__mmmExpression", {"visibility": "private", "type": expected}, allow_uninitialized=False)
-        contracts = self.context.get("host_state_access") or ()
-        if contracts:
-            frame.update({"host_state_access": contracts, "host_behavior_contract": self.member.get("behavior")})
-        rejected = {}
-        for attempt in range(2):
-            self.serial += 1
-            task = self.payload({"expression_slot": slot, "expected_type": expected,
-                                 "immutable_signature": {k: frame[k] for k in ("kind", "prefix", "suffix")}, **rejected})
-            messages = [{"role": "system", "content": (
-                "Write ONLY the one value expression requested by expression_slot. "
-                "The host owns the containing operation. Use the host names and exact APIs shown. "
-                "No statements, declarations, lambda bodies, class bodies or imports. "
-                "For a callback value use a separately declared lambda or method reference.")},
-                {"role": "user", "content": json.dumps(task, ensure_ascii=False, separators=(",", ":"))}]
-            source = self.router.generate_java_source("coder", messages,
-                data_name=f"incremental_{self.member['id']}_{self.serial}_expression_{slot}", source_frame=frame)
-            value = source[len(frame["prefix"]):-len(frame["suffix"])]
-            try:
-                return validate_expression(value, allow_update=allow_update)
-            except ValueError as exc:
-                rejected = {"rejected_expression": value, "diagnostic": str(exc)}
-                if attempt:
-                    raise
-        raise AssertionError("unreachable")
+        from .incremental_java_values import author_value
+        return author_value(self, slot, expected, allow_update=allow_update)
 
     def parameters(self):
         count = self.ask(COUNT, "parameters_count")["count"]

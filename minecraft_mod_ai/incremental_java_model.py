@@ -28,7 +28,8 @@ def initial_program(spec, behaviors):
 
 
 def initial_scope(member):
-    return {"locals": [dict(p) for p in member["metadata"].get("parameters", ())],
+    return {"locals": [{**p, "type": re.sub(r"\s*\.\.\.\s*$", "[]", p["type"])}
+                       for p in member["metadata"].get("parameters", ())],
             "return_type": member["metadata"].get("return_type", "void"),
             "loop_depth": 0, "switch_depth": 0, "owner": member["owner"],
             "static": bool(member["metadata"].get("static"))}

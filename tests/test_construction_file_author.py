@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.java_region_parser import _parser as _java_parser, _walk_named as _java_nodes
+
 
 def load_author(monkeypatch, tmp_path):
     root_name = 'minecraft_mod_ai'
@@ -47,7 +49,8 @@ def load_author(monkeypatch, tmp_path):
                _evidence=lambda index, intent, source_pages:{'target_api':[], 'source':[]})
     dependency('construction_retrieval', ConstructionEvidenceIndex=lambda *a,**k:types.SimpleNamespace(by_owner={}))
     observations = []
-    dependency('java_region_parser', _parse=lambda src: observations.append(('parsed', src)))
+    dependency('java_region_parser', _parse=lambda src: observations.append(('parsed', src)),
+               _parser=_java_parser, _walk_named=_java_nodes)
     def compile_unit(src, *, classpath, java_version, filename):
         observations.append(('compiled',src))
         if 'INVALID_API' in src:

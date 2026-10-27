@@ -141,11 +141,17 @@ def _argument_types(builder, contract):
 
 def author_call_arguments(builder, node) -> None:
     """Use an exact selected signature when known; unknown calls remain authorable."""
-    candidates = _call_candidates(builder, node)
-    contract = _select_overload(builder, candidates) if candidates else None
+    contract = _call_contract(builder, node)
     if contract is not None:
         node["call_contract"] = _signature(contract)
     types = _argument_types(builder, contract)
     node["arguments"] = []
     for index, expected in enumerate(types):
         node["arguments"].append(builder.expression("argument:" + str(index), _ground_argument(expected, "")))
+
+
+def _call_contract(builder, node):
+    if node.get("call_contract") is not None:
+        return node["call_contract"]
+    candidates = _call_candidates(builder, node)
+    return _select_overload(builder, candidates) if candidates else None

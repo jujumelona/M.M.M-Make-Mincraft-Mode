@@ -1,8 +1,8 @@
 """Edits to typed operands/declarations without replacing accepted method bodies."""
 from __future__ import annotations
 
-from .incremental_java_schema import TYPE, NAME, TEXT, BOOL, obj, choice
-from .incremental_java_render import validate_type, validate_expression
+from .incremental_java_schema import TYPE, BOOL, obj, choice
+from .incremental_java_render import validate_type
 
 
 def replace_expression(builder, node, slot):
@@ -24,15 +24,28 @@ def replace_node(builder, node, slot):
         node[container][int(index)]["type"] = _type(builder, allow_union=kind == "catch")
     elif slot in {"type", "result_type", "return_type"}:
         node[slot] = _type(builder, allow_void=slot == "return_type")
-    elif slot in {"method", "event_field", "handler"}:
-        node[slot] = builder.ask(obj({"name": NAME}), "repair_name")["name"]
-    elif slot == "receiver":
-        receiver = builder.ask(obj({"receiver": TEXT}), "repair_receiver")["receiver"]
-        if receiver and receiver != "super":
-            validate_expression(receiver)
-        node[slot] = receiver
+    elif slot in {"method", "receiver", "event_field", "handler"}:
+        replace_call_head(builder, node)
     else:
         replace_expression(builder, node, slot)
+
+
+def replace_call_head(builder, node):
+    """A changed receiver/member needs a fresh exact ABI, never a code string."""
+    from .incremental_java_calls import _is_varargs, _source_parameters
+    from .incremental_java_values import author_call_head
+    if node["op"] == "register":
+        revise_operation(builder, node)
+        return
+    before = node.get("call_contract") or {}
+    author_call_head(builder, node)
+    contract = node["call_contract"]
+    previous, current = _source_parameters(before), _source_parameters(contract)
+    if (not before or previous != current
+            or _is_varargs(before, previous) != _is_varargs(contract, current)):
+        builder.arguments(node)
+    if contract.get("return_type") == "void":
+        node["result_type"] = ""
 
 
 def _type(builder, **type_options):
@@ -109,10 +122,9 @@ def repair_related_declaration(builder, current):
 
 
 def revise_operation(builder, node):
-    if node["op"] == "call":
-        from .incremental_java_operations import author_operation
+    if node["op"] in {"call", "register"}:
         before = node.copy()
-        revised = author_operation(builder, "call")
+        revised = _replacement_operation(builder, node["op"])
         revised["id"] = before["id"]
         if before.get("name") and revised.get("result_type"):
             revised["name"] = before["name"]
@@ -122,8 +134,20 @@ def revise_operation(builder, node):
         replace_node(builder, node, builder.rejection["repair_slot"])
 
 
+def _replacement_operation(builder, operation):
+    from .incremental_java_operations import author_operation
+    while True:
+        revised = author_operation(builder, operation)
+        if revised is not None:
+            return revised
+
+
 def create_helper(builder, node):
     from .incremental_java_declarations import author_declaration
+    from .incremental_java_calls import _signature
     method = author_declaration(builder, "method")
     node["method"] = method["name"]
     node["receiver"] = "" if method["metadata"].get("static") else "this"
+    node["call_contract"] = _signature({"kind": "METHOD", "owner": method["owner"],
+                                        "name": method["name"], **method["metadata"]})
+    builder.arguments(node)

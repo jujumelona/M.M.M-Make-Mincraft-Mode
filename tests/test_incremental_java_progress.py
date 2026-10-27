@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from incremental_value_model import structured_values
 
 import pytest
 
@@ -12,6 +13,7 @@ from test_incremental_java_recovery import _builder
 def test_callback_feedback_reports_that_registration_already_connects_listener(tmp_path):
     from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
 
+    @structured_values
     class Coder(OperationCoder):
         connected = False
 
@@ -32,6 +34,7 @@ def test_callback_feedback_reports_that_registration_already_connects_listener(t
 def test_helper_body_is_authored_before_parent_selects_another_operation(tmp_path):
     from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
 
+    @structured_values
     class Coder(OperationCoder):
         def __init__(self):
             super().__init__()
@@ -61,11 +64,11 @@ def test_helper_body_is_authored_before_parent_selects_another_operation(tmp_pat
                 return {"type": "String", "purpose": "Observed identifier"}
             return super().generate_structured_data(role, messages, data_name=data_name, parameters=parameters)
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             if task["expression_slot"].startswith("argument:"):
                 return source_frame["prefix"] + task["scope"]["locals"][0]["name"] + source_frame["suffix"]
-            return super().generate_java_source(role, messages, data_name=data_name, source_frame=source_frame)
+            return super().value_answer(role, messages, data_name=data_name, source_frame=source_frame)
 
     behavior, spec, context, messages = _inputs()
     source, program = compose_incremental_feature(Coder(), spec, messages, construction_context=context, behaviors=[behavior])
@@ -77,6 +80,7 @@ def test_helper_body_is_authored_before_parent_selects_another_operation(tmp_pat
 def test_repeated_helper_declaration_reuses_body_and_connects_real_callback(tmp_path, repeat_owner):
     from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
 
+    @structured_values
     class Coder(OperationCoder):
         def __init__(self):
             super().__init__()
@@ -164,6 +168,7 @@ def test_duplicate_override_does_not_prevent_implementing_another_interface_meth
               "metadata": {"visibility": "private", "static": True, "superclass": "", "interfaces": ["sample.TwoMethods"]}}
     program["members"].append(nested)
 
+    @structured_values
     class Coder:
         steps = iter(["override", "override", "override", "complete"])
         overrides = iter(["first", "first", "second"])
@@ -177,7 +182,7 @@ def test_duplicate_override_does_not_prevent_implementing_another_interface_meth
                 return {"op": next(self.steps)}
             return {"op": "return"}
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             name = json.loads(messages[-1]["content"])["current_member"]["name"]
             return source_frame["prefix"] + ("1" if name == "first" else "2") + source_frame["suffix"]
 
@@ -208,6 +213,7 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
     from minecraft_mod_ai.incremental_java_author import IncrementalJavaBuilder
     from minecraft_mod_ai.incremental_java_model import initial_scope
 
+    @structured_values
     class Coder:
         steps = {"m1": iter(["method", "local", "complete"]), "m2": iter(["complete"])}
 
@@ -225,7 +231,7 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
                 return {"count": 0}
             return {"type": "int"}
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             assert task["current_member"]["id"] == "m1"
             assert task["scope"]["locals"] == [{"type": "int", "name": "parentValue"}]

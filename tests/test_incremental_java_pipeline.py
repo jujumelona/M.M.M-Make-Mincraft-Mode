@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from incremental_value_model import structured_values
 
 from test_incremental_java_author import OperationCoder, _inputs, _compile_claims
 
@@ -64,6 +65,7 @@ def test_three_independent_operands_can_be_fixed_without_restarting_the_feature(
         if "program_json" in records:
             saved_programs.append(json.loads(_read_checkpoint(path, identity)["program_json"]))
     monkeypatch.setattr(host, "_save_checkpoint", save)
+    @structured_values
     class FixableCoder(OperationCoder):
         def __init__(self):
             super().__init__()
@@ -74,15 +76,15 @@ def test_three_independent_operands_can_be_fixed_without_restarting_the_feature(
                 return {"repair": "mapped_operand"}
             return super().generate_structured_data(role, messages, data_name=data_name, parameters=parameters)
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             if "javac_diagnostic" in task:
                 self.repaired.append((task["current_member"]["id"], task["repair_slot"]))
-                return super().generate_java_source(role, messages, data_name=data_name, source_frame=source_frame)
-            bad = {"initializer": "missingInitial", "condition": "missingCondition", "value": "missingAmount"}
+                return super().value_answer(role, messages, data_name=data_name, source_frame=source_frame)
+            bad = {"initializer": '"missingInitial"', "condition": "1", "value": '"missingAmount"'}
             if task["expression_slot"] in bad:
                 return source_frame["prefix"] + bad[task["expression_slot"]] + source_frame["suffix"]
-            return super().generate_java_source(role, messages, data_name=data_name, source_frame=source_frame)
+            return super().value_answer(role, messages, data_name=data_name, source_frame=source_frame)
 
     coder = FixableCoder()
     source = build(coder)
@@ -96,6 +98,7 @@ def test_three_independent_operands_can_be_fixed_without_restarting_the_feature(
 
 def test_an_empty_registrar_is_continued_with_new_code_instead_of_an_unmapped_failure(tmp_path, monkeypatch):
     build = production_fixture(tmp_path, monkeypatch)
+    @structured_values
     class PrematureCoder(OperationCoder):
         premature = True
 
@@ -113,26 +116,28 @@ def test_an_empty_registrar_is_continued_with_new_code_instead_of_an_unmapped_fa
 def test_interrupted_compiler_repair_resumes_its_saved_ast_without_reauthoring(tmp_path, monkeypatch):
     import pytest
     build = production_fixture(tmp_path, monkeypatch)
+    @structured_values
     class InterruptedCoder(OperationCoder):
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             if data_name.endswith("repair_target"):
                 raise RuntimeError("model worker interrupted")
             return super().generate_structured_data(role, messages, data_name=data_name, parameters=parameters)
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             if task["expression_slot"] == "initializer":
-                return source_frame["prefix"] + "missingInitial" + source_frame["suffix"]
-            return super().generate_java_source(role, messages, data_name=data_name, source_frame=source_frame)
+                return source_frame["prefix"] + '"missingInitial"' + source_frame["suffix"]
+            return super().value_answer(role, messages, data_name=data_name, source_frame=source_frame)
     with pytest.raises(RuntimeError, match="model worker interrupted"):
         build(InterruptedCoder())
 
+    @structured_values
     class ResumedCoder:
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             assert data_name.endswith("repair_target")
             return {"repair": "mapped_operand"}
 
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
+        def value_answer(self, role, messages, *, data_name, source_frame):
             task = json.loads(messages[-1]["content"])
             assert task["current_member"]["kind"] == "field"
             assert "missingInitial" in task["javac_diagnostic"]
