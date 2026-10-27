@@ -119,7 +119,9 @@ def frontier_options(builder, current, body, options, declared_ids):
                                     {"class", "record", "enum"} else [])
     builder.frontier_feedback = {}
     if (outstanding or ancestor) and current["kind"] not in {"class", "record", "enum"}:
-        excluded = {"method", "complete"} if outstanding else {"method"}
+        excluded = {"field", "method", "type", "constructor", "override"}
+        if outstanding:
+            excluded.add("complete")
         options = [op for op in options if op not in excluded]
         builder.frontier_feedback = {
             "state": "implementation_required",
@@ -227,6 +229,15 @@ def declaration_feedback(builder):
     return {**outcome, "declaration": _generated(member), "next_action": action, "next_step": instruction}
 
 
+def assert_member_connections(builder, member):
+    """Terminal returns cannot bypass the dependency frontier."""
+    if member["kind"] in {"class", "record", "enum"}:
+        return
+    disconnected = _unconnected(builder, member.get("body", []), set())
+    if disconnected:
+        raise ValueError("JAVA_INCREMENTAL_UNCONNECTED_DECLARATIONS: " + ",".join(disconnected))
+
+
 def finish_member(builder, member):
     """A child's locals, open operations, and diagnostics cannot leak to its caller."""
     previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
@@ -241,6 +252,7 @@ def finish_member(builder, member):
             # visible through the program even while its parent is still active.
             body = member.setdefault("body", [])
             builder.author_block(member, initial_scope(member), [], body=body)
+            assert_member_connections(builder, member)
             member["implementation_status"] = "complete"
         finally:
             (builder.current_operation, builder.declaration_draft, builder.latest_api,

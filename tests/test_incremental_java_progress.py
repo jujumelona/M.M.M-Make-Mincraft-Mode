@@ -215,7 +215,7 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
 
     @structured_values
     class Coder:
-        steps = {"m1": iter(["method", "local", "complete"]), "m2": iter(["complete"])}
+        steps = {"m1": iter(["method", "local", "return"]), "m2": iter(["complete"])}
 
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             task = json.loads(messages[-1]["content"])
@@ -429,3 +429,41 @@ def test_full_builder_halts_repeated_identical_lookup_work():
     with pytest.raises(ValueError, match="JAVA_INCREMENTAL_NO_PROGRESS_IDENTICAL_REQUEST"):
         compose_incremental_feature(Coder(), spec, messages,
                                     construction_context=context, behaviors=[behavior])
+
+
+
+def test_terminal_return_cannot_leave_unconnected_helper():
+    from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
+
+    @structured_values
+    class Coder:
+        def __init__(self):
+            self.steps = {"m1": iter(["method", "return"]), "m2": iter(["complete"])}
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            member = json.loads(messages[-1]["content"])["current_member"]["id"]
+            if data_name.endswith("_kind"):
+                return {"op": next(self.steps[member])}
+            if data_name.endswith("_method"):
+                return {"return_type": "void", "purpose": "Supporting implementation",
+                        "static": False}
+            if data_name.endswith("_parameters_count"):
+                return {"count": 0}
+            raise AssertionError(data_name)
+
+    behavior, spec, context, messages = _inputs()
+    with pytest.raises(ValueError, match="JAVA_INCREMENTAL_UNCONNECTED_DECLARATIONS"):
+        compose_incremental_feature(Coder(), spec, messages,
+                                    construction_context=context, behaviors=[behavior])
+
+
+def test_unresolved_dependencies_block_every_new_declaration_family():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    parent = {"id": "main", "kind": "method", "body": []}
+    child = {"id": "helper", "kind": "method", "name": "missingConnection",
+             "created_by": "main", "body": []}
+    builder = SimpleNamespace(program={"members": [parent, child]}, member=parent)
+    options = ["field", "method", "type", "constructor", "override", "call", "complete"]
+    assert frontier_options(builder, parent, parent["body"], options, set()) == ["call"]
