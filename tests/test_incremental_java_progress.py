@@ -316,3 +316,37 @@ def test_class_layout_and_initial_registrar_can_declare_members():
     assert frontier_options(builder, layout, [], choices, {"unused"}) == choices
     builder.member = registrar
     assert frontier_options(builder, registrar, [], choices, set()) == choices
+
+
+def test_helper_only_call_cycles_do_not_count_as_implementation():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    caller = {"id": "a", "name": "helperA", "kind": "method",
+              "implementation_status": "authoring",
+              "body": [{"op": "call", "method": "helperB", "arguments": []}]}
+    callee = {"id": "b", "name": "helperB", "kind": "method",
+              "implementation_status": "complete",
+              "body": [{"op": "call", "method": "helperA", "arguments": []}]}
+    child = {"id": "c", "name": "helperC", "kind": "method",
+             "implementation_status": "authoring", "body": []}
+    builder = SimpleNamespace(program={"members": [caller, callee, child]}, member=child)
+    assert "method" not in frontier_options(builder, child, [], ["method", "call", "complete"], set())
+    assert builder.frontier_feedback["waiting_ancestor_id"] == "a"
+
+    # A real leaf makes the existing delegation productive.
+    callee["body"].append({"op": "assign", "target": "this.value", "value": "2"})
+    assert "method" in frontier_options(builder, child, [], ["method", "call", "complete"], set())
+
+
+def test_helper_name_in_string_literal_is_not_a_call_reference():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    owner = {"id": "parent", "kind": "method", "implementation_status": "authoring",
+             "body": [{"op": "local", "name": "label", "value": '"helperTarget("'}]}
+    child = {"id": "helper", "kind": "method", "name": "helperTarget",
+             "implementation_status": "complete", "body": []}
+    builder = SimpleNamespace(program={"members": [owner, child]}, member=owner)
+    # The parser must not take an unrelated literal as a completed dependency.
+    assert "method" not in frontier_options(builder, owner, owner["body"], ["method", "call"], {"helper"})
