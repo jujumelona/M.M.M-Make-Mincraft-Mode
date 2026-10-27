@@ -8,46 +8,65 @@ from .incremental_java_model import initial_scope
 
 
 
-def _observable_work(body):
-    """A declaration is not implementation progress.
+def _observable_work(body, members, visited=frozenset()):
+    """Follow generated-helper calls to executable leaves, not just declarations.
 
-    Ignore local-only scaffolding, empty returns, and unopened control blocks.
-    Nested effects still count: a guard containing a call is real work.
+    A chain of helpers that only calls itself (or another empty helper) is not
+    an effect. This graph walk terminates for cyclic call graphs.
     """
+    by_name = {row["name"]: row for row in members if row.get("kind") == "method"}
     for node in body or ():
         if not isinstance(node, dict):
             continue
-        if node.get("op") in {"call", "assign", "register", "throw", "constructor_call"}:
+        operation = node.get("op")
+        if operation in {"assign", "register", "throw", "constructor_call"}:
             return True
-        if node.get("op") == "return" and node.get("value"):
+        if operation == "return" and node.get("value"):
             return True
-        for value in node.values():
-            if isinstance(value, list) and _observable_work(value):
+        if operation == "call":
+            callee = by_name.get(node.get("method"))
+            if callee is None:
+                return True  # An API call; the normal verifier still owns correctness.
+            if (callee["id"] not in visited and
+                    _observable_work(callee.get("body"), members, visited | {callee["id"]})):
                 return True
-            if isinstance(value, dict) and _observable_work([value]):
+        for child in node.values():
+            if isinstance(child, list) and _observable_work(child, members, visited):
+                return True
+            if isinstance(child, dict) and _observable_work([child], members, visited):
                 return True
     return False
 
 
-def _unconnected(builder, body, declared_ids):
-    """A helper is connected by a real accepted reference, not by being declared."""
-    import json
+def _linked_in_ast(node, name):
+    """A matching string literal is not proof of calling a helper."""
+    if isinstance(node, dict):
+        if node.get("op") == "call" and node.get("method") == name:
+            return True
+        return any(_linked_in_ast(value, name) for value in node.values())
+    if isinstance(node, list):
+        return any(_linked_in_ast(value, name) for value in node)
+    if isinstance(node, str):
+        return bool(re.search(r"(?<![\\w$])" + re.escape(name) + r"\\s*\\("
+                              r"|::" + re.escape(name) + r"(?![\\w$])", node))
+    return False
 
-    accepted = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-    names = {row["id"]: row["name"] for row in builder.program["members"]
-             if row["id"] in declared_ids}
+
+def _unconnected(builder, body, declared_ids):
+    """Helpers become connected only through accepted Java code references."""
     return [
-        identifier for identifier, name in names.items()
-        if re.search(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", accepted) is None
+        row["id"] for row in builder.program["members"]
+        if row["id"] in declared_ids and not _linked_in_ast(body, row["name"])
     ]
 
 
 def _waiting_ancestor(builder, current):
-    """Prevent an unimplemented helper from outsourcing its entire body forever."""
-    return next((row for row in builder.program["members"]
+    """An incomplete ancestor cannot delegate to another unimplemented helper."""
+    members = builder.program["members"]
+    return next((row for row in members
                  if row is not current and row.get("implementation_status") == "authoring"
                  and not row.get("registrar") and row.get("kind") in {"method", "constructor"}
-                 and not _observable_work(row.get("body"))), None)
+                 and not _observable_work(row.get("body"), members, frozenset({row["id"]}))), None)
 
 
 def frontier_options(builder, current, body, options, declared_ids):
