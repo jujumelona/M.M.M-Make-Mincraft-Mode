@@ -65,6 +65,7 @@ class IncrementalJavaBuilder:
         self.last_declaration = {}
         self.frontier_unconnected = []
         self.frontier_feedback = {}
+        self.request_fingerprints = set()
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
 
@@ -98,8 +99,11 @@ class IncrementalJavaBuilder:
         from .model_concurrency import raise_if_model_execution_cancelled
         raise_if_model_execution_cancelled()
         self.serial += 1
+        task = self.payload({"requested_page": suffix, **(extra or {})})
+        from .incremental_java_liveness import assert_forward_progress
+        assert_forward_progress(self.request_fingerprints, task, schema)
         messages = [{"role": "system", "content": _INSTRUCTION},
-                    {"role": "user", "content": json.dumps(self.payload({"requested_page": suffix, **(extra or {})}), ensure_ascii=False, separators=(",", ":"))}]
+                    {"role": "user", "content": json.dumps(task, ensure_ascii=False, separators=(",", ":"))}]
         result = self.router.generate_structured_data("coder", messages,
             data_name=f"incremental_{self.member['id']}_{self.serial}_{suffix}", parameters=schema)
         Draft202012Validator(schema).validate(result)

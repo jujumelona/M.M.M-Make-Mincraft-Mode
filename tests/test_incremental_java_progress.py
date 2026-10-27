@@ -397,3 +397,35 @@ def test_created_helper_in_nested_body_is_not_lost_to_parent_frontier():
     assert frontier_options(builder, parent, parent["body"], ["method", "call", "complete"], set()) == ["call"]
     parent["body"][0]["body"].append({"op": "call", "method": "innerHelper", "arguments": []})
     assert "complete" in frontier_options(builder, parent, parent["body"], ["method", "call", "complete"], set())
+
+
+def test_identical_model_request_without_state_progress_fails_closed():
+    from minecraft_mod_ai.incremental_java_liveness import assert_forward_progress
+
+    seen = set()
+    page = {"current_member": {"id": "member_1"}, "requested_page": "kind",
+            "accepted_operations": [], "requested_api_page": {"same": "evidence"}}
+    schema = {"type": "object", "properties": {"op": {"enum": ["call", "lookup"]}}}
+    assert_forward_progress(seen, page, schema)
+    with pytest.raises(ValueError, match="JAVA_INCREMENTAL_NO_PROGRESS_IDENTICAL_REQUEST"):
+        assert_forward_progress(seen, dict(page), dict(schema))
+    assert_forward_progress(seen, {**page, "accepted_operations": [{"op": "call"}]}, schema)
+    assert_forward_progress(seen, page, {"type": "object", "properties": {"op": {"enum": ["call"]}}})
+
+
+def test_full_builder_halts_repeated_identical_lookup_work():
+    from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
+
+    @structured_values
+    class Coder:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name.endswith("_kind"):
+                return {"op": "lookup"}
+            if data_name.endswith("_lookup"):
+                return {"query": "no-progress", "offset": 0}
+            raise AssertionError(data_name)
+
+    behavior, spec, context, messages = _inputs()
+    with pytest.raises(ValueError, match="JAVA_INCREMENTAL_NO_PROGRESS_IDENTICAL_REQUEST"):
+        compose_incremental_feature(Coder(), spec, messages,
+                                    construction_context=context, behaviors=[behavior])
