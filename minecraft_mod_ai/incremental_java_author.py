@@ -1,0 +1,239 @@
+"""Sequential source construction: the model authors operations, the host owns Java."""
+from __future__ import annotations
+
+import json
+from collections import deque
+from contextlib import contextmanager
+from copy import deepcopy
+
+from .incremental_java_model import initial_program, initial_scope, allocation_counters
+from .first_pass_java_declarations import declaration_frame
+from jsonschema import Draft202012Validator
+from .incremental_java_context import IncrementalJavaContext
+from .incremental_java_schema import COUNT, DECLARATION_OPS, SCHEMAS, SIMPLE_OPS, choice, obj, BOOL
+from .incremental_java_render import render_program, validate_expression, validate_value_type
+from .incremental_java_history import operation_view, walk_nodes, lookup_work, PAGE
+
+_INSTRUCTION = (
+    "Implement only the current operation of the current work item. The host owns all Java "
+    "syntax, class/lifecycle wrappers, member names, local names and block boundaries. "
+    "Choose one operation, then fill its operand page. Never return a method, class, imports or a statement string. "
+    "requested_page identifies exactly which choice/count/details to provide now; kind "
+    "asks for the NEXT operation after accepted_operations, not a repetition of the previous one. "
+    "Use field/method/type to CREATE new supporting code when needed; "
+    "those declarations immediately enter generated_declarations and their bodies are queued. "
+    "A missing gameplay implementation is coding work, never SOURCE_REQUIRED. lookup reads "
+    "exact platform/project API signatures; it is not a search for a completed feature. "
+    "register installs an actual indexed event and creates a separately authored listener; "
+    "its inputs need not have the same name as the gameplay concept. Implement the original "
+    "trigger's conditions and effects in that listener. lambda creates a typed local value "
+    "with its own body; pass its host name as an argument. Preserve existing UI/action "
+    "ownership and all behavior conditions. Complete a block only after its assigned work "
+    "is implemented. Reuse the host names shown in scope and generated_declarations. "
+    "lookup @operations with an offset reads earlier accepted operations of this block; "
+    "lookup @node:ID reads an accepted block's operands and paginated children. "
+    "lookup @declarations with an offset reads all earlier generated signatures; "
+    "@declarations:words searches their names, owners and purposes. Recent declarations "
+    "are already visible; an older declaration on another page still exists and is callable. "
+    "Earlier work remains in the host AST; do not repeat it just because it is on another page."
+)
+
+
+class IncrementalJavaBuilder:
+    def __init__(self, router, spec, messages, context, behaviors, program=None):
+        self.router, self.spec, self.context = router, spec, context
+        state = context.setdefault("incremental_state", {})
+        self.api = state.get("api") or IncrementalJavaContext(messages, spec, context, behaviors)
+        state["api"] = self.api
+        self.program = deepcopy(program) if program is not None else initial_program(spec, behaviors)
+        self.pending = deque(self.program["members"] if program is None else ())
+        self.serial, self.latest_api, self.rejection = 0, {}, {}
+        self.counters = allocation_counters(self.program)
+        self.member, self.scope, self.path, self.block = None, {}, [], []
+        self.current_operation = ""
+        self.drafts, self.declaration_draft = [], {}
+        self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
+        self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
+
+    def allocate(self, prefix):
+        self.counters[prefix] = self.counters.get(prefix, 0) + 1
+        candidate = prefix + str(self.counters[prefix])
+        while candidate in self.identities:
+            self.counters[prefix] += 1
+            candidate = prefix + str(self.counters[prefix])
+        self.identities.add(candidate)
+        return candidate
+
+    def payload(self, extra=None):
+        task = self.api.view(self.member, self.scope, self.program, position=len(self.block))
+        task.update({"host_incremental_java": True, "current_operation": self.current_operation,
+                     "operation_stack": [operation_view(node) for node in self.drafts],
+                     "current_declaration": self.declaration_draft,
+                     "block_path": self.path, "accepted_operations": [operation_view(n) for n in self.block[-PAGE:]],
+                     "accepted_operations_total": len(self.block),
+                     "accepted_operations_offset": max(0, len(self.block) - PAGE),
+                     "requested_api_page": self.latest_api})
+        task.update(self.rejection)
+        task.update(extra or {})
+        return task
+
+    def ask(self, schema, suffix, extra=None):
+        from .model_concurrency import raise_if_model_execution_cancelled
+        raise_if_model_execution_cancelled()
+        self.serial += 1
+        messages = [{"role": "system", "content": _INSTRUCTION},
+                    {"role": "user", "content": json.dumps(self.payload({"requested_page": suffix, **(extra or {})}), ensure_ascii=False, separators=(",", ":"))}]
+        result = self.router.generate_structured_data("coder", messages,
+            data_name=f"incremental_{self.member['id']}_{self.serial}_{suffix}", parameters=schema)
+        Draft202012Validator(schema).validate(result)
+        return result
+
+    def checked(self, schema, suffix, validate, extra=None):
+        previous = self.rejection
+        for attempt in range(2):
+            result = self.ask(schema, suffix, extra)
+            try:
+                validate(result)
+                self.rejection = previous
+                return result
+            except ValueError as exc:
+                self.rejection = {**previous, "operand_diagnostic": str(exc), "rejected_operand_page": result}
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
+
+    def typed(self, schema, suffix, *fields, extra=None, **type_options):
+        def validate(values):
+            for field in fields:
+                value = values[field]
+                if value:
+                    validate_value_type(value, **type_options)
+        return self.checked(schema, suffix, validate, extra)
+
+    @contextmanager
+    def declaration_scope(self, member):
+        previous = self.member, self.scope, self.path, self.block, self.drafts
+        self.member, self.scope, self.path, self.block, self.drafts = member, initial_scope(member), [], [], []
+        try:
+            yield
+        finally:
+            self.member, self.scope, self.path, self.block, self.drafts = previous
+
+    def expression(self, slot, expected="java.lang.Object", *, allow_update=False):
+        expected = expected or "java.lang.Object"
+        validate_value_type(expected)
+        frame = declaration_frame("field", "__mmmExpression", {"visibility": "private", "type": expected}, allow_uninitialized=False)
+        contracts = self.context.get("host_state_access") or ()
+        if contracts:
+            frame.update({"host_state_access": contracts, "host_behavior_contract": self.member.get("behavior")})
+        rejected = {}
+        for attempt in range(2):
+            self.serial += 1
+            task = self.payload({"expression_slot": slot, "expected_type": expected,
+                                 "immutable_signature": {k: frame[k] for k in ("kind", "prefix", "suffix")}, **rejected})
+            messages = [{"role": "system", "content": (
+                "Write ONLY the one value expression requested by expression_slot. "
+                "The host owns the containing operation. Use the host names and exact APIs shown. "
+                "No statements, declarations, lambda bodies, class bodies or imports. "
+                "For a callback value use a separately declared lambda or method reference.")},
+                {"role": "user", "content": json.dumps(task, ensure_ascii=False, separators=(",", ":"))}]
+            source = self.router.generate_java_source("coder", messages,
+                data_name=f"incremental_{self.member['id']}_{self.serial}_expression_{slot}", source_frame=frame)
+            value = source[len(frame["prefix"]):-len(frame["suffix"])]
+            try:
+                return validate_expression(value, allow_update=allow_update)
+            except ValueError as exc:
+                rejected = {"rejected_expression": value, "diagnostic": str(exc)}
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
+
+    def parameters(self):
+        count = self.ask(COUNT, "parameters_count")["count"]
+        result = []
+        for index in range(count):
+            part = self.typed(SCHEMAS["parameter"], "parameter", "type",
+                              extra={"parameter_index": index}, allow_varargs=index == count - 1)
+            result.append({"type": part["type"], "name": "arg" + str(index), "purpose": part["purpose"]})
+        return result
+
+    def arguments(self, node):
+        from .incremental_java_calls import author_call_arguments
+        author_call_arguments(self, node)
+        return node["arguments"]
+
+    def enabled(self, suffix):
+        return self.ask(obj({"enabled": BOOL}), suffix)["enabled"]
+
+    def lookup(self):
+        query = self.ask(SCHEMAS["lookup"], "lookup")
+        self.latest_api = lookup_work(self, query["query"], query["offset"])
+        if self.latest_api is None:
+            self.latest_api = self.api.lookup(query["query"], query["offset"])
+
+    def new_method(self, *, owner, purpose, behavior, metadata, name=None, kind="method"):
+        identifier = self.allocate("m")
+        method = {"id": identifier, "owner": owner, "kind": kind,
+                  "name": name or "mmmHelper" + identifier[1:], "metadata": metadata,
+                  "purpose": purpose, "behavior": behavior, "body": []}
+        self.program["members"].append(method)
+        self.pending.append(method)
+        return method
+
+    def author_block(self, member, scope, path, body=None):
+        from .incremental_java_operations import author_operation
+        from .incremental_java_declarations import author_declaration
+        previous = self.member, self.scope, self.path, self.block, self.current_operation
+        body = [] if body is None else body
+        self.member, self.scope, self.path, self.block = member, scope, path, body
+        while True:
+            options = list(SIMPLE_OPS) + list(DECLARATION_OPS) + ["lookup", "complete"]
+            if member["kind"] in {"class", "record", "enum"}:
+                options = [*DECLARATION_OPS, "constructor", "override", "lookup", "complete"]
+            if scope["loop_depth"] or scope["switch_depth"]:
+                options.append("break")
+            if scope["loop_depth"]:
+                options.append("continue")
+            if member["kind"] == "constructor" and not body:
+                options.append("constructor_call")
+            operation = self.ask(choice("op", options), "kind")["op"]
+            self.current_operation = operation
+            if operation == "complete":
+                break
+            if operation == "lookup":
+                self.lookup()
+                continue
+            if operation in {*DECLARATION_OPS, "constructor", "override"}:
+                author_declaration(self, operation)
+                continue
+            node = author_operation(self, operation)
+            if node is None:
+                continue
+            body.append(node)
+            self.history[node["id"]] = node
+            self.rejection = {}
+            if operation in {"return", "throw", "break", "continue"}:
+                break
+        self.member, self.scope, self.path, self.block, self.current_operation = previous
+        return body
+
+    def finish(self):
+        while self.pending:
+            member = self.pending.popleft()
+            member["body"] = self.author_block(member, initial_scope(member), [])
+        return self.render()
+
+    def render(self):
+        from .host_java_imports import host_add_verified_imports
+        source, mapping = render_program(self.program)
+        final = host_add_verified_imports(source, symbols=self.api.symbols,
+            owner=self.program["package"] + "." + self.program["class_name"], target_path=self.spec["target_path"])
+        offset = len(final.splitlines()) - len(source.splitlines())
+        self.line_map = {line + (offset if line > 1 else 0): value for line, value in mapping.items()}
+        return final, self.program
+
+
+def compose_incremental_feature(router, spec, messages, *, construction_context, behaviors):
+    if not behaviors:
+        raise ValueError("JAVA_INCREMENTAL_BEHAVIORS_REQUIRED")
+    return IncrementalJavaBuilder(router, spec, messages, construction_context, behaviors).finish()

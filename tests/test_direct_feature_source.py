@@ -152,38 +152,14 @@ def test_direct_registrar_name_uses_the_canonical_behavior_identifier():
 
 
 def test_production_entrypoint_does_not_run_capability_or_proof_planning(tmp_path, monkeypatch):
-    import minecraft_mod_ai.construction_host_source as host
-
-    behavior, spec, context = _fixture()
-    context.update({"project_root": str(tmp_path), "java_classpath": ["fixture"],
-                    "target": {"loader": "fabric", "java_version": 25},
-                    "prerequisite_hashes": {}})
-    context.pop("host_direct_feature_source")  # production must select this itself
-
-    def do_not_block(*args, **kwargs):
-        raise AssertionError("A missing implementation must become coding work")
-
-    monkeypatch.setattr("minecraft_mod_ai.feature_execution_route.select_feature_execution_route", do_not_block)
-    monkeypatch.setattr("minecraft_mod_ai.feature_source_work_graph.build_source_work_graph", do_not_block)
-    monkeypatch.setattr("minecraft_mod_ai.source_owned_site_choice.choose_verified_source_site", do_not_block)
-    monkeypatch.setattr("minecraft_mod_ai.runtime_mutation_author.verify_native_runtime_mutation_coverage", do_not_block)
-    monkeypatch.setattr("minecraft_mod_ai.feature_registration_proof.validate_registered_event_sources", do_not_block)
-    monkeypatch.setattr(host, "_build_host_java_prompt", lambda *a, **kw: (
-        {}, behavior["intent"], [behavior], {"inspected_target_api": {},
-        "materialized_prerequisite_api": [], "host_state_work_order_scope": {}}, []))
-    monkeypatch.setattr("minecraft_mod_ai.construction_project_compile.verify_java_source_with_dependencies",
-                        lambda source, **kw: _run_java(tmp_path, source))
-    monkeypatch.setattr("minecraft_mod_ai.java_source_snapshot.record_compiled_sources", lambda *a, **kw: None)
-    coder = SourceCoder()
-    source = host.compose_host_java_source(
-        coder, spec, context, package="example", name="Feature", owner="example.Feature",
-        behaviors=[behavior])
-    assert len(coder.body_tasks) == 4
-    # A resumed compilation uses the same policy without creating proof requests.
-    assert host.compose_host_java_source(
-        coder, spec, context, package="example", name="Feature", owner="example.Feature",
-        behaviors=[behavior]) == source
-    assert len(coder.body_tasks) == 4
+    from test_incremental_java_pipeline import production_fixture
+    from test_incremental_java_author import OperationCoder
+    build = production_fixture(tmp_path, monkeypatch)
+    coder = OperationCoder()
+    source = build(coder)
+    count = len(coder.requests) + len(coder.expression_requests)
+    assert build(coder) == source
+    assert len(coder.requests) + len(coder.expression_requests) == count
 
 
 def test_direct_registration_compiler_error_is_sent_back_to_the_source_writer():

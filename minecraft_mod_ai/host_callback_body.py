@@ -15,11 +15,7 @@ from .java_operation_ir import identifier
 from .java_region_parser import _parse, _text, class_body_token_identity
 from .structured_output import StructuredOutputValidationError
 from .host_verified_callback_ops import verified_callback_choices
-
-
-def _object(properties):
-    return {"type": "object", "properties": properties,
-            "required": list(properties), "additionalProperties": False}
+from .structured_json_schema import closed_object_schema as _object
 
 
 _EXPRESSION = {"type": "string", "minLength": 1, "maxLength": 2048}

@@ -11,7 +11,7 @@ def test_unimplemented_runtime_producer_reaches_direct_source_author(
 ):
     from minecraft_mod_ai import construction_host_source as host
     import minecraft_mod_ai.host_fabric_callback_abi as callbacks
-    import minecraft_mod_ai.first_pass_java_source as first_pass
+    import minecraft_mod_ai.incremental_java_author as incremental
     import minecraft_mod_ai.construction_file_author as verifier
     import minecraft_mod_ai.construction_implementation as implementation
     import minecraft_mod_ai.construction_coverage as coverage
@@ -21,27 +21,41 @@ def test_unimplemented_runtime_producer_reaches_direct_source_author(
     monkeypatch.setattr(callbacks, "callback_interfaces", lambda *_args, **_kwargs: [
         {"event_id": "verified:tick", "parameters": ["example.World"]}
     ])
+    behavior = {"behavior_id": "test-1", "intent": "Implement original feature",
+                "runtime_state_reads": ["unbuilt_state"]}
+    prompt = {"requirement": behavior["intent"], "original_feature_goal": behavior["intent"],
+              "assigned_behaviors": [behavior], "materialized_prerequisite_api": [],
+              "inspected_target_api": {"target_api": [{"kind": "CLASS", "owner": "example.World"}]},
+              "host_state_work_order_scope": {}}
     monkeypatch.setattr(host, "_build_host_java_prompt",
                         lambda _router, _spec, _context, **_kwargs: (
-                            {}, "Implement original feature",
-                            [{"behavior_id": "test-1", "intent": "Implement original feature",
-                              "runtime_state_reads": ["unbuilt_state"]}],
-                            {"materialized_prerequisite_api": [],
-                             "inspected_target_api": {},
-                             "host_state_work_order_scope": {}}, [],
-                        ))
+                            {}, behavior["intent"], [behavior], prompt, []))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("New runtime producers must reach incremental implementation directly")
+
+    for target in ("first_pass_java_source.compose_first_pass_java",
+                   "feature_execution_route.select_feature_execution_route",
+                   "feature_source_work_graph.build_source_work_graph"):
+        monkeypatch.setattr("minecraft_mod_ai." + target, forbidden)
     called = []
 
     def author(_router, spec, messages, **kwargs):
         payload = json.loads(messages[1]["content"])
-        assert "unbuilt_state" in payload["runtime_state_bindings"]
+        assert spec["requirement"] == behavior["intent"]
+        assert payload["original_feature_goal"] == behavior["intent"]
+        assert payload["assigned_behaviors"] == [behavior]
+        assert payload["runtime_state_bindings"] == json.loads(spec["bindings"]["runtime_state_bindings_json"])
         assert payload["available_fabric_callbacks"][0]["event_id"] == "verified:tick"
+        assert payload["inspected_target_api"] == prompt["inspected_target_api"]
+        assert payload["materialized_prerequisite_api"] == []
         assert kwargs["construction_context"]["host_direct_feature_source"] is True
-        assert kwargs["behaviors"][0]["behavior_id"] == "test-1"
+        assert kwargs["construction_context"]["symbols"] == context["symbols"]
+        assert kwargs["behaviors"] == [behavior]
         called.append(True)
-        return "package example; public class Bridge {}"
+        return "package example; public class Bridge {}", {"schema": "mmm/incremental-java-v1", "members": []}
 
-    monkeypatch.setattr(first_pass, "compose_first_pass_java", author)
+    monkeypatch.setattr(incremental, "compose_incremental_feature", author)
     monkeypatch.setattr(verifier, "_verify_full_source", lambda *_a, **_k: None)
     monkeypatch.setattr(coverage, "record_authored_source_calls", lambda *_a, **_k: None)
 
@@ -61,8 +75,7 @@ def test_unimplemented_runtime_producer_reaches_direct_source_author(
     output = compose_host_java_source(
         object(), spec, context, package="example", name="Bridge",
         owner="example.Bridge",
-        behaviors=[{"behavior_id": "test-1", "intent": "Implement original feature",
-                    "runtime_state_reads": ["unbuilt_state"]}],
+        behaviors=[behavior],
     )
     assert output == "package example; public class Bridge {}"
     assert called == [True]

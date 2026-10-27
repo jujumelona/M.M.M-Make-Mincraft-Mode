@@ -220,7 +220,7 @@ def java_implementation_from_response(response):
 def java_correction_messages(messages, *, frame, response, diagnostic):
     """Correct direct authored members with the same bounded interface view."""
     views, _ = _views(messages)
-    if not any(view.get("host_java_authoring") for view in views):
+    if not any(_supports_direct_correction(view) for view in views):
         return None
     task = _merge(views)
     task.update({
@@ -241,3 +241,7 @@ def java_correction_messages(messages, *, frame, response, diagnostic):
         "unrelated state keys, or replace missing persistent state with defaults. "
         "No imports, new classes, TODOs or prose."
     )}], task), frame)
+
+
+def _supports_direct_correction(view):
+    return any((view.get("host_java_authoring"), view.get("host_incremental_java")))

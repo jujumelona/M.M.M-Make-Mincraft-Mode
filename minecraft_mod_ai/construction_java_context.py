@@ -256,9 +256,8 @@ def scoped_java_member_messages(
             current = parsed
     if current is None:
         return tuple(dict(m) for m in messages)
-    if current.get("host_java_authoring"):
-        from .java_authoring_prompt import java_body_messages
-        return tuple(java_body_messages(messages, frame, focus=True))
+    if _uses_direct_view(current):
+        return _direct_view(messages, frame, current)
 
     task = {key: current[key] for key in _CURRENT_MEMBER_FIELDS if key in current}
     # Only a behavior-owned member has an explicit state allowlist. A
@@ -399,3 +398,16 @@ def ensure_live_java_source_capacity(adapter: Any, config: Any, request: Any,
 
 
 __all__ = ["scoped_java_member_messages", "ensure_live_java_source_capacity"]
+
+
+def _uses_direct_view(current):
+    return any((current.get("host_java_authoring"), current.get("host_incremental_java")))
+
+
+def _direct_view(messages, frame, current):
+    if current.get("host_incremental_java"):
+        # This is already one operand with exact lexical scope and a paginated
+        # API/work view. A legacy member projection would erase its operands.
+        return tuple(dict(message) for message in messages)
+    from .java_authoring_prompt import java_body_messages
+    return tuple(java_body_messages(messages, frame, focus=True))

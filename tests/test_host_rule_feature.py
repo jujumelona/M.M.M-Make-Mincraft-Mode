@@ -1,6 +1,7 @@
 """Compile and execute host rules through repeated observations and contexts."""
 from collections import deque
 import importlib
+import json
 import shutil
 import subprocess
 
@@ -147,6 +148,57 @@ def compile_run(tmp_path, source, probe, *, callback_return="void", extra_source
     assert result.returncode == 0, result.stderr
 
 
+class IncrementalSourceRouter:
+    """Script operation pages while allowing source only for leaf expressions."""
+
+    def __init__(self, steps, expressions):
+        self.steps, self.expressions = deque(steps), deque(expressions)
+        self.requests, self.expression_requests = [], []
+
+    def generate_structured_data(self, role, messages, *, data_name, parameters):
+        task = json.loads(messages[-1]["content"])
+        page, reply = self.steps.popleft()
+        assert task["host_incremental_java"] is True
+        assert task["requested_page"] == page
+        assert data_name.endswith("_" + page)
+        self.requests.append(task)
+        return reply
+
+    def generate_java_source(self, role, messages, *, data_name, source_frame):
+        task = json.loads(messages[-1]["content"])
+        slot, expression = self.expressions.popleft()
+        assert source_frame["kind"] == "field"
+        assert task["expression_slot"] == slot
+        assert task["host_incremental_java"] is True
+        self.expression_requests.append(task)
+        names = task["scope"]["locals"]
+        value = expression.format(input=names[0]["name"], local=names[-1]["name"])
+        return source_frame["prefix"] + value + source_frame["suffix"]
+
+
+def _boundary_source_router(compiler_failure):
+    steps = [
+        ("kind", {"op": "register"}),
+        ("register", {"event_id": TICKS + "#END_LEVEL_TICK"}),
+        ("kind", {"op": "complete"}),
+        ("kind", {"op": "if"}),
+        ("kind", {"op": "assign"}),
+        ("assign", {"operator": "+="}),
+        ("kind", {"op": "complete"}),
+        ("otherwise", {"enabled": False}),
+        ("kind", {"op": "complete"}),
+    ]
+    expressions = [
+        ("condition", "{input}.isReady() && {input}.getGameTime() > 0 && {input}.getGameTime() % 10 == 0"),
+        ("target", "{input}.effects"),
+        ("value", "missingAmount" if compiler_failure else "1"),
+    ]
+    if compiler_failure:
+        steps.append(("repair_target", {"repair": "mapped_operand"}))
+        expressions.append(("value", "1"))
+    return IncrementalSourceRouter(steps, expressions)
+
+
 def test_changed_clock_is_scoped_and_does_not_repeat_effects(tmp_path):
     source = compose(tmp_path)
     from minecraft_mod_ai.construction_file_author import _check_entrypoint
@@ -190,10 +242,15 @@ def test_production_construction_authors_source_and_repairs_the_failing_member(t
     monkeypatch.setattr("minecraft_mod_ai.construction_coverage.record_authored_source_calls", lambda *a, **k: None)
 
     def verify(source, *args, **kwargs):
-        if "missing();" in source:
-            line = next(i for i, text in enumerate(source.splitlines(), 1) if "missing();" in text)
-            raise RuntimeError(f"Bridge.java:{line}: error: cannot find symbol\nmissing();")
-        compile_run(tmp_path, source, "ServerLevel w=new ServerLevel(); tick(w,0); tick(w,10); check(w.effects==1);")
+        try:
+            compile_run(tmp_path, source, """
+                ServerLevel w=new ServerLevel(); tick(w,0); tick(w,1); tick(w,9); check(w.effects==0);
+                tick(w,10); check(w.effects==1); tick(w,11); tick(w,19); check(w.effects==1);
+                w.ready=false; tick(w,20); check(w.effects==1);
+                w.ready=true; tick(w,21); check(w.effects==1); tick(w,30); check(w.effects==2);
+            """)
+        except AssertionError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     monkeypatch.setattr("minecraft_mod_ai.construction_file_author._verify_full_source", verify)
     context = {"symbols": index(), "project_root": str(tmp_path),
@@ -201,27 +258,20 @@ def test_production_construction_authors_source_and_repairs_the_failing_member(t
                "prerequisite_hashes": {}}
     spec = {"language": "java", "side": "COMMON", "target_path": "src/main/java/example/Bridge.java",
             "bindings": {"request_feature_entrypoint": "example.Bridge"}}
-    class SourceRouter:
-        repairs = 0
-
-        def generate_structured_data(self, role, messages, *, data_name, parameters):
-            assert data_name == "submit_java_construction_plan_count"
-            return {"count": 0}
-
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
-            repair = data_name.startswith("repair_direct_feature_member_")
-            self.repairs += int(repair)
-            body = ("missing();" if compiler_failure and not repair else
-                    TICKS + ".END_LEVEL_TICK.register(world -> {"
-                    "if (world.isReady() && world.getGameTime() > 0 && world.getGameTime() % 10 == 0) world.effects++;});")
-            return source_frame["prefix"] + body + source_frame["suffix"]
-
-    router = SourceRouter()
+    router = _boundary_source_router(compiler_failure)
     source = compose_host_java_source(router, spec, context, package="example", name="Bridge", owner="example.Bridge",
             behaviors=[{"behavior_id": "world-boundary", "trigger": "Game time reaches a boundary",
                         "intent": "Observe a boundary", "effects": "Increment effects", "state_reads": [], "state_writes": []}])
-    assert TICKS + ".END_LEVEL_TICK.register(" in source
-    assert router.repairs == int(compiler_failure)
+    assert TICKS + ".END_LEVEL_TICK.register(" in "".join(source.split())
+    repairs = [task for task in router.expression_requests if "javac_diagnostic" in task]
+    assert len(repairs) == int(compiler_failure)
+    assert len(router.expression_requests) == 3 + int(compiler_failure)
+    if repairs:
+        assert repairs[0]["repair_slot"] == "value"
+        assert repairs[0]["rejected_operation"]["value"] == "missingAmount"
+        assert repairs[0]["rejected_operation"]["operator"] == "+="
+        assert "cannot find symbol" in repairs[0]["javac_diagnostic"]
+    assert not router.steps and not router.expressions
     assert list((tmp_path / ".mmm/construction_host_files").glob("*.json"))
 
 

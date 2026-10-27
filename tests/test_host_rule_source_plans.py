@@ -209,6 +209,44 @@ class SourceRuleRouter:
         raise AssertionError("No Java source fallback")
 
 
+def _entity_presence_router():
+    from test_host_rule_feature import IncrementalSourceRouter, TICKS
+    return IncrementalSourceRouter([
+        ("kind", {"op": "register"}),
+        ("register", {"event_id": TICKS + "#END_LEVEL_TICK"}),
+        ("kind", {"op": "complete"}),
+        ("kind", {"op": "lookup"}),
+        ("lookup", {"query": ALIEN, "offset": 0}),
+        ("kind", {"op": "foreach"}),
+        ("foreach", {"type": ENTITY}),
+        ("kind", {"op": "if"}),
+        ("kind", {"op": "assign"}),
+        ("assign", {"operator": "+="}),
+        ("kind", {"op": "break"}),
+        ("otherwise", {"enabled": False}),
+        ("kind", {"op": "complete"}),
+        ("kind", {"op": "complete"}),
+    ], [
+        ("iterable", "{input}.getAllEntities()"),
+        ("condition", "{local} instanceof " + ALIEN),
+        ("target", "{input}.effects"),
+        ("value", "1"),
+    ])
+
+
+def _assert_entity_prerequisite_prompt(monkeypatch):
+    from minecraft_mod_ai import construction_host_source as host
+    from minecraft_mod_ai.host_prerequisite_api import java_api_declarations
+    original = host._build_host_java_prompt
+
+    def inspect_prompt(*args, **kwargs):
+        result = original(*args, **kwargs)
+        assert result[3]["materialized_prerequisite_api"] == [java_api_declarations(SOURCE, path=PATH)]
+        return result
+
+    monkeypatch.setattr(host, "_build_host_java_prompt", inspect_prompt)
+
+
 def test_production_entity_handoff_compiles_and_executes_direct_source(tmp_path, monkeypatch):
     import json
     from test_host_rule_feature import LEVEL, TICKS, compile_run, index
@@ -219,25 +257,16 @@ def test_production_entity_handoff_compiles_and_executes_direct_source(tmp_path,
     path = tmp_path / PATH
     path.parent.mkdir(parents=True)
     path.write_text(SOURCE)
-    class SourceRouter:
-        def generate_structured_data(self, role, messages, *, data_name, parameters):
-            assert data_name == "submit_java_construction_plan_count"
-            return {"count": 0}
-
-        def generate_java_source(self, role, messages, *, data_name, source_frame):
-            body = (TICKS + ".END_LEVEL_TICK.register(world -> {"
-                    "for (net.minecraft.world.entity.Entity entity : world.getAllEntities()) {"
-                    "if (entity instanceof " + ALIEN + ") {world.effects++; break;}}});")
-            return source_frame["prefix"] + body + source_frame["suffix"]
-
-    router = SourceRouter()
+    router = _entity_presence_router()
+    _assert_entity_prerequisite_prompt(monkeypatch)
 
     def verify(source, *args, **kwargs):
         compile_run(tmp_path, source, """
             ServerLevel w=new ServerLevel(); tick(w,0); check(w.effects==0);
             w.items.add(new net.minecraft.world.entity.Entity()); tick(w,1); check(w.effects==0);
             w.items.add(new AlienCombatHostileEntity()); tick(w,2); check(w.effects==1);
-            tick(w,3); check(w.effects==2); w.items.clear(); tick(w,4); check(w.effects==2);
+            w.items.add(new AlienCombatHostileEntity()); tick(w,3); check(w.effects==2);
+            w.items.clear(); tick(w,4); check(w.effects==2);
         """, extra_sources={
             "net/minecraft/world/entity/Entity.java": "package net.minecraft.world.entity; public class Entity {}",
             "example/AlienCombatHostileEntity.java": SOURCE,
@@ -261,7 +290,11 @@ def test_production_entity_handoff_compiles_and_executes_direct_source(tmp_path,
                     "state_reads": [], "state_writes": [], "runtime_state_reads": ["Alien presence"]}],
         source_context=[{"path": PATH}])
     assert "instanceof " + ALIEN in source
-    assert TICKS + ".END_LEVEL_TICK.register(" in source
+    assert TICKS + ".END_LEVEL_TICK.register(" in "".join(source.split())
+    declarations = [row for task in router.requests
+                    for row in task["requested_api_page"].get("declarations", [])]
+    assert any(row["owner"] == ALIEN and row["superclass"] == ENTITY for row in declarations)
+    assert not router.steps and not router.expressions
     assert not (tmp_path / ".mmm/construction_rule_ir").exists()
 
 

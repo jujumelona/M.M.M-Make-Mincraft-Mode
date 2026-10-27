@@ -96,8 +96,9 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
 def compose_host_java_source(router, spec: dict, context: dict, *,
                              package: str, name: str, owner: str,
                              behaviors=(), source_context=()) -> str:
-    from .construction_file_author import _verify_full_source
+    _verify_full_source = _verification_boundary()
     from .construction_implementation import construction_implementation_fingerprint
+    from .incremental_java_pipeline import (compose_source, candidate_data, load_candidate, compile_attempts, exhausted)
     from .first_pass_java_source import compose_first_pass_java
 
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
@@ -128,6 +129,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     required_native = not direct_feature and any(
         row.get("runtime_state_writes") for row in behaviors)
     mutation_receipts = []
+    incremental_state = {}
+    context["incremental_state"] = incremental_state
     with _claim_checkpoint(checkpoint):
         saved = _read_checkpoint(checkpoint, identifier)
         if saved:
@@ -156,6 +159,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 owner=owner, behaviors=behaviors, source_context=source_context,
             )
         )
+        context["host_state_access"] = state_access
         if direct_feature:
             from .host_fabric_callback_abi import callback_interfaces
 
@@ -171,7 +175,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             prompt["owned_runtime_records"] = json.loads(
                 bindings.get("owned_runtime_records_json") or "[]")
             print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
-                "owner": owner, "mode": "direct_member_source",
+                "owner": owner, "mode": "incremental_java_operations",
                 "assigned_behaviors": len(behavior_rows),
             }, ensure_ascii=False), flush=True)
         instructions = (
@@ -193,9 +197,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # never trusted to own real mutations on resume. Reconstruct
                 # the checked calls and receipt together, not separately.
                 pending = {}
+            pending = load_candidate(pending, incremental_state, direct_feature)
             if pending:
-                if set(pending) != {"source", "diagnostic"}:
-                    raise HostJavaConstructionError("JAVA_HOST_CANDIDATE_INVALID")
                 # A candidate is work in progress, never a successful receipt.
                 # Recheck it with the real compiler before any repair or return.
                 source = pending["source"]
@@ -215,7 +218,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         package=package, name=name, behaviors=behavior_rows,
                     )
                 if source is None:
-                    source = compose_first_pass_java(
+                    source = compose_source(
                         router, effective_spec, [
                             {"role": "system", "content": instructions},
                             {"role": "user", "content": json.dumps(
@@ -225,8 +228,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             **context, "host_state_access": state_access,
                             "host_state_work_order_scope": prompt["host_state_work_order_scope"],
                             "runtime_mutation_receipts": mutation_receipts,
+                            "incremental_state": incremental_state,
                         },
-                        behaviors=behavior_rows,
+                        behaviors=behavior_rows, legacy_author=compose_first_pass_java,
                     )
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
@@ -239,34 +243,25 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # failure. Resume the whole candidate, then author only its failing
             # member against the latest compiler diagnostic.
             repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
-            for attempt in range(budget + 1):
+            for attempt in compile_attempts(direct_feature, budget):
                 try:
                     _verify_full_source(source, spec, context, package=package,
                                         name=name, source_context=source_context)
                 except (RuntimeError, ValueError, OSError) as compiler_error:
-                    _save_checkpoint(candidate, identifier, {
-                        "source": source,
-                        "diagnostic": str(compiler_error) or type(compiler_error).__name__,
-                    })
-                    if attempt == budget:
+                    _save_checkpoint(candidate, identifier, candidate_data(
+                        source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
+                    if exhausted(direct_feature, attempt, budget):
                         raise
-                    repair_context = {
-                        "filename": name + ".java", "target_path": spec["target_path"],
-                        # The 26.2 index holds ~872K symbols. Repair reads
-                        # it without mutation; cloning it per failed member
-                        # needlessly multiplies memory pressure on Colab.
-                        "symbols": context.get("symbols") or {}, "owner": owner,
-                        "api_evidence": prompt["inspected_target_api"],
-                        "prerequisite_api": prompt["materialized_prerequisite_api"],
-                        "state_access": state_access, "behaviors": behavior_rows,
-                        "runtime_state_bindings": _repair_runtime_bindings(spec, mutation_receipts),
-                        "attempt": attempt + 1,
-                    }
+                    repair_context = _repair_context(spec, context, name, owner, prompt,
+                        state_access, behavior_rows, mutation_receipts, attempt)
                     if direct_feature:
-                        from .direct_feature_repair import repair_direct_feature_member
-                        source = repair_direct_feature_member(
+                        from .incremental_java_pipeline import repair_member
+                        source = repair_member(
                             repair_router, source, str(compiler_error),
-                            context={**repair_context, "implementation_context": prompt})
+                            context={**context, **repair_context, "implementation_context": prompt,
+                                     "incremental_state": incremental_state, "incremental_spec": effective_spec,
+                                     "incremental_messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+                                     "host_state_access": state_access})
                     else:
                         source = repair_compiler_member(
                             repair_router, source, str(compiler_error), **repair_context)
@@ -306,3 +301,21 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         }, ensure_ascii=False), flush=True)
         return source
 
+
+
+def _verification_boundary():
+    from functools import partial
+    from .construction_file_author import _verify_full_source
+    from .host_typed_state_access import validate_host_state_access, validate_behavior_state_provenance
+    from .incremental_java_pipeline import verify_full_source
+    return partial(verify_full_source, verifier=_verify_full_source,
+                   state_validators=(validate_host_state_access, validate_behavior_state_provenance))
+
+
+def _repair_context(spec, context, name, owner, prompt, state_access, behaviors, receipts, attempt):
+    return {"filename": name + ".java", "target_path": spec["target_path"],
+            "symbols": context.get("symbols") or {}, "owner": owner,
+            "api_evidence": prompt["inspected_target_api"],
+            "prerequisite_api": prompt["materialized_prerequisite_api"],
+            "state_access": state_access, "behaviors": behaviors,
+            "runtime_state_bindings": _repair_runtime_bindings(spec, receipts), "attempt": attempt + 1}
