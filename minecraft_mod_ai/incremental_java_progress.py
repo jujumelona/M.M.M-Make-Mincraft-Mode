@@ -13,7 +13,8 @@ def _observable_work(body, members, visited=frozenset()):
     A chain of helpers that only calls itself (or another empty helper) is not
     an effect. This graph walk terminates for cyclic call graphs.
     """
-    by_name = {row["name"]: row for row in members if row.get("kind") == "method"}
+    by_name = {row["name"]: row for row in members
+               if row.get("kind") == "method" and row.get("name")}
     for node in body or ():
         if not isinstance(node, dict):
             continue
@@ -78,7 +79,8 @@ def frontier_options(builder, current, body, options, declared_ids):
     outstanding = _unconnected(builder, body, declared_ids)
     ancestor = _waiting_ancestor(builder, current)
     blocked = bool(outstanding or ancestor)
-    builder.frontier_unconnected = outstanding
+    builder.frontier_unconnected = (outstanding if current["kind"] not in
+                                    {"class", "record", "enum"} else [])
     builder.frontier_feedback = {}
     if blocked and current["kind"] not in {"class", "record", "enum"}:
         options = [op for op in options if op != "method"]
