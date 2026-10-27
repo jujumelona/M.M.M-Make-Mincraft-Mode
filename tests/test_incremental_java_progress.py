@@ -247,3 +247,72 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
     body = builder.author_block(member, scope, ["parentGuard", "body"])
     assert body[0]["value"] == "parentValue"
     assert builder.drafts == [{"id": "parentGuard", "op": "if", "condition": "true"}]
+
+
+def test_frontier_rejects_unconnected_distinct_helpers_but_accepts_connected_growth():
+    """No operation-count cap: code growth must consume the previous dependency."""
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options, helper_delegation_allowed
+
+    current = {"id": "root", "kind": "method", "implementation_status": "authoring",
+               "body": [{"id": "n1", "op": "call", "method": "existingMethod", "arguments": []}]}
+    helper = {"id": "child", "kind": "method", "name": "generatedHelper",
+              "implementation_status": "complete", "body": []}
+    builder = SimpleNamespace(program={"members": [current, helper]}, member=current)
+    choices = ["method", "call", "if", "complete"]
+    blocked = frontier_options(builder, current, current["body"], choices, {"child"})
+    assert blocked == ["call", "if", "complete"]
+    assert not helper_delegation_allowed(builder)
+    assert builder.frontier_feedback["unconnected_member_ids"] == ["child"]
+    assert builder.frontier_feedback["state"] == "implementation_required"
+
+    # The same function can create arbitrarily many *connected* helpers.
+    # Nested calls are real references and clear the dependency.
+    current["body"].append({
+        "id": "n2", "op": "if", "condition": "true",
+        "body": [{"id": "n3", "op": "call", "method": "generatedHelper", "arguments": []}],
+    })
+    assert frontier_options(builder, current, current["body"], choices, {"child"}) == choices
+    assert helper_delegation_allowed(builder)
+    assert builder.frontier_feedback == {}
+
+
+def test_frontier_prevents_unimplemented_recursive_helper_chain():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options, helper_delegation_allowed
+
+    parent = {"id": "m_parent", "kind": "method", "implementation_status": "authoring",
+              "body": []}
+    child = {"id": "m_child", "kind": "method", "implementation_status": "authoring",
+             "body": []}
+    builder = SimpleNamespace(program={"members": [parent, child]}, member=child)
+    choices = ["method", "call", "assign", "complete"]
+    assert frontier_options(builder, child, child["body"], choices, set()) == [
+        "call", "assign", "complete"
+    ]
+    assert not helper_delegation_allowed(builder)
+    assert builder.frontier_feedback["waiting_ancestor_id"] == "m_parent"
+
+    # Merely declaring locals or returning void is not an effect.
+    parent["body"].extend([{"op": "local", "name": "unused", "value": "1"},
+                           {"op": "return", "value": ""}])
+    assert "method" not in frontier_options(builder, child, child["body"], choices, set())
+
+    parent["body"].append({"op": "call", "method": "verifiedOperation", "arguments": []})
+    assert frontier_options(builder, child, child["body"], choices, set()) == choices
+    assert helper_delegation_allowed(builder)
+
+
+def test_class_layout_and_initial_registrar_can_declare_members():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    registrar = {"id": "m1", "kind": "method", "registrar": True,
+                 "implementation_status": "authoring", "body": []}
+    layout = {"id": "t1", "kind": "class", "implementation_status": "authoring",
+              "body": []}
+    builder = SimpleNamespace(program={"members": [registrar, layout]}, member=layout)
+    choices = ["method", "field", "type", "complete"]
+    assert frontier_options(builder, layout, [], choices, {"unused"}) == choices
+    builder.member = registrar
+    assert frontier_options(builder, registrar, [], choices, set()) == choices
