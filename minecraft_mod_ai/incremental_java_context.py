@@ -129,7 +129,7 @@ def _retained(value):
 
 def _generated(member):
     parts = member.get("metadata") or {}
-    answer = {key: deepcopy(member[key]) for key in ("id", "owner", "kind", "name", "purpose")
+    answer = {key: deepcopy(member[key]) for key in ("id", "owner", "kind", "name", "purpose", "implementation_status")
               if key in member}
     if member.get("kind") and member.get("name"):
         answer["signature"] = declaration_header(member["kind"], member["name"], parts)

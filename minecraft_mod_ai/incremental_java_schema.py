@@ -37,3 +37,18 @@ BLOCK_OPS = frozenset({"if", "while", "do", "foreach", "for", "block", "synchron
 SIMPLE_OPS = ("call", "local", "assign", "if", "while", "do", "foreach", "for", "return",
               "throw", "block", "synchronized", "switch", "try", "lambda", "register")
 DECLARATION_OPS = ("field", "method", "type")
+
+
+def operation_options(member, scope, body, blocked_declarations):
+    if member["kind"] in {"class", "record", "enum"}:
+        # Type layouts have no executable operations. Reusing one overload must
+        # not remove the ability to declare other methods or constructors.
+        return [*DECLARATION_OPS, "constructor", "override", "lookup", "complete"]
+    options = [*SIMPLE_OPS, *DECLARATION_OPS, "lookup", "complete"]
+    if scope["loop_depth"] or scope["switch_depth"]:
+        options.append("break")
+    if scope["loop_depth"]:
+        options.append("continue")
+    if member["kind"] == "constructor" and not body:
+        options.append("constructor_call")
+    return [option for option in options if option not in blocked_declarations]

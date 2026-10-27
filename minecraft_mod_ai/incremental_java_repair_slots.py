@@ -124,8 +124,6 @@ def revise_operation(builder, node):
 
 def create_helper(builder, node):
     from .incremental_java_declarations import author_declaration
-    previous = len(builder.program["members"])
-    author_declaration(builder, "method")
-    method = builder.program["members"][previous]
+    method = author_declaration(builder, "method")
     node["method"] = method["name"]
     node["receiver"] = "" if method["metadata"].get("static") else "this"

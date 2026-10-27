@@ -111,9 +111,9 @@ def repair_incremental_program(router, source, diagnostic, *, program, spec, mes
     _count_attempt(builder, member, node, slot)
     builder.drafts = [node] if node else []
     _perform_repair(builder, member, node, slot, diagnostic)
+    from .incremental_java_progress import finish_member
     while builder.pending:
-        authored = builder.pending.popleft()
-        authored["body"] = builder.author_block(authored, initial_scope(authored), [])
+        finish_member(builder, builder.pending.popleft())
     result, revised = builder.render()
     if result == source:
         raise ValueError("JAVA_INCREMENTAL_REPAIR_NO_PROGRESS")

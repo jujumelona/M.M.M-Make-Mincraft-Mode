@@ -10,7 +10,7 @@ from .incremental_java_model import initial_program, initial_scope, allocation_c
 from .first_pass_java_declarations import declaration_frame
 from jsonschema import Draft202012Validator
 from .incremental_java_context import IncrementalJavaContext
-from .incremental_java_schema import COUNT, DECLARATION_OPS, SCHEMAS, SIMPLE_OPS, choice, obj, BOOL
+from .incremental_java_schema import COUNT, DECLARATION_OPS, SCHEMAS, choice, obj, BOOL, operation_options
 from .incremental_java_render import render_program, validate_expression, validate_value_type
 from .incremental_java_history import operation_view, walk_nodes, lookup_work, PAGE
 
@@ -22,9 +22,15 @@ _INSTRUCTION = (
     "asks for the NEXT operation after accepted_operations, not a repetition of the previous one. "
     "Use field/method/type to CREATE new supporting code when needed; "
     "those declarations immediately enter generated_declarations and their bodies are queued. "
+    "The host implements newly declared bodies before returning to their caller. "
+    "last_declaration reports the actual created or reused signature and implementation status; "
+    "use call with a completed helper's exact name to connect the result. When next_action is "
+    "implement_current_work, implement the current body directly instead of delegating it back to an active helper. "
+    "Repeating a declaration does not implement a call. "
     "A missing gameplay implementation is coding work, never SOURCE_REQUIRED. lookup reads "
     "exact platform/project API signatures; it is not a search for a completed feature. "
     "register installs an actual indexed event and creates a separately authored listener; "
+    "that accepted registration already connects the completed listener; do not call it again to install it. "
     "its inputs need not have the same name as the gameplay concept. Implement the original "
     "trigger's conditions and effects in that listener. lambda creates a typed local value "
     "with its own body; pass its host name as an argument. Preserve existing UI/action "
@@ -52,6 +58,7 @@ class IncrementalJavaBuilder:
         self.member, self.scope, self.path, self.block = None, {}, [], []
         self.current_operation = ""
         self.drafts, self.declaration_draft = [], {}
+        self.last_declaration = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
 
@@ -73,6 +80,8 @@ class IncrementalJavaBuilder:
                      "accepted_operations_total": len(self.block),
                      "accepted_operations_offset": max(0, len(self.block) - PAGE),
                      "requested_api_page": self.latest_api})
+        from .incremental_java_progress import declaration_feedback
+        task["last_declaration"] = declaration_feedback(self)
         task.update(self.rejection)
         task.update(extra or {})
         return task
@@ -171,31 +180,22 @@ class IncrementalJavaBuilder:
         if self.latest_api is None:
             self.latest_api = self.api.lookup(query["query"], query["offset"])
 
-    def new_method(self, *, owner, purpose, behavior, metadata, name=None, kind="method"):
-        identifier = self.allocate("m")
-        method = {"id": identifier, "owner": owner, "kind": kind,
-                  "name": name or "mmmHelper" + identifier[1:], "metadata": metadata,
-                  "purpose": purpose, "behavior": behavior, "body": []}
-        self.program["members"].append(method)
-        self.pending.append(method)
-        return method
+    def new_method(self, *, owner, purpose, behavior, metadata, name=None, kind="method", reuse=True):
+        from .incremental_java_progress import declare_method
+        return declare_method(self, owner=owner, purpose=purpose, behavior=behavior, metadata=metadata,
+                              name=name, kind=kind, reuse=reuse)
 
     def author_block(self, member, scope, path, body=None):
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
+        from .incremental_java_progress import finish_new_members
         previous = self.member, self.scope, self.path, self.block, self.current_operation
         body = [] if body is None else body
         self.member, self.scope, self.path, self.block = member, scope, path, body
+        blocked_declarations = set()
         while True:
-            options = list(SIMPLE_OPS) + list(DECLARATION_OPS) + ["lookup", "complete"]
-            if member["kind"] in {"class", "record", "enum"}:
-                options = [*DECLARATION_OPS, "constructor", "override", "lookup", "complete"]
-            if scope["loop_depth"] or scope["switch_depth"]:
-                options.append("break")
-            if scope["loop_depth"]:
-                options.append("continue")
-            if member["kind"] == "constructor" and not body:
-                options.append("constructor_call")
+            options = operation_options(member, scope, body, blocked_declarations)
+            self.current_operation = ""
             operation = self.ask(choice("op", options), "kind")["op"]
             self.current_operation = operation
             if operation == "complete":
@@ -204,23 +204,30 @@ class IncrementalJavaBuilder:
                 self.lookup()
                 continue
             if operation in {*DECLARATION_OPS, "constructor", "override"}:
+                pending_before = len(self.pending)
                 author_declaration(self, operation)
+                finish_new_members(self, pending_before)
+                if self.last_declaration.get("outcome") in {"reused", "active"}:
+                    blocked_declarations.add(operation)
                 continue
+            pending_before = len(self.pending)
             node = author_operation(self, operation)
             if node is None:
                 continue
             body.append(node)
             self.history[node["id"]] = node
             self.rejection = {}
+            blocked_declarations.clear()
+            finish_new_members(self, pending_before)
             if operation in {"return", "throw", "break", "continue"}:
                 break
         self.member, self.scope, self.path, self.block, self.current_operation = previous
         return body
 
     def finish(self):
+        from .incremental_java_progress import finish_member
         while self.pending:
-            member = self.pending.popleft()
-            member["body"] = self.author_block(member, initial_scope(member), [])
+            finish_member(self, self.pending.popleft())
         return self.render()
 
     def render(self):

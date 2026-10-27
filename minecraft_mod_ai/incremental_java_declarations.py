@@ -17,6 +17,7 @@ def _field(builder):
     with builder.declaration_scope(member):
         member["initializer"] = builder.expression("initializer", values["type"])
     builder.program["members"].append(member)
+    return member
 
 
 def _owner(builder):
@@ -28,7 +29,7 @@ def _method(builder):
     values = builder.typed(SCHEMAS["method"], "method", "return_type", allow_void=True)
     builder.declaration_draft.update(values)
     validate_type(values["return_type"])
-    builder.new_method(owner=_owner(builder), purpose=values["purpose"], behavior=builder.member["behavior"],
+    return builder.new_method(owner=_owner(builder), purpose=values["purpose"], behavior=builder.member["behavior"],
         metadata=method_metadata(values["return_type"], builder.parameters(), static=values["static"]))
 
 
@@ -52,6 +53,7 @@ def _type(builder):
               "behavior": builder.member["behavior"], "metadata": metadata, "body": []}
     builder.program["members"].append(member)
     builder.pending.append(member)
+    return member
 
 
 def _type_layout(builder, values, metadata):
@@ -72,7 +74,7 @@ def _constructor(builder):
     owner = _owner(builder)
     metadata = method_metadata(parameters=builder.parameters())
     metadata.pop("return_type")
-    builder.new_method(owner=owner, purpose="Initialize this new type according to its purpose.",
+    return builder.new_method(owner=owner, purpose="Initialize this new type according to its purpose.",
         behavior=builder.member["behavior"], metadata=metadata, name=owner, kind="constructor")
 
 
@@ -93,7 +95,7 @@ def _override(builder):
     declaration.update(visibility="public", annotations=["Override"],
         type_parameters=", ".join(selected.get("type_parameters", ())),
         throws=selected.get("generic_throws", selected.get("throws", [])))
-    builder.new_method(owner=_owner(builder), purpose="Implement " + selected["name"] + " for " + builder.member["purpose"],
+    return builder.new_method(owner=_owner(builder), purpose="Implement " + selected["name"] + " for " + builder.member["purpose"],
         behavior=builder.member["behavior"], metadata=declaration, name=selected["name"])
 
 
@@ -117,9 +119,13 @@ _HANDLERS = {"field": _field, "method": _method, "type": _type, "constructor": _
 
 
 def author_declaration(builder, operation):
+    from .incremental_java_progress import record_declaration
     previous = builder.declaration_draft
     builder.declaration_draft = {"kind": operation}
+    count = len(builder.program["members"])
     try:
-        _HANDLERS[operation](builder)
+        member = _HANDLERS[operation](builder)
+        record_declaration(builder, member, operation, reused=len(builder.program["members"]) == count)
+        return member
     finally:
         builder.declaration_draft = previous

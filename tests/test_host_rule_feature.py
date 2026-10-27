@@ -180,12 +180,12 @@ def _boundary_source_router(compiler_failure):
     steps = [
         ("kind", {"op": "register"}),
         ("register", {"event_id": TICKS + "#END_LEVEL_TICK"}),
-        ("kind", {"op": "complete"}),
         ("kind", {"op": "if"}),
         ("kind", {"op": "assign"}),
         ("assign", {"operator": "+="}),
         ("kind", {"op": "complete"}),
         ("otherwise", {"enabled": False}),
+        ("kind", {"op": "complete"}),
         ("kind", {"op": "complete"}),
     ]
     expressions = [

@@ -214,7 +214,6 @@ def _entity_presence_router():
     return IncrementalSourceRouter([
         ("kind", {"op": "register"}),
         ("register", {"event_id": TICKS + "#END_LEVEL_TICK"}),
-        ("kind", {"op": "complete"}),
         ("kind", {"op": "lookup"}),
         ("lookup", {"query": ALIEN, "offset": 0}),
         ("kind", {"op": "foreach"}),
@@ -224,6 +223,7 @@ def _entity_presence_router():
         ("assign", {"operator": "+="}),
         ("kind", {"op": "break"}),
         ("otherwise", {"enabled": False}),
+        ("kind", {"op": "complete"}),
         ("kind", {"op": "complete"}),
         ("kind", {"op": "complete"}),
     ], [

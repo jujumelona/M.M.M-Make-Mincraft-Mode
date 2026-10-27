@@ -159,7 +159,7 @@ def _register(builder, node):
     metadata["type_parameters"] = ", ".join(event.get("type_parameters", []))
     method = builder.new_method(owner=builder.member["owner"],
         purpose="At this event observation, enforce the original trigger and conditions, then implement its effects.",
-        behavior=builder.member["behavior"], metadata=metadata)
+        behavior=builder.member["behavior"], metadata=metadata, reuse=False)
     method["event"] = event
     node.update(event_owner=event["event_owner"], event_field=event["event_field"], handler=method["name"])
 
