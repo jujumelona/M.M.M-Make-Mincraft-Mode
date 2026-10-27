@@ -87,7 +87,6 @@ def test_repeated_helper_declaration_reuses_body_and_connects_real_callback(tmp_
             self.steps["m1"] = iter([
                 ("field", {"type": "int", "purpose": "Count claims", "static": False, "final": False}),
                 ("method", {"return_type": "void", "purpose": "Increment the claim count", "static": False}),
-                ("method", {"return_type": "void", "purpose": "Increment the claim count", "static": False}),
                 ("register", {}),
             ])
             self.steps["m2"] = iter([("assign", {"operator": "+="})])
@@ -107,9 +106,10 @@ def test_repeated_helper_declaration_reuses_body_and_connects_real_callback(tmp_
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             task = json.loads(messages[-1]["content"])
             if data_name.endswith("_kind"):
-                if task["current_member"]["id"] == "m1" and task.get("last_declaration", {}).get("outcome") == "reused":
+                if (task["current_member"]["id"] == "m1"
+                        and task.get("progress_frontier", {}).get("unconnected_member_ids")):
                     self.reused = True
-                    assert task["last_declaration"]["declaration"]["name"] == "mmmHelper2"
+                    assert task["progress_frontier"]["unconnected_member_ids"] == ["m2"]
                     assert "method" not in parameters["properties"]["op"]["enum"]
                 if task["current_member"]["id"] == "m2" and task.get("last_declaration"):
                     self.reused = True
