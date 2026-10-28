@@ -882,19 +882,16 @@ def validate_typed_plan_generation_contract(
     mod_id: str,
 ) -> dict[str, Any]:
     """Dry-compile every model-free typed-host source contract before dispatch.
-
     Filesystem ownership/merge checks remain generation-time concerns. Semantic
     source rendering does not: the exact PlanIR/state/persistence/network
     renderers are exercised here so proposal lowering cannot defer contract
     mismatches into a generation worker.
     """
-
     module.validate()
     config = module.config
     raw_plan = config.get("typed_plan_ir")
     if not isinstance(raw_plan, Mapping) or not raw_plan:
         raise ValueError("TYPED_PLAN_IR_REQUIRED")
-
     configured_package = str(
         config.get("typed_plan_package") or package_name
     ).strip()
@@ -928,6 +925,9 @@ def validate_typed_plan_generation_contract(
             minecraft_version=str(config.get("minecraft_version") or ""),
         )
     }
+    from .source_ui_actions_java import render_source_ui_action_files
+    files.update(render_source_ui_action_files(
+        raw_plan, package=package_name, minecraft_version=config.get("minecraft_version", "")))
     from .typed_action_contract import action_bindings
     if action_bindings(raw_plan):
         from .typed_action_java import render_action_dispatch_java
@@ -1061,18 +1061,15 @@ def generate_typed_plan_module(
     module: ProductionModule,
 ) -> dict[str, Any]:
     """Compile a persisted Typed PlanIR directly into Java with no model access."""
-
     module.validate()
     config = module.config
     raw_plan = config.get("typed_plan_ir")
     if not isinstance(raw_plan, Mapping) or not raw_plan:
         raise ValueError("TYPED_PLAN_IR_REQUIRED")
-
     root = Path(project_root).expanduser().resolve()
     if not root.is_dir() or root.is_symlink():
         raise ValueError("TYPED_PLAN_PROJECT_REQUIRED")
     info = inspect_fabric_project(root)
-
     package_name = str(
         config.get("typed_plan_package") or info.package_name
     ).strip()
@@ -1090,7 +1087,6 @@ def generate_typed_plan_module(
             "TYPED_PLAN_PATH_MISMATCH: "
             f"{configured_path!r} != {expected_path!r}"
         )
-
     target = root / expected_path
     if target.exists():
         if not target.is_file() or target.is_symlink():
@@ -1113,6 +1109,10 @@ def generate_typed_plan_module(
         minecraft_version=str(config.get("minecraft_version") or ""),
     )
     files = {expected_path: source}
+    from .source_ui_actions_java import materialize_source_ui_action_files
+    files.update(materialize_source_ui_action_files(
+        raw_plan, root=root, package=package_name,
+        minecraft_version=config.get("minecraft_version", ""), assert_owned=_assert_host_owned_or_absent))
     from .typed_action_contract import action_bindings
     if action_bindings(raw_plan):
         from .typed_action_java import render_action_dispatch_java

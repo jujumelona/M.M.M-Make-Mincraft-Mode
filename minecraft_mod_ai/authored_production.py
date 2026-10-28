@@ -29,6 +29,14 @@ from .typed_host_generation_contract import (
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 _AUTHORED_EXECUTION_SCHEMA = "mmm/authored-execution-manifest-v2"
 
+def _plan_capability_contracts(plan):
+    from .typed_host_capabilities import typed_host_capability_contracts
+    from .source_ui_planning import production_ui_capabilities
+    from .typed_action_authoring import preflight_ui_action_source_abi
+    preflight_ui_action_source_abi(plan.structured_sections, typed_host_capability_contracts())
+    return production_ui_capabilities(typed_host_capability_contracts(), plan.structured_sections, plan.request_scope)
+
+
 def _bind_authored_quality_contract(
     *,
     requested_prompt: str,
@@ -162,11 +170,7 @@ def _compile_new_authored_modules(
     if normalized_stored_sha != source_sha:
         raise ValueError("TYPED_PLAN_SOURCE_HASH_MISMATCH")
 
-    from .typed_host_capabilities import (
-        typed_host_capability_contracts,
-    )
-
-    capability_contracts = typed_host_capability_contracts()
+    capability_contracts = _plan_capability_contracts(plan)
     validated_plan = validate_typed_plan_ir(
         plan.typed_plan_ir,
         capabilities=capability_contracts,
@@ -369,6 +373,33 @@ def _compile_new_authored_modules(
     return (module, *platform_modules), manifest
 
 
+def _source_ui_scaffold_files(design, typed_program, *, package, minecraft_version):
+    from .source_ui_actions import SOURCE_UI_CAPABILITY
+    from .source_ui_actions_java import render_source_ui_action_files
+    if SOURCE_UI_CAPABILITY not in typed_program.get("capabilities", ()):
+        return {}
+    saved = design.get("authored_plan") or {}
+    program = saved.get("typed_plan_ir") if isinstance(saved, Mapping) else None
+    if not isinstance(program, Mapping):
+        raise ValueError("SOURCE_UI_SCAFFOLD_PLAN_REQUIRED")
+    files = render_source_ui_action_files(program, package=package, minecraft_version=minecraft_version)
+    expected = set(typed_program.get("dry_compile", {}).get("paths", ()))
+    if not files or not set(files).issubset(expected):
+        raise ValueError("SOURCE_UI_SCAFFOLD_SOURCE_MISMATCH")
+    return files
+
+
+def _materialize_source_ui_scaffold(info, design, typed_program, minecraft_version):
+    from .project_edit import write_text_files
+    from .source_ui_actions_java import SOURCE_UI_OWNER_MARKER
+    from .typed_plan_production import _assert_host_owned_or_absent
+    files = _source_ui_scaffold_files(design, typed_program,
+        package=info.package_name, minecraft_version=minecraft_version)
+    for relative in files:
+        _assert_host_owned_or_absent(info.root, relative, marker=SOURCE_UI_OWNER_MARKER)
+    write_text_files(info, files, replace_existing=True)
+
+
 def materialize_authored_execution_scaffold(
     proposal: CompleteProposal,
     project_root: Any,
@@ -414,6 +445,8 @@ def materialize_authored_execution_scaffold(
     typed_program = manifest.get("typed_program")
     if not isinstance(typed_program, Mapping):
         raise ValueError("AUTHORED_TYPED_PROGRAM_MANIFEST_MISSING")
+    _materialize_source_ui_scaffold(info, design, typed_program,
+        getattr(proposal.base_proposal.spec.platform, "minecraft_version", ""))
     program_path = str(typed_program.get("path") or "").replace("\\", "/").strip()
     expected_program_path = (
         f"src/main/java/{package_name.replace('.', '/')}/AuthoredProgram.java"
@@ -1035,14 +1068,13 @@ def compile_authored_design(
 
         from .authored_content_contract import content_owned_refs
         from .request_runtime_ownership import author_runtime_ownership
-        from .typed_host_capabilities import typed_host_capability_contracts
         from .typed_plan_authoring import author_typed_plan_ir
 
         content_design = deepcopy(dict(content_design))
         runtime_owners = author_runtime_ownership(router, plan.request_scope, plan.structured_sections)
         content_design["_request_runtime_owners"] = runtime_owners
         plan = replace(plan, content_design=content_design, typed_plan_ir=author_typed_plan_ir(
-            router, plan.text, plan.structured_sections, typed_host_capability_contracts(),
+            router, plan.text, plan.structured_sections, _plan_capability_contracts(plan),
             deterministic_module_kinds=deterministic_backend_capabilities(adapter),
             externally_covered_refs=content_owned_refs(plan.structured_sections, content_design),
             runtime_owners=runtime_owners,

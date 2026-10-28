@@ -20,6 +20,54 @@ from .request_runtime_records import feature_module_id, owner_records
 from .task_template_catalog import canonical_specification_input
 
 
+def _source_ui_records(plan, requirement_id):
+    from .source_ui_actions import deferred_ui_interactions
+    return [row for row in deferred_ui_interactions(plan.structured_sections)
+            if row["source_requirement_id"] == requirement_id]
+
+
+def _content_owns_interface(plan, feature, content_modules):
+    return (feature.get("implementation_role") == "interface"
+            and not _source_ui_records(plan, feature["requirement_id"])
+            and any(module.kind == "gui" and feature["requirement_id"] in module.config.get("requirement_refs", ())
+                    for module in content_modules))
+
+
+def _feature_needs_source(plan, feature, context_only):
+    return bool(_source_ui_records(plan, feature["requirement_id"])) or not context_only(feature)
+
+
+def _feature_runtime_bindings(plan, bindings, rid, package_name):
+    from copy import deepcopy
+    from .source_ui_actions import source_ui_callback
+    owners = plan.content_design.get("_request_runtime_owners", ())
+    callbacks = [{**source_ui_callback(row, package=package_name), "source_ui_record": deepcopy(row)}
+                 for row in _source_ui_records(plan, rid)]
+    bindings["owned_runtime_records_json"] = json.dumps(owner_records(plan.structured_sections, owners, rid),
+        ensure_ascii=False, separators=(",", ":"))
+    bindings["shared_state_contract_json"] = json.dumps(plan.structured_sections.get("state_model", {}),
+        ensure_ascii=False, separators=(",", ":"))
+    bindings["runtime_state_bindings_json"] = json.dumps({key: value for key, value in
+        plan.request_scope.get("behavior_state_bindings", {}).items() if value.get("binding") == "world_state"},
+        ensure_ascii=False, separators=(",", ":"))
+    bindings["retained_typed_behavior_json"] = json.dumps({
+        "event_bindings": plan.typed_plan_ir.get("event_bindings", ()),
+        "functions": [{"id": fn["id"], "covers": fn.get("covers", ())} for fn in plan.typed_plan_ir.get("functions", ())],
+        "ui_owned_records": owner_records(plan.structured_sections, owners, "__typed_ui__"),
+        **({"source_ui_actions": [{"action_id": row["action_id"], "trigger": row["trigger"],
+                                   "implementation_status": "source_body_required"} for row in callbacks]} if callbacks else {}),
+    }, ensure_ascii=False, separators=(",", ":"))
+    bindings["source_ui_callbacks_json"] = json.dumps(callbacks, ensure_ascii=False, separators=(",", ":"))
+    if callbacks:
+        bindings["source_ui_package_name"] = package_name
+        paths = json.loads(bindings["content_dependency_paths_json"])
+        source_path = "src/main/java/" + package_name.replace(".", "/") + "/AuthoredSourceActions.java"
+        paths.append(source_path)
+        bindings["content_dependency_paths_json"] = json.dumps(list(dict.fromkeys(paths)), separators=(",", ":"))
+        required = json.loads(bindings["required_content_source_paths_json"])
+        bindings["required_content_source_paths_json"] = json.dumps(list(dict.fromkeys([*required, source_path])), separators=(",", ":"))
+
+
 def compile_request_feature_jobs(
     plan: AuthoredPlan, *, adapter: Any, mod_id: str, package_name: str,
     content_modules: Sequence[Any], content_jobs: Sequence[ArtifactJob],
@@ -29,14 +77,7 @@ def compile_request_feature_jobs(
     # An existing Typed GUI implementation owns its interface requirement;
     # constructing an additional server callback would duplicate its effects.
     def _owned_interface(feature):
-        return (
-            feature.get("implementation_role") == "interface"
-            and any(
-                module.kind == "gui"
-                and feature["requirement_id"] in module.config.get("requirement_refs", ())
-                for module in content_modules
-            )
-        )
+        return _content_owns_interface(plan, feature, content_modules)
 
     # A broad request heading is not itself an observable gameplay callback.
     # In the October production trace, an unresolved "space mod" heading was
@@ -65,7 +106,7 @@ def compile_request_feature_jobs(
 
     non_interface = tuple(feature for feature in plan.request_scope.get(
         "requirements", ()) if not _owned_interface(feature))
-    concrete = tuple(feature for feature in non_interface if not _context_only(feature))
+    concrete = tuple(feature for feature in non_interface if _feature_needs_source(plan, feature, _context_only))
     if non_interface and not concrete:
         # A request consisting only of ungrounded headings is not a success.
         raise ValueError("REQUEST_FEATURE_EXECUTABLE_BEHAVIOR_REQUIRED")
@@ -94,9 +135,6 @@ def compile_request_feature_jobs(
         raise ValueError("CONSTRUCTION_TASK_GRAPH_EMPTY")
     for feature in execution_features:
         rid = feature["requirement_id"]
-        owners = [module for module in content_modules if rid in module.config.get("requirement_refs", ())]
-        if feature.get("implementation_role") == "interface" and any(m.kind == "gui" for m in owners):
-            continue
         # Runtime behavior may be implemented by a GUI, item, entity or other
         # content owner whose catalog provenance was not mapped to this exact
         # request requirement ID. The content graph is produced *before* these
@@ -219,21 +257,7 @@ def compile_request_feature_jobs(
                 source_paths.append(f"src/main/java/{package_name.replace('.', '/')}/entity/{name}.java")
         bindings["content_owner_classes_json"] = json.dumps(declarations, separators=(",", ":"))
         bindings["content_dependency_paths_json"] = json.dumps(list(dict.fromkeys(source_paths)), separators=(",", ":"))
-        runtime_owners = plan.content_design.get("_request_runtime_owners", ())
-        bindings["owned_runtime_records_json"] = json.dumps(
-            owner_records(plan.structured_sections, runtime_owners, rid), ensure_ascii=False, separators=(",", ":"))
-        bindings["shared_state_contract_json"] = json.dumps(
-            plan.structured_sections.get("state_model", {}), ensure_ascii=False, separators=(",", ":"))
-        bindings["runtime_state_bindings_json"] = json.dumps({
-            key: value for key, value in plan.request_scope.get("behavior_state_bindings", {}).items()
-            if value.get("binding") == "world_state"
-        }, ensure_ascii=False, separators=(",", ":"))
-        bindings["retained_typed_behavior_json"] = json.dumps({
-            "event_bindings": plan.typed_plan_ir.get("event_bindings", ()),
-            "functions": [{"id": fn["id"], "covers": fn.get("covers", ())}
-                          for fn in plan.typed_plan_ir.get("functions", ())],
-            "ui_owned_records": owner_records(plan.structured_sections, runtime_owners, "__typed_ui__"),
-        }, ensure_ascii=False, separators=(",", ":"))
+        _feature_runtime_bindings(plan, bindings, rid, package_name)
         bindings["request_features_json"] = json.dumps(
             [{"requirement_id": rid, "statement": feature["statement"]}],
             ensure_ascii=False, separators=(",", ":"))
@@ -250,10 +274,13 @@ def compile_request_feature_jobs(
             "do not implement world travel/combat/trading or other requested behavior. "
             "Use the actual materialized prerequisite declarations and shared state APIs; "
             "never guess methods from class names. Implement the assigned runtime records, "
-            "including their atomic mutations and state transitions. The retained Typed "
-            "functions/events and UI transactions already execute: do not duplicate their "
-            "callbacks, purchases, rewards or state effects. Preserve their exact command "
-            "and action identities when adding residual world behavior. "
+            "including their atomic mutations and state transitions. Retained Typed "
+            "functions and events keep ownership of their existing implementation records. "
+            "source_ui_callbacks_json identifies already-wired UI listeners whose effect "
+            "bodies still require your Java implementation here; their dispatchers provide "
+            "transport only. Implement those listeners from their exact inputs and original "
+            "conditions without registering them twice or inventing worksheet mutations. "
+            "Preserve existing command/action identities and other implemented transactions. "
             "Use the existing content owner classes; do not duplicate their registrations."
         )
         bindings["java_implementation_requirements"] = (

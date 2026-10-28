@@ -9,13 +9,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import replace
-import hashlib
 import json
 import re
 
-from .typed_action_contract import SCALARS, action_bindings, validate_action_contract
+from .typed_action_contract import SCALARS, action_bindings
 from .ui_action_source_lowering import _expression, _host_lower_ui_action_body, _mutation_writes
 from .request_record_ownership import same_action_source
+from .source_ui_actions import action_identity as action_identity
+from .source_ui_actions import validate_action_metadata, _effective_state_mutation
 
 
 def preflight_state_guard_semantics(sections):
@@ -95,29 +96,6 @@ def preflight_state_guard_semantics(sections):
                     )
 
 
-def _effective_state_mutation(mutation, declared):
-    """A source write must demonstrably change an owned canonical state."""
-    if not isinstance(mutation, Mapping) or mutation.get("target") not in declared:
-        return False
-    value = mutation.get("value")
-    if not isinstance(value, Mapping):
-        return False
-    op = mutation.get("operator", "=")
-    if (op == "=" and value.get("kind") == "state_ref"
-            and value.get("name") == mutation.get("target")):
-        return False
-    if op in {"+=", "-=", "*=", "/="} and value.get("kind") in {"literal", "number"}:
-        from decimal import Decimal, InvalidOperation
-        raw = value.get("value")
-        try:
-            numeric = Decimal(str(raw))
-        except (InvalidOperation, ValueError, TypeError):
-            return True  # Rejected separately by the typed state validator.
-        if (op in {"+=", "-="} and numeric == 0) or (
-            op in {"*=", "/="} and numeric == 1
-        ):
-            return False
-    return True
 
 
 def preflight_ui_action_effects(sections, *, strict_source=False):
@@ -302,11 +280,6 @@ def _checked_action_target(router, minecraft_version=""):
     return not version or version == "26.2"
 
 
-def action_identity(metadata):
-    encoded = json.dumps(
-        metadata, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
-    return "action_" + hashlib.sha256(encoded.encode()).hexdigest()[:20]
 
 
 def action_metadata_schema():
@@ -352,19 +325,6 @@ def action_metadata_schema():
     }
 
 
-def validate_action_metadata(metadata):
-    if not isinstance(metadata, Mapping) or set(metadata) != {"intent", "inputs"}:
-        raise ValueError("ACTION_METADATA_FIELDS")
-    validate_action_contract(
-        {
-            "id": action_identity(metadata),
-            "label": metadata["intent"],
-            "inputs": metadata["inputs"],
-        }
-    )
-    if any(row["name"] in {"source", "action_context"} for row in metadata["inputs"]):
-        raise ValueError("ACTION_INPUT_RESERVED_ACTOR")
-    return deepcopy(dict(metadata))
 
 
 def _complete_action_input(ask, row, *, count):
@@ -614,6 +574,11 @@ def _admit_body(function, metadata, state_types, capabilities):
 
 
 
+def _action_parameters(metadata):
+    return [{"name": "source", "type": "object"},
+            *({"name": row["name"], "type": row["type"]} for row in metadata["inputs"])]
+
+
 def author_action_functions(
     router,
     source_text,
@@ -632,14 +597,16 @@ def author_action_functions(
         _extract_state_variable_types,
     )
     from .typed_plan_ir import validate_typed_plan_ir
+    from .source_ui_actions import source_ui_body
+    from .source_ui_planning import action_preflight_sections, needs_grounded_action_body, admit_action_body
 
     rows = active_concern_records(sections, "resources_and_ui").get("interactions", ())
     state = active_concern_records(sections, "state_model")
     state_types = _extract_state_variable_types(sections)
-    preflight_state_guard_semantics(sections)
-    preflight_ui_action_effects(sections)
+    preflight_state_guard_semantics(action_preflight_sections(sections, capabilities))
+    preflight_ui_action_effects(action_preflight_sections(sections, capabilities))
+    preflight_ui_action_source_abi(sections, capabilities)
     from .authored_ui_action_bindings import is_presentation_only_interaction
-
     functions, bindings = [], []
     for record in rows:
         if (not isinstance(record.get("server_action"), Mapping)
@@ -686,10 +653,7 @@ def author_action_functions(
         author = ActionAuthor(
             router, source_text, sections, capabilities, budget=budget, max_calls=64
         )
-        parameters = [
-            {"name": "source", "type": "object"},
-            *({"name": row["name"], "type": row["type"]} for row in metadata["inputs"]),
-        ]
+        parameters = _action_parameters(metadata)
         if "player.uuid" not in (capabilities or {}):
             raise ValueError("ACTION_HOST_PLAYER_CONTEXT_REQUIRED")
         action_context = {
@@ -705,8 +669,8 @@ def author_action_functions(
                 }
             ],
         }
-        body = None
-        if prefer_grounded:
+        body = source_ui_body(record, sections, capabilities)
+        if needs_grounded_action_body(prefer_grounded, body):
             # A declared transaction must compile from its source-owned IR.
             # Do not spend dozens of model calls inventing a recursive body
             # when the source has no corresponding executable mutation.
@@ -765,7 +729,7 @@ def author_action_functions(
             ),
             "body": body,
         }
-        _admit_body(function, metadata, state_types, capabilities or {})
+        admit_action_body(function, record, sections, metadata, state_types, capabilities or {}, _admit_body)
         functions.append(function)
         bindings.append(
             {
@@ -796,6 +760,12 @@ def author_action_functions(
     return functions, bindings
 
 
+def _action_capability_contracts(plan, sections):
+    from .source_ui_planning import production_ui_capabilities
+    from .typed_host_capabilities import typed_host_capability_contracts
+    return production_ui_capabilities(typed_host_capability_contracts(), sections, plan.request_scope)
+
+
 def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
     """Upgrade saved UI execution, preserving unrelated functions and events."""
     from .authored_structured_design import active_concern_records
@@ -804,7 +774,6 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
         action_record_identity,
         is_presentation_only_interaction,
     )
-    from .typed_host_capabilities import typed_host_capability_contracts
     from .typed_plan_ir import validate_typed_plan_ir
 
     rows = active_concern_records(plan.structured_sections, "resources_and_ui").get(
@@ -896,17 +865,18 @@ def migrate_ui_action_plan(router, plan, *, minecraft_version=""):
             *(b["entry_point_index"] + 1 for b in ir["event_bindings"]),
         ]
     )
+    action_capabilities = _action_capability_contracts(plan, sections)
     functions, bindings = author_action_functions(
         router,
         plan.text,
         sections,
-        typed_host_capability_contracts(),
+        action_capabilities,
         first_index=first,
         runtime_owners=owners, prefer_grounded=True,
     )
     ir["functions"].extend(functions)
     ir["event_bindings"].extend(bindings)
-    ir = validate_typed_plan_ir(ir, capabilities=typed_host_capability_contracts())
+    ir = validate_typed_plan_ir(ir, capabilities=action_capabilities)
     return replace(
         plan, structured_sections=sections, typed_plan_ir=ir, content_design=content
     )

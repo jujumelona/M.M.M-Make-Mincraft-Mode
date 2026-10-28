@@ -119,6 +119,10 @@ def _literal_type(node: Mapping[str, Any], where: str) -> str:
     return kind
 
 
+def _capability_parameter_type(value: Any, where: str) -> str:
+    return "map" if value == "map" else _type(value, where)
+
+
 def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for cap_id, raw in dict(capabilities or {}).items():
@@ -151,7 +155,7 @@ def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, d
             raise _error(f"capability {cap_id!r}: invalid owner")
         _name(method, f"capability {cap_id!r}.method")
         params = [
-            _type(item, f"capability {cap_id!r}.parameters")
+            _capability_parameter_type(item, f"capability {cap_id!r}.parameters")
             for item in _sequence(
                 raw["parameters"],
                 f"capability {cap_id!r}.parameters",

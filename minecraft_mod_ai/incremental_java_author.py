@@ -65,6 +65,8 @@ class IncrementalJavaBuilder:
         self.last_declaration = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
+        from .source_ui_callback_authoring import seed_source_ui_callbacks
+        seed_source_ui_callbacks(self, initial=program is None)
 
     def allocate(self, prefix):
         self.counters[prefix] = self.counters.get(prefix, 0) + 1

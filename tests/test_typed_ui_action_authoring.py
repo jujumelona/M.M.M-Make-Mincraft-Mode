@@ -696,7 +696,11 @@ def test_repeated_ast_never_guesses_missing_or_ambiguous_ui_effect(monkeypatch):
         "minecraft_mod_ai.typed_plan_authoring.TypedOperationAuthor.body",
         stuck_body,
     )
-    for change in ("missing", "ambiguous", "unknown_input"):
+    for change, error in (
+        ("missing", "ACTION_HOST_LOWERING_REQUIRED"),
+        ("ambiguous", "ACTION_HOST_LOWERING_REQUIRED"),
+        ("unknown_input", "ACTION_UI_VALUE_ABI_UNBOUND: ACTION_HOST_INPUT_UNBOUND: not_a_client_input"),
+    ):
         design = sections()
         updates = design["state_model"]["specification"]["updates"]
         if change == "missing":
@@ -705,7 +709,7 @@ def test_repeated_ast_never_guesses_missing_or_ambiguous_ui_effect(monkeypatch):
             updates.append(deepcopy(updates[0]))
         else:
             updates[0]["mutation"][0]["value"]["name"] = "not_a_client_input"
-        with pytest.raises(ValueError, match="ACTION_HOST_LOWERING_REQUIRED"):
+        with pytest.raises(ValueError, match=error):
             author_action_functions(
                 None, "Use a selection form", design,
                 typed_host_capability_contracts(), first_index=0,

@@ -193,12 +193,8 @@ def typed_plan_support_issues(
     # not fictitious authored integration entry points. Validate their exact
     # deterministic identity and forwarded action so arbitrary extra bindings
     # cannot escape the integration contract.
-    algorithm = active_concern_records(normalized, "algorithm")
-    state = active_concern_records(normalized, "state_model")
-    mutating_ui = bool(
-        algorithm.get("atomic_mutations") or state.get("transitions")
-        or state.get("updates")
-    )
+    from .authored_ui_action_bindings import _mutating_ui_actions
+    mutating_ui = bool(_mutating_ui_actions(normalized))
     ui_rows = active_concern_records(normalized, "resources_and_ui").get(
         "interactions", ()
     )

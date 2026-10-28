@@ -122,13 +122,14 @@ def _source_runtime_owner(ref, record, feature_ids, interactions):
 def _partition_source_owners(records, features, sections):
     feature_ids = {row["requirement_id"] for row in features}
     from .authored_ui_action_bindings import is_presentation_only_interaction
+    from .source_ui_actions import source_ui_preflight_sections
 
     # Display-only navigation must never take exclusive ownership of state
     # records. A distinct gameplay action can own its own same-trigger writes.
     state = sections.get("state_model", {}).get("specification", {})
     interactions = [
         row
-        for row in sections.get("resources_and_ui", {}).get("specification", {}).get("interactions", ())
+        for row in source_ui_preflight_sections(sections).get("resources_and_ui", {}).get("specification", {}).get("interactions", ())
         if not is_presentation_only_interaction(row, state)
     ]
     assigned, remaining = [], []
@@ -141,6 +142,20 @@ def _partition_source_owners(records, features, sections):
     return assigned, remaining
 
 
+def _runtime_features(scope, sections):
+    from .source_ui_actions import deferred_ui_interactions
+    source_ui = {row[SOURCE_REQUIREMENT] for row in deferred_ui_interactions(sections)}
+    return [row for row in scope.get("requirements", ())
+            if row.get("implementation_role", "gameplay") != "interface" or row["requirement_id"] in source_ui]
+
+
+def _typed_ui_actions(sections):
+    from .authored_ui_action_bindings import _mutating_ui_actions
+    from .source_ui_actions import action_record_identity, deferred_ui_interactions
+    source_actions = {action_record_identity(row) for row in deferred_ui_interactions(sections)}
+    return tuple(action for action in _mutating_ui_actions(sections) if action not in source_actions)
+
+
 def author_runtime_ownership(router, scope, sections, *, budget=None):
     """Choose one owner per runtime record using bounded feature identities.
 
@@ -148,15 +163,13 @@ def author_runtime_ownership(router, scope, sections, *, budget=None):
     may retain their dedicated host dispatcher, never a second generic handler.
     """
     from .authored_structured_design import normalize_structured_sections
-    from .authored_ui_action_bindings import _mutating_ui_actions
     from .parallel_model_tasks import deterministic_model_map, serialized_callback
 
-    features = [row for row in scope.get("requirements", ())
-                if row.get("implementation_role", "gameplay") != "interface"]
+    features = _runtime_features(scope, sections)
     if not features:
         return []
     sections = normalize_structured_sections(sections)
-    actions = _mutating_ui_actions(sections)
+    actions = _typed_ui_actions(sections)
     consume = serialized_callback(budget.consume) if budget is not None else None
     records = list(_runtime_records(sections))
     known_assignments, records = _partition_source_owners(records, features, sections)

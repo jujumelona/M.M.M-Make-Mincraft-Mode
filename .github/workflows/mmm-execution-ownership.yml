@@ -29,12 +29,13 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - name: Prepare verified Minecraft 26.2 SDK
         run: python scripts/prepare_typed_action_sdk.py --cache "$RUNNER_TEMP/typed-action-sdk"
-      - name: Compile client, server, state and persistence against real SDK
+      - name: Compile UI, source callbacks, state and persistence against real SDK
         run: |
           MMM_ACTION_COMPILE_CLASSPATH="$(cat "$RUNNER_TEMP/typed-action-sdk/classpath.txt")"
           export MMM_ACTION_COMPILE_CLASSPATH
           python -m pytest \
             tests/test_typed_ui_action_contract.py \
+            tests/test_source_ui_actions_sdk.py \
             tests/test_host_action_occurrence.py \
             tests/test_typed_ui_action_authoring.py \
             tests/test_typed_state_context.py \
