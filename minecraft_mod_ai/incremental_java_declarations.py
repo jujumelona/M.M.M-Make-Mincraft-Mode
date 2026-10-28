@@ -38,6 +38,11 @@ def _type(builder):
     builder.declaration_draft.update(values)
     if values["superclass"]:
         validate_type(values["superclass"])
+    from .incremental_java_progress import MAX_HELPER_DEPENDENCY_DEPTH
+    depth = int((builder.member or {}).get("generation_depth", 0)) + 1
+    if depth > MAX_HELPER_DEPENDENCY_DEPTH:
+        raise RuntimeError("INCREMENTAL_JAVA_HELPER_DEPENDENCY_CYCLE: "
+                           f"member={builder.member['id']}; depth={depth}")
     identifier = builder.allocate("t")
     builder.declaration_draft.update(name="MmmType" + identifier[1:], owner=_owner(builder))
     metadata = {"visibility": "private", "static": True, "interfaces": [],
@@ -48,7 +53,7 @@ def _type(builder):
         validate_type(interface)
         metadata["interfaces"].append(interface)
     _type_layout(builder, values, metadata)
-    member = {"id": identifier, "owner": _owner(builder), "kind": values["kind"],
+    member = {"id": identifier, "owner": _owner(builder), "kind": values["kind"], "generation_depth": depth,
               "name": "MmmType" + identifier[1:], "purpose": values["purpose"],
               "behavior": builder.member["behavior"], "metadata": metadata, "body": []}
     builder.program["members"].append(member)
