@@ -55,7 +55,7 @@ def test_void_parameter_is_excluded_before_sampling_type_metadata():
 def test_cancelled_event_selection_preserves_accepted_local_and_returns_to_authoring():
     @structured_values
     class Coder:
-        steps = iter(["local", "register", "return"])
+        steps = iter(["local", "register", "complete"])
 
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             if data_name.endswith("_kind"):
@@ -67,6 +67,7 @@ def test_cancelled_event_selection_preserves_accepted_local_and_returns_to_autho
         def value_answer(self, role, messages, *, data_name, source_frame):
             return source_frame["prefix"] + "3" + source_frame["suffix"]
     builder = _builder(Coder())
+    builder.member.pop("registrar", None)  # Scope cancellation is not a live entrypoint.
     body = builder.author_block(builder.member, builder.scope, [])
     assert len(body) == 1 and body[0]["op"] == "local" and body[0]["value"] == "3"
     assert builder.scope["locals"] == [{"name": body[0]["name"], "type": "int"}]
