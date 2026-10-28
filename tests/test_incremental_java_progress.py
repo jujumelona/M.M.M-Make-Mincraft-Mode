@@ -248,6 +248,7 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
     behavior, spec, context, messages = _inputs()
     builder = IncrementalJavaBuilder(Coder(), spec, messages, context, [behavior])
     member = builder.program["members"][0]
+    member.pop("registrar", None)  # This test isolates lexical scope behavior.
     scope = initial_scope(member)
     scope["locals"].append({"type": "int", "name": "parentValue"})
     builder.drafts = [{"id": "parentGuard", "op": "if", "condition": "true"}]
