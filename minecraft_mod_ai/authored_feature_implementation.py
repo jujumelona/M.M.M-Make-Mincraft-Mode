@@ -68,6 +68,41 @@ def _feature_runtime_bindings(plan, bindings, rid, package_name):
         bindings["required_content_source_paths_json"] = json.dumps(list(dict.fromkeys([*required, source_path])), separators=(",", ":"))
 
 
+def _independent_feature_work_items(plan, features, behaviors):
+    """Shard only independent, source-grounded actions, never atomic gameplay.
+
+    The original feature retains one Java owner when runtime state, UI,
+    shared typed effects or action dependencies could cross behavior boundaries.
+    """
+    from .spec_identity import canonical_spec_id
+
+    typed = plan.typed_plan_ir or {}
+    shared_typed = any(typed.get(key) for key in ("functions", "event_bindings"))
+    items = []
+    for feature in features:
+        rid = feature["requirement_id"]
+        rows = [row for row in behaviors if row.get("requirement_id") == rid]
+        owned = bool(_source_ui_records(plan, rid)) or bool(owner_records(
+            plan.structured_sections, plan.content_design.get("_request_runtime_owners", ()), rid))
+        stateful = any(
+            row.get(key) for row in rows
+            for key in ("state_reads", "state_writes", "runtime_state_reads",
+                        "runtime_state_writes")
+        )
+        independent = (
+            len(rows) > 1 and not (owned or stateful or shared_typed)
+            and all(row.get("source_status", "grounded") == "grounded"
+                    and row.get("trigger") and row.get("effects") for row in rows)
+        )
+        if independent:
+            for row in rows:
+                subject = canonical_spec_id(feature_module_id(rid) + "_" + row["behavior_id"])
+                items.append((feature, row["behavior_id"], subject))
+        else:
+            items.append((feature, None, feature_module_id(rid)))
+    return items
+
+
 def compile_request_feature_jobs(
     plan: AuthoredPlan, *, adapter: Any, mod_id: str, package_name: str,
     content_modules: Sequence[Any], content_jobs: Sequence[ArtifactJob],
@@ -133,7 +168,9 @@ def compile_request_feature_jobs(
         scoped, (), {}, router=None)
     if not construction_tasks:
         raise ValueError("CONSTRUCTION_TASK_GRAPH_EMPTY")
-    for feature in execution_features:
+    for feature, behavior_identity, subject in _independent_feature_work_items(
+        plan, execution_features, tuple(admitted_behaviors.values()),
+    ):
         rid = feature["requirement_id"]
         # Runtime behavior may be implemented by a GUI, item, entity or other
         # content owner whose catalog provenance was not mapped to this exact
@@ -152,10 +189,10 @@ def compile_request_feature_jobs(
         implementation = binding["implementation"]
         if implementation["implementation_id"] != "python_generator:" + leaf:
             raise ValueError("REQUEST_FEATURE_GENERATOR_REQUIRED")
-        subject = feature_module_id(rid)
+        selected_intent = admitted_behaviors[behavior_identity]["intent"] if behavior_identity else feature["statement"]
         module = ProductionModule(subject, "integration", {
             "integration_type": "artifact_graph_owned", "requirement_refs": [rid],
-            "implementation_obligations": [feature["statement"]],
+            "implementation_obligations": [selected_intent],
         }, depends_on=tuple(dict.fromkeys(
             m.module_id for m in (*prerequisite_modules, *runtime_modules)
         )))
@@ -164,7 +201,7 @@ def compile_request_feature_jobs(
             None, canonical_leaf=leaf, mod_id=mod_id, package_name=package_name,
             package_path=package_name.replace(".", "/"), subject=subject,
             minecraft_version=adapter.minecraft_version, context_id=adapter.version_context.context_id,
-            source_requirement=feature["statement"], parent_requirement=rid,
+            source_requirement=selected_intent, parent_requirement=rid,
         )
         spec = canonical_specification_input(leaf, inputs)
         bindings = spec["bindings"]
@@ -175,6 +212,7 @@ def compile_request_feature_jobs(
             admitted_behaviors[row["behavior_id"]]
             for row in plan.request_scope.get("behavior_requirements", ())
             if row.get("requirement_id") == rid
+            and (behavior_identity is None or row["behavior_id"] == behavior_identity)
         ]
         if not behavior_rows:
             raise ValueError("CONSTRUCTION_BEHAVIOR_COVERAGE_MISSING: " + rid)
@@ -259,7 +297,7 @@ def compile_request_feature_jobs(
         bindings["content_dependency_paths_json"] = json.dumps(list(dict.fromkeys(source_paths)), separators=(",", ":"))
         _feature_runtime_bindings(plan, bindings, rid, package_name)
         bindings["request_features_json"] = json.dumps(
-            [{"requirement_id": rid, "statement": feature["statement"]}],
+            [{"requirement_id": rid, "statement": selected_intent}],
             ensure_ascii=False, separators=(",", ":"))
         source_pattern = spec["output_schema"]["pattern"] + (
             r".*\bimplements\s+(?:net\.fabricmc\.api\.)?ModInitializer\b.*\bonInitialize\s*\("
