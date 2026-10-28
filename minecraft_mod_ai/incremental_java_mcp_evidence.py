@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -111,7 +112,14 @@ def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) 
             router = ExternalMCPRouter(timeout_seconds=30.0)
             context["host_mcp_router"] = router
         _record(context, "cache_misses")
-        answer = _search_external(router, question, target, context)
+        started = time.perf_counter()
+        try:
+            answer = _search_external(router, question, target, context)
+        finally:
+            metrics = context.setdefault("_incremental_mcp_evidence_metrics", {})
+            metrics["remote_seconds"] = round(
+                metrics.get("remote_seconds", 0.0) + time.perf_counter() - started, 3
+            )
         cache[key] = answer  # A failed lookup is also a useful cache entry.
     if answer is not None:
         page["external_mcp_evidence"] = dict(answer)

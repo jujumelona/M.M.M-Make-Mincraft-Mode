@@ -297,6 +297,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             "target_path": spec["target_path"], "owner": owner,
             "target_compilation_verified": True,
             "runtime_verified": False,
+            "mcp_evidence_metrics": dict(context.get("_incremental_mcp_evidence_metrics") or {}),
             "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         }, ensure_ascii=False), flush=True)
         return source
