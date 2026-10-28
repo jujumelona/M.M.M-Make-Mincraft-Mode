@@ -144,3 +144,24 @@ def test_real_nested_effect_passes_entrypoint_gate():
             {"id": "n3", "op": "assign", "target": "this.count",
              "operator": "+=", "value": "1"}], "otherwise": []}],
     }]})
+
+
+def test_author_scope_restores_after_failed_model_page():
+    builder = _builder(None)
+    member_before, scope_before = builder.member, builder.scope
+    path_before, block_before = builder.path, builder.block
+    operation_before = builder.current_operation
+
+    class FailingCoder:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            raise RuntimeError("intentional model transport failure")
+
+    builder.router = FailingCoder()
+    with pytest.raises(RuntimeError, match="intentional model transport failure"):
+        builder.author_block(member_before, dict(scope_before), ["n1", "body"])
+
+    assert builder.member is member_before
+    assert builder.scope is scope_before
+    assert builder.path is path_before
+    assert builder.block is block_before
+    assert builder.current_operation == operation_before
