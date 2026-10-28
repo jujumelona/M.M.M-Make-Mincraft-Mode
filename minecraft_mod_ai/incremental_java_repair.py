@@ -109,6 +109,8 @@ def repair_incremental_program(router, source, diagnostic, *, program, spec, mes
     if node and node["op"] == "for" and slot in {"condition", "update"}:
         builder.scope["locals"].append({"name": node["name"], "type": node["type"]})
     _count_attempt(builder, member, node, slot)
+    from .incremental_java_mcp_evidence import recover_compiler_api_evidence
+    recover_compiler_api_evidence(builder, diagnostic)
     builder.drafts = [node] if node else []
     _perform_repair(builder, member, node, slot, diagnostic)
     from .incremental_java_progress import finish_member

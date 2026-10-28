@@ -87,3 +87,40 @@ def test_nonproject_test_context_does_not_start_mcp_automatically(monkeypatch):
     builder = SimpleNamespace(context={"target": {"minecraft_version": "26.2"}})
     assert augment_api_lookup(builder, "missing", _miss("missing")) == _miss("missing")
     assert "host_mcp_router" not in builder.context
+
+
+
+def test_compiler_missing_external_api_retrieves_evidence_without_model_tool_calls():
+    from minecraft_mod_ai.incremental_java_mcp_evidence import recover_compiler_api_evidence
+
+    router = FakeRouter()
+    seen = []
+    class API:
+        def lookup(self, query, offset=0):
+            seen.append((query, offset))
+            return _miss(query, offset)
+    builder = _builder(router)
+    builder.api = API()
+    builder.spec = {"target_path": "src/main/java/example/Feature.java"}
+    builder.latest_api = {}
+    recover_compiler_api_evidence(
+        builder,
+        "Feature.java:2: error: package net.minecraft.world.item does not exist"
+    )
+    assert seen
+    assert builder.latest_api.get("external_mcp_evidence", {}).get("status") == "UNVERIFIED_EXTERNAL_REFERENCE"
+    assert len(router.calls) == 1
+
+
+def test_compiler_local_error_does_not_trigger_remote_evidence():
+    from minecraft_mod_ai.incremental_java_mcp_evidence import recover_compiler_api_evidence
+
+    router = FakeRouter()
+    builder = _builder(router)
+    builder.api = SimpleNamespace(lookup=lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("local compiler faults should not run API discovery")))
+    builder.spec = {"target_path": "src/main/java/example/Feature.java"}
+    builder.latest_api = {"previous": "preserved"}
+    recover_compiler_api_evidence(builder, "Feature.java:3: error: incompatible types: int cannot be converted to boolean")
+    assert builder.latest_api == {"previous": "preserved"}
+    assert router.calls == []

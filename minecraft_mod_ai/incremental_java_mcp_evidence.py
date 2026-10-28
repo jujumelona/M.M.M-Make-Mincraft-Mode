@@ -106,3 +106,23 @@ def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) 
     if answer is not None:
         page["external_mcp_evidence"] = dict(answer)
     return page
+
+
+def recover_compiler_api_evidence(builder: Any, diagnostic: str) -> None:
+    """Retrieve target-scoped reference data for an external API compiler error.
+
+    The host, not MiMo, chooses the evidence route. Project-local type/variable
+    mistakes must go straight to operand repair, without network or MCP work.
+    """
+    from .generation_evidence_controller import repair_evidence_route_for_errors
+
+    errors = [{"message": str(diagnostic)}]
+    route = repair_evidence_route_for_errors(
+        errors, target_path=builder.spec.get("target_path"))
+    if route.get("route") != "official_api":
+        return
+    query = str(route.get("query_prefix") or "").strip()
+    if not query:
+        return
+    local_page = builder.api.lookup(query, 0)
+    builder.latest_api = augment_api_lookup(builder, query, local_page)
