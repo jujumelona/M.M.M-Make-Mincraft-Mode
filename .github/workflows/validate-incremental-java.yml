@@ -1,0 +1,31 @@
+name: Incremental Java authoring regression
+on:
+  push:
+    branches:
+      - fix/iterative-incremental-java-work-queue
+  pull_request:
+    paths:
+      - 'minecraft_mod_ai/incremental_java_*.py'
+      - 'tests/test_incremental_java_*.py'
+      - '.github/workflows/validate-incremental-java.yml'
+permissions:
+  contents: read
+jobs:
+  incremental-java:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[dev]'
+      - name: Compile Python source
+        run: python -m compileall -q minecraft_mod_ai tests/test_incremental_java_progress.py tests/test_incremental_java_liveness.py
+      - name: Run incremental Java regressions
+        run: pytest -q tests/test_incremental_java_progress.py tests/test_incremental_java_liveness.py tests/test_incremental_java_author.py
