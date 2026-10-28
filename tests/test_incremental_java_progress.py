@@ -31,7 +31,7 @@ def test_callback_feedback_reports_that_registration_already_connects_listener(t
     _compile_claims(tmp_path, source)
 
 
-def test_helper_body_is_authored_before_parent_selects_another_operation(tmp_path):
+def test_helper_body_is_queued_and_completed_without_recursing_into_parent(tmp_path):
     from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
 
     @structured_values
@@ -55,9 +55,10 @@ def test_helper_body_is_authored_before_parent_selects_another_operation(tmp_pat
                 if task["current_member"]["id"] == "m1":
                     self.parent_turns += 1
                     if self.parent_turns == 3:
-                        assert self.helper_started, "parent resumed before its new helper was implemented"
+                        assert not self.helper_started, "helper was authored recursively inside caller"
                         helper = next(row for row in task["generated_declarations"] if row["id"] == "m2")
-                        assert helper["implementation_status"] == "complete"
+                        assert helper["implementation_status"] == "pending"
+                        assert "method" not in parameters["properties"]["op"]["enum"]
             if data_name.endswith("_parameters_count"):
                 return {"count": 1}
             if data_name.endswith("_parameter"):
@@ -71,7 +72,10 @@ def test_helper_body_is_authored_before_parent_selects_another_operation(tmp_pat
             return super().value_answer(role, messages, data_name=data_name, source_frame=source_frame)
 
     behavior, spec, context, messages = _inputs()
-    source, program = compose_incremental_feature(Coder(), spec, messages, construction_context=context, behaviors=[behavior])
+    coder = Coder()
+    source, program = compose_incremental_feature(coder, spec, messages, construction_context=context, behaviors=[behavior])
+    assert coder.helper_started
+    assert all(m.get("implementation_status") == "complete" for m in program["members"] if m["kind"] == "method")
     assert len(program["members"]) == 4
     _compile_claims(tmp_path, source)
 
@@ -87,8 +91,8 @@ def test_repeated_helper_declaration_reuses_body_and_connects_real_callback(tmp_
             self.steps["m1"] = iter([
                 ("field", {"type": "int", "purpose": "Count claims", "static": False, "final": False}),
                 ("method", {"return_type": "void", "purpose": "Increment the claim count", "static": False}),
-                ("method", {"return_type": "void", "purpose": "Increment the claim count", "static": False}),
                 ("register", {}),
+                ("method", {"return_type": "void", "purpose": "Increment the claim count", "static": False}),
             ])
             self.steps["m2"] = iter([("assign", {"operator": "+="})])
             if repeat_owner == "m2":
@@ -189,6 +193,9 @@ def test_duplicate_override_does_not_prevent_implementing_another_interface_meth
     builder = IncrementalJavaBuilder(Coder(), spec, messages, context, behaviors, program)
     nested = builder.program["members"][-1]
     builder.author_block(nested, initial_scope(nested), [], body=nested["body"])
+    from minecraft_mod_ai.incremental_java_progress import finish_member
+    while builder.pending:
+        finish_member(builder, builder.pending.popleft())
     source, program = builder.render()
     assert {member["name"] for member in program["members"] if member["owner"] == "Implementation"} == {"first", "second"}
     result = _java(tmp_path, source, "interface TwoMethods { int first(); int second(); }")
@@ -247,3 +254,50 @@ def test_completed_child_restores_parent_scope_and_draft_stack():
     body = builder.author_block(member, scope, ["parentGuard", "body"])
     assert body[0]["value"] == "parentValue"
     assert builder.drafts == [{"id": "parentGuard", "op": "if", "condition": "true"}]
+
+
+
+def test_helper_work_queue_is_iterative_across_more_than_python_recursion_limit(monkeypatch):
+    from minecraft_mod_ai.incremental_java_progress import finish_member as original_finish_member
+
+    builder = _builder(None)
+    builder.program["members"].clear()
+    builder.pending.clear()
+    builder.pending.append({"id": "m1", "implementation_status": "pending"})
+    builder.program["members"].append(builder.pending[0])
+    visits = []
+
+    def authored(b, member):
+        visits.append(member["id"])
+        member["implementation_status"] = "complete"
+        if len(visits) < 1100:
+            next_member = {"id": f"m{len(visits) + 1}", "implementation_status": "pending"}
+            b.program["members"].append(next_member)
+            b.pending.append(next_member)
+
+    monkeypatch.setattr("minecraft_mod_ai.incremental_java_progress.finish_member", authored)
+    monkeypatch.setattr(builder, "render", lambda: ("ok", builder.program))
+    source, program = builder.finish()
+    assert source == "ok"
+    assert len(visits) == 1100
+    assert all(row["implementation_status"] == "complete" for row in program["members"])
+
+
+def test_helper_chain_exits_with_explicit_diagnostic_instead_of_recursion_error():
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+    from minecraft_mod_ai.incremental_java_progress import MAX_HELPER_DEPENDENCY_DEPTH
+
+    builder = _builder(None)
+    original = builder.member
+    try:
+        for index in range(MAX_HELPER_DEPENDENCY_DEPTH):
+            method = builder.new_method(
+                owner="Feature", purpose=f"Distinct dependency {index}", behavior={},
+                metadata=method_metadata(), reuse=False,
+            )
+            builder.member = method
+        with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_HELPER_DEPENDENCY_CYCLE"):
+            builder.new_method(owner="Feature", purpose="Excessive dependency", behavior={},
+                               metadata=method_metadata(), reuse=False)
+    finally:
+        builder.member = original
