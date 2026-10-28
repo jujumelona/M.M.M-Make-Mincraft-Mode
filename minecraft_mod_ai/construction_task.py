@@ -27,6 +27,9 @@ class BehaviorRequirement:
     source_status: str = "grounded"
     runtime_state_reads: tuple[str, ...] = ()
     runtime_state_writes: tuple[str, ...] = ()
+    # Optional exact inspected Fabric listener. Not a model-invented callback:
+    # the compilation gate resolves this against target bytecode.
+    event_binding: str = ""
 
     def __post_init__(self):
         if not all(isinstance(value, str) and value.strip() for value in
@@ -42,6 +45,8 @@ class BehaviorRequirement:
         row = asdict(self)
         row["state_reads"] = list(self.state_reads)
         row["state_writes"] = list(self.state_writes)
+        if not self.event_binding:
+            row.pop("event_binding")
         # Keep old behavior checkpoints byte-compatible when no world/state
         # distinction was needed; new runtime obligations are explicit data.
         for field_name in ("runtime_state_reads", "runtime_state_writes"):
