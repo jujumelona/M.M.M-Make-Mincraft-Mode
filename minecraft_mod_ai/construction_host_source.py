@@ -280,6 +280,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "target": spec["target_path"], "error": str(exc),
                 "source": locals().get("source") or getattr(exc, "failed_source", None),
                 "failed_response": getattr(exc, "failed_response", None),
+                "mcp_evidence_metrics": dict(context.get("_incremental_mcp_evidence_metrics") or {}),
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             raise
         from .construction_coverage import record_authored_source_calls
