@@ -55,3 +55,26 @@ def test_every_behavior_must_be_explicitly_supported():
     candidate = [*behaviors, {"behavior_id": "travel", "trigger": "Travel",
                               "effects": "Teleport to target"}]
     assert not checked_rule_template_ready(spec, candidate, callbacks=callbacks)
+
+
+def test_real_callback_cannot_stand_in_for_unrelated_dimension_occurrence():
+    from minecraft_mod_ai.template_first_route import checked_rule_template_ready
+    spec, behaviors, _ = _inputs()
+    event = "net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents#AFTER_DAMAGE"
+    behaviors[0]["trigger"] = "Player arrives at a new planet"
+    behaviors[0]["event_binding"] = event
+    assert not checked_rule_template_ready(
+        spec, behaviors, callbacks=[{"event_id": event, "parameters": [
+            "net.minecraft.server.level.ServerPlayer"
+        ]}],
+    )
+
+
+def test_unresolved_behavior_does_not_get_template_or_guess_a_hook():
+    from minecraft_mod_ai.template_first_route import resolve_inspected_template_behaviors
+    spec, behaviors, callbacks = _inputs()
+    behaviors[0]["source_status"] = "source_preserved_unresolved"
+    behaviors[0].pop("event_binding")
+    assert resolve_inspected_template_behaviors(
+        object(), spec, behaviors, callbacks=callbacks,
+    ) is None
