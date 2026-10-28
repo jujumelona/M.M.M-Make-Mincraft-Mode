@@ -177,4 +177,7 @@ def coding_mcp_scope(context):
         if context.pop("_host_mcp_router_managed", False):
             router = context.pop("host_mcp_router", None)
             if router is not None:
-                router.close()
+                try:
+                    router.close()
+                except Exception:  # noqa: BLE001 - cleanup cannot hide a build diagnostic
+                    _record(context, "session_close_errors")

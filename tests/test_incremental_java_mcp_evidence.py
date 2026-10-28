@@ -155,3 +155,18 @@ def test_managed_external_mcp_router_closes_after_host_failure():
             raise RuntimeError("construction failed")
     assert closed == [True]
     assert "host_mcp_router" not in ctx
+
+
+
+def test_provider_cleanup_failure_does_not_replace_original_compiler_error():
+    from minecraft_mod_ai.incremental_java_mcp_evidence import coding_mcp_scope
+
+    def fail_close():
+        raise OSError("transport cleanup failed")
+
+    ctx = {"host_mcp_router": SimpleNamespace(close=fail_close),
+           "_host_mcp_router_managed": True}
+    with pytest.raises(ValueError, match="real compiler failure"):
+        with coding_mcp_scope(ctx):
+            raise ValueError("real compiler failure")
+    assert ctx["_incremental_mcp_evidence_metrics"]["session_close_errors"] == 1
