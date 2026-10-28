@@ -51,6 +51,10 @@ _INSTRUCTION = (
 # A bounded non-progress window is per work item, not per nested block: opening
 # another scope or reusing an active helper must not reset it.
 _MAX_NONPROGRESS_CHOICES = 96
+# Switch from open-ended design choices to directly executable work after a
+# sustained stall. This is based on progress, never on gameplay vocabulary.
+_DIRECT_PROGRESS_AFTER = 12
+_LOOKUP_EXHAUSTED_AFTER = 32
 _EXECUTABLE_OPERATIONS = frozenset({
     "call", "assign", "local", "return", "throw", "break", "continue",
     "register", "constructor_call",
@@ -214,6 +218,18 @@ class IncrementalJavaBuilder:
                 member, scope, body, blocked_declarations | stalled,
                 nesting_depth=(len(self.path) + 1) // 2,
             )
+            # A small model can otherwise repeatedly invent wrappers, helpers,
+            # or evidence reads without writing even one Java action. Restrict
+            # the choice schema itself, rather than re-prompting a forbidden
+            # answer or silently treating a placeholder as implementation.
+            idle = self._nonprogress_choices.get(member_id, 0)
+            if idle >= _DIRECT_PROGRESS_AFTER and member["kind"] not in {"class", "record", "enum"}:
+                permitted = set(_EXECUTABLE_OPERATIONS)
+                if idle < _LOOKUP_EXHAUSTED_AFTER:
+                    permitted.add("lookup")
+                if body:
+                    permitted.add("complete")
+                options = [option for option in options if option in permitted]
             if not options:
                 raise RuntimeError(
                     f"INCREMENTAL_JAVA_NO_AVAILABLE_OPERATION: member={member_id}"
