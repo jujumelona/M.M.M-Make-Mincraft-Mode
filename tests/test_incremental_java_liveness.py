@@ -94,3 +94,25 @@ def test_deep_scope_cannot_reopen_recursive_control_flow():
     path = [part for i in range(MAX_CONTROL_FLOW_NESTING)
             for part in (f"n{i + 1}", "body")]
     assert builder.author_block(builder.member, builder.scope, path) == []
+
+
+@pytest.mark.parametrize("idle, lookup_available", [(12, True), (32, False)])
+def test_stalled_model_is_guided_to_an_executable_action(idle, lookup_available):
+    builder = _builder(None)
+    member = builder.member
+    builder._nonprogress_choices[member["id"]] = idle
+
+    class Coder:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            options = parameters["properties"]["op"]["enum"]
+            assert "method" not in options
+            assert "block" not in options
+            assert "if" not in options
+            assert ("lookup" in options) is lookup_available
+            assert "return" in options
+            return {"op": "return"}
+
+    builder.router = Coder()
+    body = builder.author_block(member, builder.scope, [])
+    assert [node["op"] for node in body] == ["return"]
+    assert builder._nonprogress_choices[member["id"]] == 0
