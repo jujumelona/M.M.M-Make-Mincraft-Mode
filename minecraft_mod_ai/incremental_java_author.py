@@ -90,25 +90,16 @@ def _assert_live_behavior_entrypoints(program):
 
 
 def _retry_empty_behavior_entrypoints(builder):
-    """Reopen a prematurely completed empty action once, without fake success.
-
-    Real registered/UI actions still must contain an executable effect before
-    publication. Accepted nonempty work and unrelated members are retained.
-    """
+    """Reopen empty source-owned actions once; accept only an actual effect."""
     from .incremental_java_progress import finish_member
-    empty = [row for row in builder.program["members"]
-             if (row.get("registrar") or row.get("event")) and not row.get("body")]
-    previous = builder.rejection
-    try:
-        for member in empty:
-            builder.rejection = {
-                **previous, "javac_diagnostic":
-                "CONSTRUCTION_FILE_BEHAVIOR_METHOD_MISSING: "
-                + str(member.get("behavior", {}).get("behavior_id") or member["id"]),
-            }
-            finish_member(builder, member)
-    finally:
-        builder.rejection = previous
+    for member in builder.program["members"]:
+        if (member.get("registrar") or member.get("event")) and not member.get("body"):
+            finish_member(
+                builder, member, entrypoint_diagnostic=(
+                    "CONSTRUCTION_FILE_BEHAVIOR_METHOD_MISSING: "
+                    + str(member.get("behavior", {}).get("behavior_id") or member["id"])
+                ),
+            )
 
 
 class IncrementalJavaBuilder:
