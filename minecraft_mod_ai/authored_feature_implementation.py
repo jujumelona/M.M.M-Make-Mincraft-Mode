@@ -68,6 +68,11 @@ def _feature_runtime_bindings(plan, bindings, rid, package_name):
         bindings["required_content_source_paths_json"] = json.dumps(list(dict.fromkeys([*required, source_path])), separators=(",", ":"))
 
 
+def _grounded_independent_action(row):
+    return (row.get("source_status", "grounded") == "grounded"
+            and row.get("trigger") and row.get("effects"))
+
+
 def _can_isolate_actions(plan, rid, rows):
     """Independence requires disjoint source events and no shared state owner."""
     if len(rows) < 2:
@@ -89,8 +94,7 @@ def _can_isolate_actions(plan, rid, rows):
         return False
     if len({row.get("trigger") for row in rows}) != len(rows):
         return False
-    return all(row.get("source_status", "grounded") == "grounded"
-               and row.get("trigger") and row.get("effects") for row in rows)
+    return all(_grounded_independent_action(row) for row in rows)
 
 
 def _independent_feature_work_items(plan, features, behaviors):
