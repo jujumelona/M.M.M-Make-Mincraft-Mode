@@ -126,11 +126,20 @@ class ExternalMCPRouter:
         registry: ExternalMCPRegistry | None = None,
         *,
         timeout_seconds: float = 45.0,
+        reuse_sessions: bool = False,
     ) -> None:
         self.registry = registry or ExternalMCPRegistry()
         if not 1.0 <= float(timeout_seconds) <= 600.0:
             raise ValueError("External MCP timeout must be between 1 and 600 seconds.")
         self.timeout_seconds = float(timeout_seconds)
+        self._warm_sessions = None
+        if reuse_sessions:
+            from .external_mcp_session_pool import WarmProviderPool
+            self._warm_sessions = WarmProviderPool()
+
+    def close(self) -> None:
+        if self._warm_sessions is not None:
+            self._warm_sessions.close()
 
     def capability_manifest(
         self,
@@ -313,6 +322,12 @@ class ExternalMCPRouter:
         tool: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
+        if self._warm_sessions is not None:
+            return self._warm_sessions.call(
+                server_name, entry, tool=tool, arguments=arguments,
+                timeout=self._provider_timeout(server_name, tool),
+                env=self._child_env(entry), url=self._server_url(entry))
+
         async def run() -> dict[str, Any]:
             return await self._call_provider_async(
                 server_name, entry, tool=tool, arguments=arguments

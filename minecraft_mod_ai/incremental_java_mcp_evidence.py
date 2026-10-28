@@ -109,7 +109,8 @@ def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) 
         router = context.get("host_mcp_router")
         if router is None:
             from .external_mcp_router import ExternalMCPRouter
-            router = ExternalMCPRouter(timeout_seconds=30.0)
+            router = ExternalMCPRouter(timeout_seconds=30.0, reuse_sessions=True)
+            context["_host_mcp_router_managed"] = True
             context["host_mcp_router"] = router
         _record(context, "cache_misses")
         started = time.perf_counter()
@@ -144,3 +145,19 @@ def recover_compiler_api_evidence(builder: Any, diagnostic: str) -> None:
         return
     local_page = builder.api.lookup(query, 0)
     builder.latest_api = augment_api_lookup(builder, query, local_page)
+
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def coding_mcp_scope(context):
+    """Dispose warm MCP transports when a construction file finishes or fails."""
+    try:
+        yield
+    finally:
+        if context.pop("_host_mcp_router_managed", False):
+            router = context.pop("host_mcp_router", None)
+            if router is not None:
+                router.close()

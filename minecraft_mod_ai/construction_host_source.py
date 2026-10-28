@@ -131,7 +131,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     mutation_receipts = []
     incremental_state = {}
     context["incremental_state"] = incremental_state
-    with _claim_checkpoint(checkpoint):
+    from .incremental_java_mcp_evidence import coding_mcp_scope
+    with _claim_checkpoint(checkpoint), coding_mcp_scope(context):
         saved = _read_checkpoint(checkpoint, identifier)
         if saved:
             if set(saved) != {"source"} or not isinstance(saved["source"], str):
