@@ -37,27 +37,27 @@ class ValueAuthor:
                 raise ValueError("JAVA_STRUCTURED_VALUE_NOT_WRITABLE")
             return value
 
+    def _consume_evidence_lookup(self, count, options):
+        # The evidence read is not an executable Java operation. Force a
+        # different bounded choice when its per-operand budget is exhausted.
+        self.builder.lookup()
+        count += 1
+        if count >= MAX_VALUE_EVIDENCE_LOOKUPS:
+            options.remove("lookup")
+        return count
+
     def _value_choice(self, expected, options, *, writable):
-        # API discovery is evidence, not construction progress. A model that
-        # repeatedly chooses lookup must never keep a Java operand unfinished
-        # forever (seen as value_kind/lookup alternation in production).
-        # Keep a per-operand budget: subsequent choices must construct a value.
         options = list(options)
         lookups = 0
         while options:
             kind = request(self.builder, choice("kind", options), "value_kind")["kind"]
             self.frame["kind"] = kind
             if kind == "lookup":
-                self.builder.lookup()
-                lookups += 1
-                if lookups >= MAX_VALUE_EVIDENCE_LOOKUPS:
-                    options.remove("lookup")
+                lookups = self._consume_evidence_lookup(lookups, options)
                 continue
             value = self._render(kind, expected, writable=writable)
             if value is not None:
                 return value
-            # A repeated active declaration is still this operand's work.
-            # Ask for its value instead of turning delegation into recursion.
             options.remove(kind)
         raise RuntimeError(
             "JAVA_VALUE_CONSTRUCTION_UNSUPPORTED: no grounded value for "
