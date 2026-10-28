@@ -20,8 +20,8 @@ _INSTRUCTION = (
     "requested_page identifies exactly which choice/count/details to provide now; kind "
     "asks for the NEXT operation after accepted_operations, not a repetition of the previous one. "
     "Use field/method/type to CREATE new supporting code when needed; "
-    "those declarations immediately enter generated_declarations and their bodies are queued. "
-    "The host implements newly declared bodies before returning to their caller. "
+    "those declarations enter generated_declarations and their bodies are queued. "
+    "The host completes every queued body before rendering, not recursively inside its caller. "
     "last_declaration reports the actual created or reused signature and implementation status; "
     "use call and select the completed helper's member_id to connect the result. When next_action is "
     "implement_current_work, implement the current body directly instead of delegating it back to an active helper. "
@@ -232,7 +232,6 @@ class IncrementalJavaBuilder:
     def author_block(self, member, scope, path, body=None):
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
-        from .incremental_java_progress import finish_new_members
         previous = self.member, self.scope, self.path, self.block, self.current_operation
         body = [] if body is None else body
         self.member, self.scope, self.path, self.block = member, scope, path, body
@@ -272,9 +271,11 @@ class IncrementalJavaBuilder:
                 self._record_nonprogress(member)
                 continue
             if operation in {*DECLARATION_OPS, "constructor", "override"}:
-                pending_before = len(self.pending)
                 author_declaration(self, operation)
-                finish_new_members(self, pending_before)
+                # Do not recursively enter a newly declared helper. The work
+                # queue is drained only after the current member completes.
+                if operation in {"method", "type", "constructor", "override"} and member["kind"] not in {"class", "record", "enum"}:
+                    self._stalled_declarations[(member_id, operation)] = epoch
                 if self.last_declaration.get("outcome") in {"reused", "active"}:
                     blocked_declarations.add(operation)
                     # The same active helper may not be requested again merely
@@ -284,7 +285,6 @@ class IncrementalJavaBuilder:
                         self._stalled_declarations[(member_id, operation)] = epoch
                 self._record_nonprogress(member)
                 continue
-            pending_before = len(self.pending)
             progress_before = self._progress_epoch.get(member_id, 0)
             node = author_operation(self, operation)
             if node is None:
@@ -294,7 +294,6 @@ class IncrementalJavaBuilder:
             self.history[node["id"]] = node
             self.rejection = {}
             blocked_declarations.clear()
-            finish_new_members(self, pending_before)
             if operation in _EXECUTABLE_OPERATIONS:
                 self._record_progress(member)
             elif self._progress_epoch.get(member_id, 0) == progress_before:
@@ -306,8 +305,17 @@ class IncrementalJavaBuilder:
 
     def finish(self):
         from .incremental_java_progress import finish_member
+        # FIFO iteration keeps helper -> helper chains off the Python stack.
+        # Every declared method and listener is authored before final rendering.
         while self.pending:
-            finish_member(self, self.pending.popleft())
+            member = self.pending.popleft()
+            if member.get("implementation_status") == "complete":
+                continue
+            finish_member(self, member)
+        unfinished = [m["id"] for m in self.program["members"]
+                      if m.get("implementation_status") in {"pending", "authoring"}]
+        if unfinished:
+            raise RuntimeError(f"INCREMENTAL_JAVA_UNFINISHED_MEMBERS: {unfinished}")
         _assert_live_behavior_entrypoints(self.program)
         return self.render()
 
