@@ -61,10 +61,11 @@ def _capabilities_for_query(question: str) -> tuple[str, ...]:
     lowered = question.casefold()
     if any(token in lowered for token in _MAPPING_TERMS):
         return ("mapping_resolution", *_CAPABILITIES)
-    if any(token in lowered for token in _REGISTRY_TERMS):
-        return ("registry_lookup", *_CAPABILITIES)
-    if any(token in lowered for token in _EXAMPLE_TERMS):
-        return ("mod_examples", *_CAPABILITIES)
+    if "." not in question and "#" not in question:
+        if any(token in lowered for token in _REGISTRY_TERMS):
+            return ("registry_lookup", *_CAPABILITIES)
+        if any(token in lowered for token in _EXAMPLE_TERMS):
+            return ("mod_examples", *_CAPABILITIES)
     if "#" in question:
         return ("source_search", "official_mod_docs")
     # Prefer faster documentation over starting Minecraft source decompilation

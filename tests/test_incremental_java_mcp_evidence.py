@@ -47,7 +47,7 @@ def test_only_zero_hit_local_page_invokes_readonly_mcp(monkeypatch):
     assert data["provider"] == "fake-minecraft-docs"
     assert "members" in page and page["members"] == []
     assert "usage" in data and "not a verified" in data["usage"].lower()
-    assert router.calls == [("registry_lookup", {
+    assert router.calls == [("official_mod_docs", {
         "stage": "generation", "max_access": "read",
         "target": builder.context["target"], "arguments": {"query": "example.Registry"},
         "corroborate": 1, "required": False,
@@ -142,6 +142,7 @@ def test_host_deterministically_routes_mapping_docs_and_precise_source():
     assert _capabilities_for_query("example mod integration")[:1] == ("mod_examples",)
     assert _capabilities_for_query("net.minecraft.world.item.Item#use")[:1] == ("source_search",)
     assert _capabilities_for_query("net.minecraft.world.item.Item")[:1] == ("official_mod_docs",)
+    assert _capabilities_for_query("example.Registry")[:1] == ("official_mod_docs",)
 
 
 def test_managed_external_mcp_router_closes_after_host_failure():
