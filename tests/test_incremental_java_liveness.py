@@ -144,3 +144,18 @@ def test_real_nested_effect_passes_entrypoint_gate():
             {"id": "n3", "op": "assign", "target": "this.count",
              "operator": "+=", "value": "1"}], "otherwise": []}],
     }]})
+
+
+def test_behavior_entrypoints_cannot_complete_without_observable_action():
+    registrar = {**_member(), "registrar": True}
+    assert "complete" not in operation_options(registrar, _scope(), [], set())
+    wrapper_only = [{"id": "n1", "op": "if", "body": [], "otherwise": []}]
+    assert "complete" not in operation_options(registrar, _scope(), wrapper_only, set())
+    connected = [{"id": "n1", "op": "register"}]
+    assert "complete" in operation_options(registrar, _scope(), connected, set())
+    listener = {**_member(), "event": {"event_owner": "example.Events"}}
+    assert "complete" not in operation_options(listener, _scope(), wrapper_only, set())
+    effected = [{"id": "n1", "op": "if", "body": [
+        {"id": "n2", "op": "assign", "target": "this.value", "value": "1"}],
+        "otherwise": []}]
+    assert "complete" in operation_options(listener, _scope(), effected, set())
