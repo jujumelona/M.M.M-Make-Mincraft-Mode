@@ -30,6 +30,21 @@ def _behavior_is_explicitly_supported(behavior: Mapping[str, Any], callbacks) ->
                 and str(behavior.get("effects") or "").strip())
 
 
+def _rule_ownership_available(
+    spec, behaviors, *, retained, owned_runtime_records, source_ui_callbacks,
+) -> bool:
+    if not (spec.get("bindings") or {}).get("request_feature_entrypoint") or not behaviors:
+        return False
+    if source_ui_callbacks or owned_runtime_records:
+        return False
+    if any((retained or {}).get(key) for key in _RETAINED_OWNERS):
+        return False
+    if any(row.get(name) for row in behaviors for name in _STATE_OPERANDS):
+        return False
+    return all(row.get("source_status", "grounded") == "grounded"
+               and row.get("trigger") and row.get("effects") for row in behaviors)
+
+
 def checked_rule_template_ready(
     spec: Mapping[str, Any],
     behaviors: Sequence[Mapping[str, Any]],
@@ -39,18 +54,12 @@ def checked_rule_template_ready(
     owned_runtime_records: Sequence[Any] = (),
     source_ui_callbacks: Sequence[Any] = (),
 ) -> bool:
-    """Admit only behavior-preserving templates with inspected native events.
-
-    When any behavior has an unowned runtime producer or overlapping action,
-    retain the original source author. Never substitute an unrelated trigger.
-    """
-    if not (spec.get("bindings") or {}).get("request_feature_entrypoint") or not behaviors:
-        return False
-    if source_ui_callbacks or owned_runtime_records:
-        return False
-    if any((retained or {}).get(key) for key in _RETAINED_OWNERS):
-        return False
-    return all(_behavior_is_explicitly_supported(row, callbacks) for row in behaviors)
+    """Accept only semantic rules with real, original-occurrence listeners."""
+    return _rule_ownership_available(
+        spec, behaviors, retained=retained,
+        owned_runtime_records=owned_runtime_records,
+        source_ui_callbacks=source_ui_callbacks,
+    ) and all(_behavior_is_explicitly_supported(row, callbacks) for row in behaviors)
 
 
 def resolve_inspected_template_behaviors(
@@ -68,11 +77,10 @@ def resolve_inspected_template_behaviors(
     """
     if not behaviors or any(row.get("source_status") != "grounded" for row in behaviors):
         return None
-    # Do not spend any model calls on work the checked rule backend cannot own.
-    if not checked_rule_template_ready(
-        spec, [{**row, "event_binding": "__unbound__"} for row in behaviors],
-        callbacks=[{"event_id": "__unbound__"}],
-        retained=retained, owned_runtime_records=owned_runtime_records,
+    # Do not spend model calls on work the rule backend cannot own.
+    if not _rule_ownership_available(
+        spec, behaviors, retained=retained,
+        owned_runtime_records=owned_runtime_records,
         source_ui_callbacks=source_ui_callbacks,
     ):
         return None
