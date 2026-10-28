@@ -290,3 +290,67 @@ def test_canonical_python_generator_java_path_is_required_before_callback_author
     required = json.loads(spec["bindings"]["required_content_source_paths_json"])
     assert expected in required
     assert set(produced[0].requires) == set(entity.produces)
+
+
+def _multi_behavior_feature_plan(*, stateful=False):
+    from minecraft_mod_ai.authored_plan import AuthoredPlan
+    effects = ("A player plants a seed", "A second player takes a reward")
+    rows = []
+    for index, effect in enumerate(effects):
+        row = {
+            "behavior_id": "behavior_" + str(index),
+            "requirement_id": "farming",
+            "source_status": "grounded",
+            "intent": effect,
+            "source_quote": effect,
+            "trigger": "Player interacts with farming block " + str(index),
+            "effects": effect,
+            "state_reads": ["owned_resource"] if stateful else [],
+            "state_writes": [],
+        }
+        rows.append(row)
+    return AuthoredPlan("Two separate farm actions", "Saved", request_scope={
+        "requirements": [{
+            "requirement_id": "farming", "statement": "Two separate farm actions",
+            "implementation_role": "gameplay",
+        }],
+        "behavior_requirements": rows,
+    })
+
+
+def test_independent_actions_use_separate_java_compilation_units():
+    import json
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    from minecraft_mod_ai.host_version_catalog import host_target
+    plan = _multi_behavior_feature_plan()
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=host_target("26.1.2"), mod_id="farm", package_name="example.farm",
+        content_modules=(), content_jobs=(),
+    )
+    assert len(modules) == len(jobs) == 2
+    assert modules[0].module_id != modules[1].module_id
+    assert {module.config["implementation_obligations"][0] for module in modules} == {
+        "A player plants a seed", "A second player takes a reward",
+    }
+    rows_by_job = [
+        json.loads(job.deterministic_inputs["_canonical_inputs"]["event_callback_input"]
+                   ["bindings"]["construction_behaviors_json"])
+        for job in jobs
+    ]
+    assert len({row[0]["behavior_id"] for row in rows_by_job}) == 2
+    assert all(len(rows) == 1 for rows in rows_by_job)
+
+
+def test_atomic_stateful_actions_stay_in_single_java_owner():
+    import json
+    from minecraft_mod_ai.authored_feature_implementation import compile_request_feature_jobs
+    from minecraft_mod_ai.host_version_catalog import host_target
+    plan = _multi_behavior_feature_plan(stateful=True)
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=host_target("26.1.2"), mod_id="farm", package_name="example.farm",
+        content_modules=(), content_jobs=(),
+    )
+    assert len(modules) == len(jobs) == 1
+    rows = json.loads(jobs[0].deterministic_inputs["_canonical_inputs"]
+                      ["event_callback_input"]["bindings"]["construction_behaviors_json"])
+    assert len(rows) == 2
