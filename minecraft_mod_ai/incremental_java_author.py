@@ -61,6 +61,34 @@ _EXECUTABLE_OPERATIONS = frozenset({
 })
 
 
+def _assert_live_behavior_entrypoints(program):
+    """A generated registration or callback must not consist only of no-op wrappers.
+
+    This is a structural safety gate, not a claim that Java compilation proves
+    the user's gameplay semantics. The later behavioral acceptance still runs.
+    """
+    from .incremental_java_history import walk_nodes
+
+    for member in program["members"]:
+        if not (member.get("registrar") or member.get("event")):
+            continue
+        visible = False
+        for node in walk_nodes(member.get("body") or []):
+            operation = node.get("op")
+            if operation in {"call", "assign", "register", "constructor_call", "throw"}:
+                visible = True
+                break
+            if operation == "return" and node.get("value"):
+                visible = True
+                break
+        if not visible:
+            raise RuntimeError(
+                "INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: "
+                f"entrypoint={member['id']}; implementation contains only "
+                "declarations, empty control flow, or non-effectful returns"
+            )
+
+
 class IncrementalJavaBuilder:
     def __init__(self, router, spec, messages, context, behaviors, program=None):
         self.router, self.spec, self.context = router, spec, context
@@ -280,6 +308,7 @@ class IncrementalJavaBuilder:
         from .incremental_java_progress import finish_member
         while self.pending:
             finish_member(self, self.pending.popleft())
+        _assert_live_behavior_entrypoints(self.program)
         return self.render()
 
     def render(self):
