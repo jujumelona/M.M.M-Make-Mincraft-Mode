@@ -13,6 +13,15 @@ from .incremental_java_schema import COUNT, DECLARATION_OPS, SCHEMAS, choice, ob
 from .incremental_java_render import render_program
 from .incremental_java_history import operation_view, walk_nodes, lookup_work, PAGE
 
+# Safety limits bound model-driven authoring, never manufacture an implementation.
+# When a limit is reached, constrain the NEXT model choice to executable work.
+_MAX_MODEL_PAGES = 4096
+_MAX_CONSECUTIVE_DECLARATIONS = 8
+_MAX_CONSECUTIVE_LOOKUPS = 8
+_MAX_ACTIVE_MEMBER_DEPTH = 8
+_MAX_CONTROL_FLOW_DEPTH = 16
+_MAX_BLOCK_OPERATIONS = 256
+
 _INSTRUCTION = (
     "Implement only the current operation of the current work item. The host owns all Java "
     "syntax, class/lifecycle wrappers, member names, local names and block boundaries. "
@@ -57,6 +66,7 @@ class IncrementalJavaBuilder:
         self.program = deepcopy(program) if program is not None else initial_program(spec, behaviors)
         self.pending = deque(self.program["members"] if program is None else ())
         self.serial, self.latest_api, self.rejection = 0, {}, {}
+        self.active_members = []
         self.counters = allocation_counters(self.program)
         self.member, self.scope, self.path, self.block = None, {}, [], []
         self.current_operation = ""
@@ -96,6 +106,12 @@ class IncrementalJavaBuilder:
     def ask(self, schema, suffix, extra=None):
         from .model_concurrency import raise_if_model_execution_cancelled
         raise_if_model_execution_cancelled()
+        if self.serial >= _MAX_MODEL_PAGES:
+            raise RuntimeError(
+                "JAVA_INCREMENTAL_MODEL_PAGE_BUDGET_EXHAUSTED: "
+                f"member={self.member['id']} path={self.path!r} "
+                "Model did not complete bounded authoring; no source was certified."
+            )
         self.serial += 1
         messages = [{"role": "system", "content": _INSTRUCTION},
                     {"role": "user", "content": json.dumps(self.payload({"requested_page": suffix, **(extra or {})}), ensure_ascii=False, separators=(",", ":"))}]
@@ -176,36 +192,104 @@ class IncrementalJavaBuilder:
         body = [] if body is None else body
         self.member, self.scope, self.path, self.block = member, scope, path, body
         blocked_declarations = set()
-        while True:
-            options = operation_options(member, scope, body, blocked_declarations)
-            self.current_operation = ""
-            operation = self.ask(choice("op", options), "kind")["op"]
-            self.current_operation = operation
-            if operation == "complete":
-                break
-            if operation == "lookup":
-                self.lookup()
-                continue
-            if operation in {*DECLARATION_OPS, "constructor", "override"}:
+        declaration_streak, lookup_streak = 0, 0
+        # A path contains alternating node IDs and child labels. Ordinary Java
+        # lexical blocks are not model operations; only real control flow nests.
+        depth = len(path) // 2
+        if depth > _MAX_CONTROL_FLOW_DEPTH:
+            raise RuntimeError(
+                "JAVA_INCREMENTAL_CONTROL_DEPTH_EXCEEDED: "
+                f"member={member['id']} path={path!r}"
+            )
+        try:
+            while True:
+                if len(body) >= _MAX_BLOCK_OPERATIONS:
+                    raise RuntimeError(
+                        "JAVA_INCREMENTAL_BLOCK_OPERATION_BUDGET_EXHAUSTED: "
+                        f"member={member['id']} path={path!r}; "
+                        "No generated Java has been certified."
+                    )
+                options = operation_options(member, scope, body, blocked_declarations)
+                declarations_closed = (
+                    declaration_streak >= _MAX_CONSECUTIVE_DECLARATIONS
+                    and member["kind"] not in {"class", "record", "enum"}
+                )
+                member_depth_closed = len(self.active_members) >= _MAX_ACTIVE_MEMBER_DEPTH
+                if declarations_closed or member_depth_closed:
+                    options = [
+                        op for op in options
+                        if op not in {*DECLARATION_OPS, "constructor", "override"}
+                    ]
+                if member_depth_closed:
+                    # A register creates a listener member and would deepen
+                    # this helper chain just like a method declaration.
+                    options = [op for op in options if op != "register"]
+                if lookup_streak >= _MAX_CONSECUTIVE_LOOKUPS:
+                    options = [op for op in options if op != "lookup"]
+                if depth >= _MAX_CONTROL_FLOW_DEPTH:
+                    # These operations create authored child bodies. Keep
+                    # existing work intact and require a leaf operation.
+                    options = [
+                        op for op in options
+                        if op not in {"if", "while", "do", "foreach", "for",
+                                      "switch", "try", "lambda", "synchronized"}
+                    ]
+                if not options:
+                    raise RuntimeError(
+                        "JAVA_INCREMENTAL_NO_ADMISSIBLE_OPERATION: "
+                        f"member={member['id']} path={path!r}"
+                    )
+                self.current_operation = ""
+                operation = self.ask(
+                    choice("op", options), "kind",
+                    {"authoring_progress": {
+                        "consecutive_declarations_without_statement": declaration_streak,
+                        "consecutive_lookups_without_statement": lookup_streak,
+                        "active_helper_depth": len(self.active_members),
+                        "control_flow_depth": depth,
+                        "must_implement_current_body": declarations_closed or member_depth_closed,
+                    }}
+                )["op"]
+                self.current_operation = operation
+                if operation == "complete":
+                    if declarations_closed and not body:
+                        raise RuntimeError(
+                            "JAVA_INCREMENTAL_DECLARATION_ONLY_STALL: "
+                            f"member={member['id']} declarations={declaration_streak}; "
+                            "model created supporting members but no executable body."
+                        )
+                    break
+                if operation == "lookup":
+                    self.lookup()
+                    lookup_streak += 1
+                    continue
+                if operation in {*DECLARATION_OPS, "constructor", "override"}:
+                    pending_before = len(self.pending)
+                    author_declaration(self, operation)
+                    finish_new_members(self, pending_before)
+                    declaration_streak += 1
+                    if self.last_declaration.get("outcome") in {"reused", "active"}:
+                        blocked_declarations.add(operation)
+                    continue
                 pending_before = len(self.pending)
-                author_declaration(self, operation)
-                finish_new_members(self, pending_before)
-                if self.last_declaration.get("outcome") in {"reused", "active"}:
+                node = author_operation(self, operation)
+                if node is None:
+                    # An unavailable registration must not be retried forever.
                     blocked_declarations.add(operation)
-                continue
-            pending_before = len(self.pending)
-            node = author_operation(self, operation)
-            if node is None:
-                continue
-            body.append(node)
-            self.history[node["id"]] = node
-            self.rejection = {}
-            blocked_declarations.clear()
-            finish_new_members(self, pending_before)
-            if operation in {"return", "throw", "break", "continue"}:
-                break
-        self.member, self.scope, self.path, self.block, self.current_operation = previous
-        return body
+                    continue
+                body.append(node)
+                self.history[node["id"]] = node
+                self.rejection = {}
+                blocked_declarations.clear()
+                declaration_streak = lookup_streak = 0
+                finish_new_members(self, pending_before)
+                if operation in {"return", "throw", "break", "continue"}:
+                    break
+            return body
+        finally:
+            # Restore parent model context even on a failed nested authoring
+            # attempt, so diagnosis and controlled retry do not see child scope.
+            self.member, self.scope, self.path, self.block, self.current_operation = previous
 
     def finish(self):
         from .incremental_java_progress import finish_member
