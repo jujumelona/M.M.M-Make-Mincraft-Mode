@@ -68,33 +68,40 @@ def _feature_runtime_bindings(plan, bindings, rid, package_name):
         bindings["required_content_source_paths_json"] = json.dumps(list(dict.fromkeys([*required, source_path])), separators=(",", ":"))
 
 
-def _independent_feature_work_items(plan, features, behaviors):
-    """Shard only independent, source-grounded actions, never atomic gameplay.
+def _can_isolate_actions(plan, rid, rows):
+    """Independence requires disjoint source events and no shared state owner."""
+    if len(rows) < 2:
+        return False
+    if _source_ui_records(plan, rid):
+        return False
+    if owner_records(plan.structured_sections,
+                     plan.content_design.get("_request_runtime_owners", ()), rid):
+        return False
+    if any((plan.typed_plan_ir or {}).get(key) for key in ("functions", "event_bindings")):
+        return False
+    if any(row.get(key) for row in rows for key in (
+        "state_reads", "state_writes", "runtime_state_reads", "runtime_state_writes"
+    )):
+        return False
+    # Overlapping source occurrences may be one atomic transaction, not two
+    # independent jobs. Never split the same trigger into separate writers.
+    if len({row.get("source_quote") for row in rows}) != len(rows):
+        return False
+    if len({row.get("trigger") for row in rows}) != len(rows):
+        return False
+    return all(row.get("source_status", "grounded") == "grounded"
+               and row.get("trigger") and row.get("effects") for row in rows)
 
-    The original feature retains one Java owner when runtime state, UI,
-    shared typed effects or action dependencies could cross behavior boundaries.
-    """
+
+def _independent_feature_work_items(plan, features, behaviors):
+    """Emit one unit per independently grounded action, preserving atomic units."""
     from .spec_identity import canonical_spec_id
 
-    typed = plan.typed_plan_ir or {}
-    shared_typed = any(typed.get(key) for key in ("functions", "event_bindings"))
     items = []
     for feature in features:
         rid = feature["requirement_id"]
         rows = [row for row in behaviors if row.get("requirement_id") == rid]
-        owned = bool(_source_ui_records(plan, rid)) or bool(owner_records(
-            plan.structured_sections, plan.content_design.get("_request_runtime_owners", ()), rid))
-        stateful = any(
-            row.get(key) for row in rows
-            for key in ("state_reads", "state_writes", "runtime_state_reads",
-                        "runtime_state_writes")
-        )
-        independent = (
-            len(rows) > 1 and not (owned or stateful or shared_typed)
-            and all(row.get("source_status", "grounded") == "grounded"
-                    and row.get("trigger") and row.get("effects") for row in rows)
-        )
-        if independent:
+        if _can_isolate_actions(plan, rid, rows):
             for row in rows:
                 subject = canonical_spec_id(feature_module_id(rid) + "_" + row["behavior_id"])
                 items.append((feature, row["behavior_id"], subject))
