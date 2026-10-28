@@ -55,7 +55,7 @@ def test_void_parameter_is_excluded_before_sampling_type_metadata():
 def test_cancelled_event_selection_preserves_accepted_local_and_returns_to_authoring():
     @structured_values
     class Coder:
-        steps = iter(["local", "register", "complete"])
+        steps = iter(["local", "register", "return"])
 
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             if data_name.endswith("_kind"):
