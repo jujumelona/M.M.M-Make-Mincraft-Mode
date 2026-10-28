@@ -49,7 +49,7 @@ def test_control_flow_depth_gate_preserves_direct_operations():
 
 def test_nested_block_does_not_reset_stalled_active_helper():
     builder = _builder(None)
-    member = builder.member
+    member = {**builder.member, "registrar": False}
     epoch = builder._progress_epoch.get(member["id"], 0)
     builder._stalled_declarations[(member["id"], "method")] = epoch
 
@@ -91,6 +91,7 @@ def test_deep_scope_cannot_reopen_recursive_control_flow():
             return {"op": "complete"}
 
     builder.router = Coder()
+    builder.member.pop("registrar", None)  # This test targets generic nested helper scopes.
     path = [part for i in range(MAX_CONTROL_FLOW_NESTING)
             for part in (f"n{i + 1}", "body")]
     assert builder.author_block(builder.member, builder.scope, path) == []
