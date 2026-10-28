@@ -52,6 +52,48 @@ def checked_rule_template_ready(
     return all(_behavior_is_explicitly_supported(row, event_ids) for row in behaviors)
 
 
+def resolve_inspected_template_behaviors(
+    router: Any, spec: Mapping[str, Any], behaviors: Sequence[Mapping[str, Any]],
+    *, callbacks: Sequence[Mapping[str, Any]],
+    retained: Mapping[str, Any] | None = None,
+    owned_runtime_records: Sequence[Any] = (),
+    source_ui_callbacks: Sequence[Any] = (),
+) -> list[dict[str, Any]] | None:
+    """Bind grounded actions to real Fabric callback IDs before Java authoring.
+
+    A model chooses only from actual inspected listener identifiers, never
+    invents Java code, event signatures, or a missing state producer. The
+    selector may explicitly decline when no hook matches the original event.
+    """
+    if not behaviors or any(row.get("source_status") != "grounded" for row in behaviors):
+        return None
+    # Do not spend any model calls on work the checked rule backend cannot own.
+    if not checked_rule_template_ready(
+        spec, [{**row, "event_binding": "__unbound__"} for row in behaviors],
+        callbacks=[{"event_id": "__unbound__"}],
+        retained=retained, owned_runtime_records=owned_runtime_records,
+        source_ui_callbacks=source_ui_callbacks,
+    ):
+        return None
+    from .source_occurrence_error import SourceHookUnavailable
+    from .source_owned_hook import choose_source_hook
+    selected = []
+    for behavior in behaviors:
+        if behavior.get("event_binding"):
+            selected.append(dict(behavior))
+            continue
+        try:
+            callback = choose_source_hook(router, behavior, callbacks)
+        except SourceHookUnavailable:
+            return None
+        selected.append({**behavior, "event_binding": callback["event_id"]})
+    return selected if checked_rule_template_ready(
+        spec, selected, callbacks=callbacks, retained=retained,
+        owned_runtime_records=owned_runtime_records,
+        source_ui_callbacks=source_ui_callbacks,
+    ) else None
+
+
 def render_checked_rule(*args: Any, **kwargs: Any) -> str:
     """Resolve the optional rule backend after both compiler modules load.
 
@@ -63,4 +105,4 @@ def render_checked_rule(*args: Any, **kwargs: Any) -> str:
     return backend.compose_rule_feature(*args, **kwargs)
 
 
-__all__ = ["checked_rule_template_ready", "render_checked_rule"]
+__all__ = ["checked_rule_template_ready", "resolve_inspected_template_behaviors", "render_checked_rule"]
