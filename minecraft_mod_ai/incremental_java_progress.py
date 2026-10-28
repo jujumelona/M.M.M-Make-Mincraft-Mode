@@ -6,6 +6,11 @@ import re
 from .incremental_java_context import _generated
 from .incremental_java_model import initial_scope
 
+# A cyclic helper dependency is an implementation error, not a reason to
+# recursively generate another layer forever. Independent sibling helpers are
+# not limited by this bound.
+MAX_HELPER_DEPENDENCY_DEPTH = 32
+
 
 def _purpose(value):
     return re.sub(r"\s+", " ", str(value).strip()).casefold()
@@ -43,8 +48,15 @@ def declare_method(builder, *, owner, purpose, behavior, metadata, name=None, ki
         if existing is not None:
             record_declaration(builder, existing, kind, reused=True)
             return existing
+    depth = int((builder.member or {}).get("generation_depth", 0)) + 1
+    if depth > MAX_HELPER_DEPENDENCY_DEPTH:
+        raise RuntimeError(
+            "INCREMENTAL_JAVA_HELPER_DEPENDENCY_CYCLE: "
+            f"member={(builder.member or {}).get('id')}; depth={depth}; "
+            "generate an implementation using existing helpers instead of another wrapper"
+        )
     identifier = builder.allocate("m")
-    method = {"id": identifier, "owner": owner, "kind": kind,
+    method = {"id": identifier, "owner": owner, "kind": kind, "generation_depth": depth,
               "name": name or "mmmHelper" + identifier[1:], "metadata": metadata,
               "purpose": purpose, "behavior": behavior, "body": [], "implementation_status": "pending"}
     builder.program["members"].append(method)
@@ -72,15 +84,16 @@ def declaration_feedback(builder):
             "do not delegate it back to this active signature or call it as a substitute for its implementation.")
     elif member.get("event"):
         action, instruction = "continue_caller", (
-            "The accepted register operation already connects this implemented listener to its event. "
+            "The accepted register operation already connects the queued listener to its event. "
             "Continue the caller's remaining work, or complete its block if the activation is installed.")
     elif builder.member["kind"] in {"class", "record", "enum"}:
         action, instruction = "continue_type_layout", (
-            "The declared member's body has been implemented. Continue the type's remaining distinct declarations, "
+            "The declared member is queued for authoring. Continue the type's remaining distinct declarations, "
             "or complete the type layout when all required members exist.")
     elif member["kind"] == "method":
         action, instruction = "use_declaration", (
             "Continue the caller with operations using this exact helper signature where needed. "
+            "Its implementation is scheduled and must complete before rendering. "
             "Repeating its declaration does not invoke it.")
     else:
         action, instruction = "use_declaration", (
@@ -109,7 +122,9 @@ def finish_member(builder, member):
 
 
 def finish_new_members(builder, pending_before):
-    # Initial sibling registrars remain queued. Only declarations made by this
-    # operation are dependencies of the current caller and take precedence.
-    while len(builder.pending) > pending_before:
-        finish_member(builder, builder.pending.pop())
+    """Legacy hook: leave declarations queued for iterative builder.finish().
+
+    No caller may synchronously author pending members while an operation is
+    active: that recreates the helper recursion this work queue prevents.
+    """
+    return None
