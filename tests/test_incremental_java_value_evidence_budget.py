@@ -1,8 +1,6 @@
 """Regression tests for the production value_kind/lookup infinite loop."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai import incremental_java_values as values
