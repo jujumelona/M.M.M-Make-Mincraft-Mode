@@ -52,6 +52,10 @@ def test_only_zero_hit_local_page_invokes_readonly_mcp(monkeypatch):
     })]
     assert augment_api_lookup(builder, "example.Registry", _miss()) == page
     assert len(router.calls) == 1
+    assert builder.context["_incremental_mcp_evidence_metrics"] == {
+        "provider_attempts": 1, "provider_successes": 1,
+        "cache_misses": 1, "cache_hits": 1,
+    }
 
 
 def test_local_verified_hit_and_nonfirst_page_never_call_mcp():

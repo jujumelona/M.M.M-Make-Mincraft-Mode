@@ -33,52 +33,39 @@ def _snippet(receipt: Mapping[str, Any]) -> str:
     return ""
 
 
-def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) -> dict[str, Any]:
-    """Perform one cached host-side evidence query when verified local symbols miss.
-
-    On failure, preserve exactly the ordinary local lookup response. Only an
-    already bound production project or an explicit test router can use MCP.
-    """
-    page = dict(local_page)
-    question = str(query or "").strip()
-    if (not question or question.startswith("@") or page.get("total") != 0
-            or page.get("offset", 0) != 0):
-        return page
+def _eligible(builder: Any, query: str, page: Mapping[str, Any]) -> bool:
     context = builder.context
-    if os.environ.get("MMM_HOST_MCP_EVIDENCE", "1").strip().lower() in {"0", "false", "off"}:
-        return page
-    if not context.get("project_root") and "host_mcp_router" not in context:
-        return page
     target = context.get("target")
-    if not isinstance(target, Mapping) or not str(target.get("minecraft_version") or "").strip():
-        return page
-    cache = context.setdefault("_incremental_mcp_evidence_cache", {})
-    key = json.dumps({"query": question, "target": dict(target)}, ensure_ascii=False,
-                     sort_keys=True, default=str)
-    if key in cache:
-        answer = cache[key]
-        if answer is not None:
-            page["external_mcp_evidence"] = dict(answer)
-        return page
+    return bool(
+        query and not query.startswith("@")
+        and page.get("total") == 0 and page.get("offset", 0) == 0
+        and os.environ.get("MMM_HOST_MCP_EVIDENCE", "1").strip().lower()
+        not in {"0", "false", "off"}
+        and (context.get("project_root") or "host_mcp_router" in context)
+        and isinstance(target, Mapping)
+        and str(target.get("minecraft_version") or "").strip()
+    )
 
-    router = context.get("host_mcp_router")
-    if router is None:
-        from .external_mcp_router import ExternalMCPRouter
-        router = ExternalMCPRouter(timeout_seconds=30.0)
-        context["host_mcp_router"] = router
 
-    # Prefer a precise source search for qualified Java API names; documentation
-    # search is less expensive and better suited to natural-language queries.
+def _record(context: dict[str, Any], event: str) -> None:
+    counts = context.setdefault("_incremental_mcp_evidence_metrics", {})
+    counts[event] = counts.get(event, 0) + 1
+
+
+def _search_external(router: Any, question: str, target: Mapping[str, Any],
+                     context: dict[str, Any]) -> dict[str, str] | None:
+    # Exact names favor source searches; natural language favors docs.
     candidates = (_CAPABILITIES if "." in question or "#" in question
                   else tuple(reversed(_CAPABILITIES)))
-    answer = None
     for capability in candidates:
+        _record(context, "provider_attempts")
         try:
             bundle = router.invoke(
                 capability, stage="generation", max_access="read",
                 target=target, arguments={"query": question}, corroborate=1,
                 required=False)
-        except (RuntimeError, ValueError, OSError, TypeError):
+        except Exception:  # noqa: BLE001 - optional provider never fails code authoring
+            _record(context, "provider_errors")
             continue
         if not isinstance(bundle, Mapping) or bundle.get("status") != "PASS":
             continue
@@ -88,7 +75,8 @@ def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) 
             snippet = _snippet(receipt)
             if not snippet:
                 continue
-            answer = {
+            _record(context, "provider_successes")
+            return {
                 "query": question,
                 "status": "UNVERIFIED_EXTERNAL_REFERENCE",
                 "capability": capability,
@@ -99,10 +87,32 @@ def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) 
                 "usage": "Reference only. Not a verified callable Java symbol. "
                          "Validate signatures against the bound target or compiler.",
             }
-            break
-        if answer is not None:
-            break
-    cache[key] = answer  # Cache misses too: never repeat the same failing I/O.
+    return None
+
+
+def augment_api_lookup(builder: Any, query: str, local_page: Mapping[str, Any]) -> dict[str, Any]:
+    """Add optional cached evidence without changing authoritative Java symbols."""
+    page = dict(local_page)
+    question = str(query or "").strip()
+    if not _eligible(builder, question, page):
+        return page
+    context = builder.context
+    target = context["target"]
+    cache = context.setdefault("_incremental_mcp_evidence_cache", {})
+    key = json.dumps({"query": question, "target": dict(target)}, ensure_ascii=False,
+                     sort_keys=True, default=str)
+    if key in cache:
+        _record(context, "cache_hits")
+        answer = cache[key]
+    else:
+        router = context.get("host_mcp_router")
+        if router is None:
+            from .external_mcp_router import ExternalMCPRouter
+            router = ExternalMCPRouter(timeout_seconds=30.0)
+            context["host_mcp_router"] = router
+        _record(context, "cache_misses")
+        answer = _search_external(router, question, target, context)
+        cache[key] = answer  # A failed lookup is also a useful cache entry.
     if answer is not None:
         page["external_mcp_evidence"] = dict(answer)
     return page
