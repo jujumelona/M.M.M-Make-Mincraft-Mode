@@ -76,7 +76,8 @@ def resolve_inspected_template_behaviors(
     ):
         return None
     from .source_occurrence_error import SourceHookUnavailable
-    from .source_owned_hook import choose_source_hook
+    from importlib import import_module
+    choose_source_hook = import_module("minecraft_mod_ai.source_owned_hook").choose_source_hook
     selected = []
     for behavior in behaviors:
         if behavior.get("event_binding"):
