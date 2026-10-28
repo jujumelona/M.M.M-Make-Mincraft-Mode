@@ -159,7 +159,10 @@ class IncrementalJavaBuilder:
         query = self.ask(SCHEMAS["lookup"], "lookup")
         self.latest_api = lookup_work(self, query["query"], query["offset"])
         if self.latest_api is None:
-            self.latest_api = self.api.lookup(query["query"], query["offset"])
+            local_page = self.api.lookup(query["query"], query["offset"])
+            from .incremental_java_mcp_evidence import augment_api_lookup
+
+            self.latest_api = augment_api_lookup(self, query["query"], local_page)
 
     def new_method(self, *, owner, purpose, behavior, metadata, name=None, kind="method", reuse=True):
         from .incremental_java_progress import declare_method
