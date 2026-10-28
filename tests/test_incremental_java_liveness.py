@@ -116,3 +116,31 @@ def test_stalled_model_is_guided_to_an_executable_action(idle, lookup_available)
     body = builder.author_block(member, builder.scope, [])
     assert [node["op"] for node in body] == ["return"]
     assert builder._nonprogress_choices[member["id"]] == 0
+
+
+def test_noop_callback_and_lifecycle_are_not_marked_implemented():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [{
+            "id": "m1", "registrar": True,
+            "body": [{"id": "n1", "op": "block", "body": [
+                {"id": "n2", "op": "return", "value": ""}]}],
+        }]})
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [{
+            "id": "m2", "event": {"id": "registered"},
+            "body": [{"id": "n1", "op": "if", "body": [], "otherwise": []}],
+        }]})
+
+
+def test_real_nested_effect_passes_entrypoint_gate():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    _assert_live_behavior_entrypoints({"members": [{
+        "id": "m1", "registrar": True,
+        "body": [{"id": "n1", "op": "register"}],
+    }, {
+        "id": "m2", "event": {"id": "registered"},
+        "body": [{"id": "n2", "op": "if", "body": [
+            {"id": "n3", "op": "assign", "target": "this.count",
+             "operator": "+=", "value": "1"}], "otherwise": []}],
+    }]})
