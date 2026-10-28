@@ -89,6 +89,10 @@ def declaration_feedback(builder):
     return {**outcome, "declaration": _generated(member), "next_action": action, "next_step": instruction}
 
 
+def _member_rejection(entrypoint_diagnostic):
+    return {"javac_diagnostic": entrypoint_diagnostic} if entrypoint_diagnostic else {}
+
+
 def finish_member(builder, member, *, entrypoint_diagnostic=""):
     """A child's locals, open operations, and diagnostics cannot leak to its caller."""
     previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
@@ -96,7 +100,7 @@ def finish_member(builder, member, *, entrypoint_diagnostic=""):
     with builder.declaration_scope(member):
         builder.current_operation, builder.declaration_draft = "", {}
         builder.latest_api, builder.rejection, builder.last_declaration = (
-            {}, {"javac_diagnostic": entrypoint_diagnostic} if entrypoint_diagnostic else {}, {}
+            {}, _member_rejection(entrypoint_diagnostic), {}
         )
         member["implementation_status"] = "authoring"
         try:
