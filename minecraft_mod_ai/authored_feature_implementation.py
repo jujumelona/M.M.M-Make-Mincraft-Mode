@@ -193,7 +193,7 @@ def compile_request_feature_jobs(
         # are still inspected before a custom event producer can be created.
         prerequisite_modules = [
             item for item in content_modules
-            if item.module_id != feature_module_id(rid)
+            if item.module_id != subject
         ]
         leaf = "minecraft/event/callback"
         binding = require_registered_leaf_binding(adapter.version_context, leaf)
