@@ -63,4 +63,20 @@ def operation_options(member, scope, body, blocked_declarations, *, nesting_dept
         options = [option for option in options if option != "block"]
     if nesting_depth >= MAX_CONTROL_FLOW_NESTING:
         options = [option for option in options if option not in _NESTED_OPERATIONS]
+    # Model completion is not evidence of implemented behavior. A registrar or
+    # callback with no observable operation must keep authoring instead of
+    # claiming success and failing only at final rendering.
+    if (member.get("registrar") or member.get("event")) and not _has_observable_action(body):
+        options = [option for option in options if option != "complete"]
     return [option for option in options if option not in blocked_declarations]
+
+
+def _has_observable_action(body):
+    from .incremental_java_history import walk_nodes
+    for node in walk_nodes(body):
+        op = node.get("op")
+        if op in {"call", "assign", "register", "constructor_call", "throw"}:
+            return True
+        if op == "return" and node.get("value"):
+            return True
+    return False
