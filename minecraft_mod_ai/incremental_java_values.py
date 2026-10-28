@@ -11,6 +11,8 @@ from .incremental_java_values_literals import author_literal
 from .incremental_java_values_members import select_call, select_member, select_receiver
 from .incremental_java_values_model import JavaReceiver, JavaValue, current_owner, inner_type_name, request, value_frame
 
+MAX_VALUE_EVIDENCE_LOOKUPS = 2
+
 VALUE_KINDS = ("literal", "local", "this", "null", "field", "call", "new", "binary", "unary",
                "conditional", "cast", "instanceof", "index", "array", "class_literal",
                "method_reference", "new_helper", "lookup")
@@ -36,11 +38,20 @@ class ValueAuthor:
             return value
 
     def _value_choice(self, expected, options, *, writable):
-        while True:
+        # API discovery is evidence, not construction progress. A model that
+        # repeatedly chooses lookup must never keep a Java operand unfinished
+        # forever (seen as value_kind/lookup alternation in production).
+        # Keep a per-operand budget: subsequent choices must construct a value.
+        options = list(options)
+        lookups = 0
+        while options:
             kind = request(self.builder, choice("kind", options), "value_kind")["kind"]
             self.frame["kind"] = kind
             if kind == "lookup":
                 self.builder.lookup()
+                lookups += 1
+                if lookups >= MAX_VALUE_EVIDENCE_LOOKUPS:
+                    options.remove("lookup")
                 continue
             value = self._render(kind, expected, writable=writable)
             if value is not None:
@@ -48,6 +59,10 @@ class ValueAuthor:
             # A repeated active declaration is still this operand's work.
             # Ask for its value instead of turning delegation into recursion.
             options.remove(kind)
+        raise RuntimeError(
+            "JAVA_VALUE_CONSTRUCTION_UNSUPPORTED: no grounded value for "
+            f"slot={self.frame['slot']} expected={expected}"
+        )
 
     def _options(self, expected, *, writable=False, allow_update=False):
         if allow_update and not writable:
