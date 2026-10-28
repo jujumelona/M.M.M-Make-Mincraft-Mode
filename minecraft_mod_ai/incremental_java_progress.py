@@ -89,7 +89,8 @@ def _unconnected(builder, body, declared_ids):
     members = builder.program["members"]
     created = set(declared_ids)
     created.update(row["id"] for row in members
-                   if row.get("created_by") == builder.member["id"] and not row.get("event"))
+                   if (row.get("created_by") == builder.member["id"]
+                       and row.get("kind") == "method" and not row.get("event")))
     outstanding = []
     for target in members:
         if target["id"] not in created:

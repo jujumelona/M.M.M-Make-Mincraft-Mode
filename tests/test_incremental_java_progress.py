@@ -546,3 +546,18 @@ def test_created_type_cannot_recursively_spawn_identical_nested_types():
     assert frontier_options(builder, layout, [], ["type", "method", "field", "complete"], set()) == [
         "type", "method", "field", "complete"
     ]
+
+
+
+def test_declared_fields_and_types_are_not_misclassified_as_unconnected_calls():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    parent = {"id": "root", "kind": "method", "body": []}
+    field = {"id": "f1", "kind": "field", "name": "mmmField1", "created_by": "root"}
+    nested_type = {"id": "t1", "kind": "class", "name": "MmmType1",
+                   "created_by": "root", "body": []}
+    builder = SimpleNamespace(program={"members": [parent, field, nested_type]},
+                              member=parent, drafts=[])
+    options = ["field", "type", "call", "complete"]
+    assert frontier_options(builder, parent, parent["body"], options, set()) == options
