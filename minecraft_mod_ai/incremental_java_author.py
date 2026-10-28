@@ -32,6 +32,8 @@ _INSTRUCTION = (
     "constructed, its argument index and earlier arguments; @lookup discovers additional API types. "
     "A missing gameplay implementation is coding work, never SOURCE_REQUIRED. lookup reads "
     "exact platform/project API signatures; it is not a search for a completed feature. "
+    "external_mcp_evidence on a lookup miss is an unverified reference, not a callable "
+    "member_id or proof that a target API exists. Validate against actual target symbols. "
     "register installs an actual indexed event and creates a separately authored listener; "
     "that accepted registration already connects the completed listener; do not call it again to install it. "
     "its inputs need not have the same name as the gameplay concept. Implement the original "
