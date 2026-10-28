@@ -28,4 +28,4 @@ jobs:
       - name: Compile Python source
         run: python -m compileall -q minecraft_mod_ai tests/test_incremental_java_progress.py tests/test_incremental_java_liveness.py
       - name: Run incremental Java regressions
-        run: pytest -q tests/test_incremental_java_progress.py tests/test_incremental_java_liveness.py tests/test_incremental_java_author.py
+        run: pytest -q tests/test_incremental_java_progress.py tests/test_incremental_java_liveness.py tests/test_incremental_java_author.py tests/test_incremental_java_recovery.py tests/test_incremental_java_pipeline.py
