@@ -70,10 +70,6 @@ def declaration_feedback(builder):
         action, instruction = "implement_current_work", (
             "This work is already being implemented. Implement the current body directly; "
             "do not delegate it back to this active signature or call it as a substitute for its implementation.")
-    elif member.get("implementation_status") == "pending":
-        action, instruction = "implement_current_work", (
-            "This new helper is queued for implementation after the active dependency chain. "
-            "Continue implementing the current body; do not delegate it to an unimplemented helper.")
     elif member.get("event"):
         action, instruction = "continue_caller", (
             "The accepted register operation already connects this implemented listener to its event. "
@@ -90,11 +86,14 @@ def declaration_feedback(builder):
         action, instruction = "use_declaration", (
             "Use this declared field or type through the appropriate expression or constructor; "
             "continue with distinct remaining work instead of repeating this declaration.")
+    from .incremental_java_liveness import pending_feedback
+    action, instruction = pending_feedback(member, action, instruction)
     return {**outcome, "declaration": _generated(member), "next_action": action, "next_step": instruction}
 
 
 def finish_member(builder, member):
     """Author a member without leaking child state or leaving an invalid status."""
+    from .incremental_java_liveness import author_member_body
     previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
                 builder.rejection, builder.last_declaration)
     builder.active_members.append(member["id"])
@@ -107,11 +106,7 @@ def finish_member(builder, member):
                 # Publish the actual list before filling it so parent lookup
                 # can inspect accepted operations while the child is active.
                 body = member.setdefault("body", [])
-                builder.author_block(member, initial_scope(member), [], body=body)
-                member["implementation_status"] = "complete"
-            except BaseException:
-                member["implementation_status"] = "failed"
-                raise
+                author_member_body(builder, member, initial_scope(member), body)
             finally:
                 (builder.current_operation, builder.declaration_draft, builder.latest_api,
                  builder.rejection, builder.last_declaration) = previous
@@ -120,11 +115,5 @@ def finish_member(builder, member):
 
 
 def finish_new_members(builder, pending_before):
-    # Existing sibling registrars remain queued. New dependencies normally
-    # take precedence; very deep helper chains are deferred to the existing
-    # FIFO drain instead of consuming an unbounded Python call stack.
-    from .incremental_java_author import _MAX_ACTIVE_MEMBER_DEPTH
-    while len(builder.pending) > pending_before:
-        if len(builder.active_members) >= _MAX_ACTIVE_MEMBER_DEPTH:
-            return
-        finish_member(builder, builder.pending.pop())
+    from .incremental_java_liveness import drain_new_members
+    drain_new_members(builder, pending_before, finish_member)
