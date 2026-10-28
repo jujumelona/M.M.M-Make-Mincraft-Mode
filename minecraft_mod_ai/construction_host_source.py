@@ -217,6 +217,32 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         context.get("symbols") or {},
                         package=package, name=name, behaviors=behavior_rows,
                     )
+                # Use a host-rendered semantic rule before opening the
+                # per-Java-operand model loop, but only for exact, inspected
+                # event bindings with no overlapping state/UI ownership.
+                rule_template_used = False
+                if source is None and direct_feature:
+                    from .template_first_route import checked_rule_template_ready
+                    if checked_rule_template_ready(
+                        effective_spec, behavior_rows,
+                        callbacks=prompt["available_fabric_callbacks"],
+                        retained=prompt["retained_typed_behavior"],
+                        owned_runtime_records=prompt["owned_runtime_records"],
+                        source_ui_callbacks=json.loads(
+                            bindings.get("source_ui_callbacks_json") or "[]"),
+                    ):
+                        from .host_rule_feature import compose_rule_feature
+                        source = compose_rule_feature(
+                            router, effective_spec, context,
+                            package=package, name=name,
+                            behaviors=behavior_rows, state_access=state_access,
+                            prerequisite_apis=prompt["materialized_prerequisite_api"],
+                        )
+                        rule_template_used = True
+                        print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
+                            "owner": owner, "mode": "checked_host_rule_template",
+                            "assigned_behaviors": len(behavior_rows),
+                        }, ensure_ascii=False), flush=True)
                 if source is None:
                     source = compose_source(
                         router, effective_spec, [
@@ -248,6 +274,14 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     _verify_full_source(source, spec, context, package=package,
                                         name=name, source_context=source_context)
                 except (RuntimeError, ValueError, OSError) as compiler_error:
+                    # A host-rendered rule is not an incremental Java program.
+                    # Never send its diagnostic to the unrelated member repair
+                    # loop or silently replace it with a different trigger.
+                    if locals().get("rule_template_used", False):
+                        raise HostJavaConstructionError(
+                            "HOST_RULE_TEMPLATE_COMPILATION_FAILED: "
+                            + str(compiler_error)
+                        ) from compiler_error
                     _save_checkpoint(candidate, identifier, candidate_data(
                         source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
                     if exhausted(direct_feature, attempt, budget):
