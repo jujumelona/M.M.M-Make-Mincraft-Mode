@@ -529,3 +529,20 @@ def test_new_listener_cannot_register_another_listener_recursively():
     builder = SimpleNamespace(program={"members": [listener]}, member=listener, drafts=[])
     options = ["register", "method", "block", "call", "complete"]
     assert frontier_options(builder, listener, [], options, set()) == ["block", "call", "complete"]
+
+
+
+def test_created_type_cannot_recursively_spawn_identical_nested_types():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    layout = {"id": "t1", "kind": "class", "created_by": "m1",
+              "body": [], "implementation_status": "authoring"}
+    builder = SimpleNamespace(program={"members": [layout]}, member=layout, drafts=[])
+    assert frontier_options(builder, layout, [], ["type", "method", "field", "complete"], set()) == [
+        "method", "field", "complete"
+    ]
+    layout.pop("created_by")
+    assert frontier_options(builder, layout, [], ["type", "method", "field", "complete"], set()) == [
+        "type", "method", "field", "complete"
+    ]

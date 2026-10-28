@@ -12,7 +12,8 @@ def _field(builder):
     identifier = builder.allocate("f")
     member = {"id": identifier, "owner": _owner(builder), "kind": "field",
               "name": "mmmField" + identifier[1:], "purpose": values.pop("purpose"),
-              "behavior": builder.member["behavior"], "metadata": {"visibility": "private", **values}}
+              "behavior": builder.member["behavior"], "created_by": builder.member["id"],
+              "metadata": {"visibility": "private", **values}}
     builder.declaration_draft.update(name=member["name"], purpose=member["purpose"])
     with builder.declaration_scope(member):
         member["initializer"] = builder.expression("initializer", values["type"])
@@ -50,7 +51,8 @@ def _type(builder):
     _type_layout(builder, values, metadata)
     member = {"id": identifier, "owner": _owner(builder), "kind": values["kind"],
               "name": "MmmType" + identifier[1:], "purpose": values["purpose"],
-              "behavior": builder.member["behavior"], "metadata": metadata, "body": []}
+              "behavior": builder.member["behavior"], "created_by": builder.member["id"],
+              "metadata": metadata, "body": []}
     builder.program["members"].append(member)
     builder.pending.append(member)
     return member

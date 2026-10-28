@@ -148,6 +148,8 @@ def frontier_options(builder, current, body, options, declared_ids):
                             "operation, or implement this method directly; a new "
                             "declaration is not an implementation."),
         }
+    if nested_member and current["kind"] in {"class", "record", "enum"}:
+        options = [op for op in options if op != "type"]
     if nested_block:
         options = [op for op in options if op != "block"]
     if at_depth_limit:
