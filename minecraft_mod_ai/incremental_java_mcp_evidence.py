@@ -13,7 +13,10 @@ from collections.abc import Mapping
 from typing import Any
 
 
-_CAPABILITIES = ("source_search", "official_mod_docs")
+_CAPABILITIES = ("official_mod_docs", "source_search")
+_MAPPING_TERMS = ("mapping", "yarn", "mojmap", "obfuscat", "remap")
+_REGISTRY_TERMS = ("registry", "registries", "registrar")
+_EXAMPLE_TERMS = ("example", "sample mod", "tutorial")
 _SNIPPET_CHARS = 3600
 
 
@@ -53,11 +56,25 @@ def _record(context: dict[str, Any], event: str) -> None:
     counts[event] = counts.get(event, 0) + 1
 
 
+def _capabilities_for_query(question: str) -> tuple[str, ...]:
+    """Cheap deterministic routing, without making a 9B model pick MCP tools."""
+    lowered = question.casefold()
+    if any(token in lowered for token in _MAPPING_TERMS):
+        return ("mapping_resolution", *_CAPABILITIES)
+    if any(token in lowered for token in _REGISTRY_TERMS):
+        return ("registry_lookup", *_CAPABILITIES)
+    if any(token in lowered for token in _EXAMPLE_TERMS):
+        return ("mod_examples", *_CAPABILITIES)
+    if "#" in question:
+        return ("source_search", "official_mod_docs")
+    # Prefer faster documentation over starting Minecraft source decompilation
+    # for an ordinary type/behavior query.
+    return _CAPABILITIES
+
+
 def _search_external(router: Any, question: str, target: Mapping[str, Any],
                      context: dict[str, Any]) -> dict[str, str] | None:
-    # Exact names favor source searches; natural language favors docs.
-    candidates = (_CAPABILITIES if "." in question or "#" in question
-                  else tuple(reversed(_CAPABILITIES)))
+    candidates = _capabilities_for_query(question)
     for capability in candidates:
         _record(context, "provider_attempts")
         try:

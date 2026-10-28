@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai.incremental_java_mcp_evidence import augment_api_lookup
 
 
@@ -45,7 +47,7 @@ def test_only_zero_hit_local_page_invokes_readonly_mcp(monkeypatch):
     assert data["provider"] == "fake-minecraft-docs"
     assert "members" in page and page["members"] == []
     assert "usage" in data and "not a verified" in data["usage"].lower()
-    assert router.calls == [("source_search", {
+    assert router.calls == [("registry_lookup", {
         "stage": "generation", "max_access": "read",
         "target": builder.context["target"], "arguments": {"query": "example.Registry"},
         "corroborate": 1, "required": False,
@@ -73,7 +75,7 @@ def test_unavailable_results_are_cached_and_do_not_forge_symbols():
     builder = _builder(router)
     assert augment_api_lookup(builder, "missing", _miss("missing")) == _miss("missing")
     assert augment_api_lookup(builder, "missing", _miss("missing")) == _miss("missing")
-    assert len(router.calls) == 2  # docs first, then exact source
+    assert len(router.calls) == 2  # docs first, then source fallback
     assert all(kwargs["max_access"] == "read" for _, kwargs in router.calls)
 
 
@@ -129,3 +131,27 @@ def test_compiler_local_error_does_not_trigger_remote_evidence():
     recover_compiler_api_evidence(builder, "Feature.java:3: error: incompatible types: int cannot be converted to boolean")
     assert builder.latest_api == {"previous": "preserved"}
     assert router.calls == []
+
+
+
+def test_host_deterministically_routes_mapping_docs_and_precise_source():
+    from minecraft_mod_ai.incremental_java_mcp_evidence import _capabilities_for_query
+
+    assert _capabilities_for_query("resolve Yarn mapping")[:1] == ("mapping_resolution",)
+    assert _capabilities_for_query("registry lookup")[:1] == ("registry_lookup",)
+    assert _capabilities_for_query("example mod integration")[:1] == ("mod_examples",)
+    assert _capabilities_for_query("net.minecraft.world.item.Item#use")[:1] == ("source_search",)
+    assert _capabilities_for_query("net.minecraft.world.item.Item")[:1] == ("official_mod_docs",)
+
+
+def test_managed_external_mcp_router_closes_after_host_failure():
+    from minecraft_mod_ai.incremental_java_mcp_evidence import coding_mcp_scope
+
+    closed = []
+    ctx = {"host_mcp_router": SimpleNamespace(close=lambda: closed.append(True)),
+           "_host_mcp_router_managed": True}
+    with pytest.raises(RuntimeError, match="construction failed"):
+        with coding_mcp_scope(ctx):
+            raise RuntimeError("construction failed")
+    assert closed == [True]
+    assert "host_mcp_router" not in ctx
