@@ -93,13 +93,66 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
     return contract, requirement, behavior_rows, prompt, state_access
 
 
+def _compose_preferred_source(
+    router, spec, context, prompt, behaviors, *, source_context, instructions,
+    state_access, mutation_receipts, incremental_state,
+):
+    """Compile a checked semantic rule first; otherwise use the source author.
+
+    A template must pass the same source/compiler boundary before publication.
+    Failed rules do not degrade into the unrelated incremental-Java repair loop.
+    """
+    from .template_first_route import checked_rule_template_ready, render_checked_rule
+    bindings = spec.get("bindings") or {}
+    if context.get("host_direct_feature_source") and checked_rule_template_ready(
+        spec, behaviors,
+        callbacks=prompt["available_fabric_callbacks"],
+        retained=prompt["retained_typed_behavior"],
+        owned_runtime_records=prompt["owned_runtime_records"],
+        source_ui_callbacks=json.loads(bindings.get("source_ui_callbacks_json") or "[]"),
+    ):
+        source = render_checked_rule(
+            router, spec, context,
+            package=prompt["package"], name=prompt["public_class"],
+            behaviors=behaviors, state_access=state_access,
+            prerequisite_apis=prompt["materialized_prerequisite_api"],
+        )
+        _verification_boundary()(
+            source, spec, context,
+            package=prompt["package"], name=prompt["public_class"],
+            source_context=source_context,
+        )
+        print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
+            "owner": prompt["package"] + "." + prompt["public_class"],
+            "mode": "checked_host_rule_template",
+            "assigned_behaviors": len(behaviors),
+        }, ensure_ascii=False), flush=True)
+        return source
+
+    from .incremental_java_pipeline import compose_source
+    from .first_pass_java_source import compose_first_pass_java
+    return compose_source(
+        router, spec, [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False, default=str)},
+        ], source_context=source_context,
+        construction_context={
+            **context,
+            "host_state_access": state_access,
+            "host_state_work_order_scope": prompt["host_state_work_order_scope"],
+            "runtime_mutation_receipts": mutation_receipts,
+            "incremental_state": incremental_state,
+        },
+        behaviors=behaviors, legacy_author=compose_first_pass_java,
+    )
+
+
 def compose_host_java_source(router, spec: dict, context: dict, *,
                              package: str, name: str, owner: str,
                              behaviors=(), source_context=()) -> str:
     _verify_full_source = _verification_boundary()
     from .construction_implementation import construction_implementation_fingerprint
-    from .incremental_java_pipeline import (compose_source, candidate_data, load_candidate, compile_attempts, exhausted)
-    from .first_pass_java_source import compose_first_pass_java
+    from .incremental_java_pipeline import (candidate_data, load_candidate, compile_attempts, exhausted)
 
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
         raise HostJavaConstructionError("JAVA_HOST_FABRIC_REQUIRED")
@@ -217,46 +270,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         context.get("symbols") or {},
                         package=package, name=name, behaviors=behavior_rows,
                     )
-                # Use a host-rendered semantic rule before opening the
-                # per-Java-operand model loop, but only for exact, inspected
-                # event bindings with no overlapping state/UI ownership.
-                rule_template_used = False
-                if source is None and direct_feature:
-                    from .template_first_route import checked_rule_template_ready
-                    if checked_rule_template_ready(
-                        effective_spec, behavior_rows,
-                        callbacks=prompt["available_fabric_callbacks"],
-                        retained=prompt["retained_typed_behavior"],
-                        owned_runtime_records=prompt["owned_runtime_records"],
-                        source_ui_callbacks=json.loads(
-                            bindings.get("source_ui_callbacks_json") or "[]"),
-                    ):
-                        from .host_rule_feature import compose_rule_feature
-                        source = compose_rule_feature(
-                            router, effective_spec, context,
-                            package=package, name=name,
-                            behaviors=behavior_rows, state_access=state_access,
-                            prerequisite_apis=prompt["materialized_prerequisite_api"],
-                        )
-                        rule_template_used = True
-                        print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
-                            "owner": owner, "mode": "checked_host_rule_template",
-                            "assigned_behaviors": len(behavior_rows),
-                        }, ensure_ascii=False), flush=True)
                 if source is None:
-                    source = compose_source(
-                        router, effective_spec, [
-                            {"role": "system", "content": instructions},
-                            {"role": "user", "content": json.dumps(
-                                prompt, ensure_ascii=False, default=str)},
-                        ], source_context=source_context,
-                        construction_context={
-                            **context, "host_state_access": state_access,
-                            "host_state_work_order_scope": prompt["host_state_work_order_scope"],
-                            "runtime_mutation_receipts": mutation_receipts,
-                            "incremental_state": incremental_state,
-                        },
-                        behaviors=behavior_rows, legacy_author=compose_first_pass_java,
+                    source = _compose_preferred_source(
+                        router, effective_spec, context, prompt, behavior_rows,
+                        source_context=source_context, instructions=instructions,
+                        state_access=state_access, mutation_receipts=mutation_receipts,
+                        incremental_state=incremental_state,
                     )
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
@@ -274,14 +293,6 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     _verify_full_source(source, spec, context, package=package,
                                         name=name, source_context=source_context)
                 except (RuntimeError, ValueError, OSError) as compiler_error:
-                    # A host-rendered rule is not an incremental Java program.
-                    # Never send its diagnostic to the unrelated member repair
-                    # loop or silently replace it with a different trigger.
-                    if locals().get("rule_template_used", False):
-                        raise HostJavaConstructionError(
-                            "HOST_RULE_TEMPLATE_COMPILATION_FAILED: "
-                            + str(compiler_error)
-                        ) from compiler_error
                     _save_checkpoint(candidate, identifier, candidate_data(
                         source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
                     if exhausted(direct_feature, attempt, budget):
