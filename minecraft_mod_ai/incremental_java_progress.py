@@ -89,13 +89,15 @@ def declaration_feedback(builder):
     return {**outcome, "declaration": _generated(member), "next_action": action, "next_step": instruction}
 
 
-def finish_member(builder, member):
+def finish_member(builder, member, *, entrypoint_diagnostic=""):
     """A child's locals, open operations, and diagnostics cannot leak to its caller."""
     previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
                 builder.rejection, builder.last_declaration)
     with builder.declaration_scope(member):
         builder.current_operation, builder.declaration_draft = "", {}
-        builder.latest_api, builder.rejection, builder.last_declaration = {}, {}, {}
+        builder.latest_api, builder.rejection, builder.last_declaration = (
+            {}, {"javac_diagnostic": entrypoint_diagnostic} if entrypoint_diagnostic else {}, {}
+        )
         member["implementation_status"] = "authoring"
         try:
             # Publish the actual list before filling it, so accepted child work is
