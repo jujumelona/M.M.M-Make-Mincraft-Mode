@@ -33,8 +33,10 @@ SCHEMAS = {
     "constructor_call": choice("target", ["super", "this"]),
 }
 BLOCK_OPS = frozenset({"if", "while", "do", "foreach", "for", "block", "synchronized"})
+# Plain lexical "block" is intentionally not offered: it has no standalone effect,
+# and accepting repeated empty blocks recursively can exhaust the Python stack.
 SIMPLE_OPS = ("call", "local", "assign", "if", "while", "do", "foreach", "for", "return",
-              "throw", "block", "synchronized", "switch", "try", "lambda", "register")
+              "throw", "synchronized", "switch", "try", "lambda", "register")
 DECLARATION_OPS = ("field", "method", "type")
 
 
