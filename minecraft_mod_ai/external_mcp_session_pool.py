@@ -1,16 +1,16 @@
-"""Bounded warm external MCP sessions owned by one construction operation.
+"""Warm external MCP sessions with bounded provider count and explicit lifetime.
 
-Every provider session stays inside its portal event loop; never move an MCP
-ClientSession across event loops or threads. Both successful and failed tool
-calls retain the reviewed provider identity and runtime target checks in the
-parent ExternalMCPRouter.
+MCP session context managers must open, execute, and exit in the SAME asyncio
+task. The portal only submits commands to a long-running provider actor.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections import OrderedDict
-from contextlib import asynccontextmanager, AsyncExitStack
+from concurrent.futures import Future
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import anyio
@@ -32,7 +32,7 @@ async def _connect_provider(server_name, entry, env, url):
                 raise ValueError("Invalid external stdio MCP command")
             errlog = stack.enter_context(open_mcp_stdio_errlog())
             params = StdioServerParameters(command=str(command[0]),
-                args=[str(v) for v in command[1:]], env=dict(env))
+                args=[str(value) for value in command[1:]], env=dict(env))
             read, write = await stack.enter_async_context(stdio_client(params, errlog=errlog))
         elif entry.get("transport") == "streamable_http":
             if not url:
@@ -53,38 +53,70 @@ class _WarmProvider:
         self.lock = threading.RLock()
         self.portal_context = None
         self.portal = None
-        self.connection = None
-        self.session = None
-        self.info = None
-        self.listed = None
+        self.queue = None
+        self.actor = None
 
-    async def _call(self, tool, arguments, timeout):
+    def _start_actor(self):
+        self.queue = asyncio.Queue()
+        self.actor = asyncio.create_task(self._serve())
+
+    def _submit(self, tool, arguments, timeout):
+        future = Future()
+        self.queue.put_nowait((tool, dict(arguments), float(timeout), future))
+        return future
+
+    def _stop(self):
+        future = Future()
+        self.queue.put_nowait((None, {}, 0.0, future))
+        return future
+
+    async def _serve(self):
         from .external_mcp_router import (
             ExternalMCPError, _checked_provider_call, _jsonable, _normalize_tool_result,
         )
-        with anyio.fail_after(timeout):
-            if self.session is None:
-                self.connection = self.connector(
-                    self.name, self.entry, self.env, self.url)
-                self.session, self.info, self.listed = await self.connection.__aenter__()
-            available = {str(item.name) for item in getattr(self.listed, "tools", ())}
-            if tool not in available:
-                raise ExternalMCPError(
-                    f"Provider does not expose reviewed tool {tool!r}; available={sorted(available)}")
-            raw = await _checked_provider_call(
-                self.session, tool, arguments, listed=self.listed,
-                prepare_minecraft_source=(self.name == "minecraft-dev"))
-            return {"server_info": _jsonable(getattr(self.info, "serverInfo", None)),
-                    "result": _normalize_tool_result(raw)}
-
-    async def _disconnect(self):
-        if self.connection is not None:
-            connection = self.connection
-            self.connection = None
-            self.session = None
-            self.listed = None
-            self.info = None
-            await connection.__aexit__(None, None, None)
+        cm = None
+        session = info = listed = None
+        while True:
+            tool, arguments, timeout, future = await self.queue.get()
+            if tool is None:
+                if cm is not None:
+                    try:
+                        await cm.__aexit__(None, None, None)
+                    except BaseException as exc:
+                        future.set_exception(exc)
+                    else:
+                        future.set_result(None)
+                else:
+                    future.set_result(None)
+                return
+            try:
+                with anyio.fail_after(timeout):
+                    if cm is None:
+                        new_cm = self.connector(self.name, self.entry, self.env, self.url)
+                        session, info, listed = await new_cm.__aenter__()
+                        cm = new_cm
+                    available = {str(item.name) for item in getattr(listed, "tools", ())}
+                    if tool not in available:
+                        raise ExternalMCPError(
+                            f"Provider does not expose reviewed tool {tool!r}; "
+                            f"available={sorted(available)}")
+                    raw = await _checked_provider_call(session, tool, arguments,
+                        listed=listed, prepare_minecraft_source=(self.name == "minecraft-dev"))
+                    value = {
+                        "server_info": _jsonable(getattr(info, "serverInfo", None)),
+                        "result": _normalize_tool_result(raw),
+                    }
+                future.set_result(value)
+            except BaseException as exc:
+                # A provider failure invalidates this connection, not the other
+                # providers in the router fallback chain.
+                future.set_exception(exc)
+                if cm is not None:
+                    try:
+                        await cm.__aexit__(type(exc), exc, exc.__traceback__)
+                    except BaseException:
+                        pass
+                cm = session = info = listed = None
 
     def call(self, tool, arguments, timeout):
         with self.lock:
@@ -92,24 +124,16 @@ class _WarmProvider:
                 self.portal_context = start_blocking_portal(
                     name="mmm-ext-mcp-" + str(self.name))
                 self.portal = self.portal_context.__enter__()
-            try:
-                return self.portal.call(
-                    self._call, tool, dict(arguments), float(timeout))
-            except BaseException:
-                # A broken connection must never be reused. Keep subsequent
-                # route fallback available to the existing router.
-                try:
-                    self.portal.call(self._disconnect)
-                except BaseException:
-                    pass
-                raise
+                self.portal.call(self._start_actor)
+            future = self.portal.call(self._submit, tool, arguments, timeout)
+            return future.result(timeout=float(timeout) + 10.0)
 
     def close(self):
         with self.lock:
             if self.portal is None:
                 return
             try:
-                self.portal.call(self._disconnect)
+                self.portal.call(self._stop).result(timeout=20.0)
             finally:
                 self.portal_context.__exit__(None, None, None)
                 self.portal = None
@@ -117,11 +141,7 @@ class _WarmProvider:
 
 
 class WarmProviderPool:
-    """At most two reusable providers for an active coding file.
-
-    The parent construction context closes this pool at every success/error
-    boundary. This is not a global background daemon or unbounded process pool.
-    """
+    """Bounded LRU of live providers, closed at the host construction boundary."""
 
     def __init__(self, max_providers=2, connector=_connect_provider):
         if type(max_providers) is not int or not 1 <= max_providers <= 4:
@@ -134,7 +154,7 @@ class WarmProviderPool:
 
     def call(self, name, entry, *, tool, arguments, timeout, env, url):
         key = json.dumps([name, entry.get("transport"), entry.get("command"),
-                          url, sorted(env.items())], default=str)
+                          url, sorted(env.items())], sort_keys=True, default=str)
         with self.lock:
             if self.closed:
                 raise RuntimeError("External MCP session pool is closed")
@@ -146,7 +166,9 @@ class WarmProviderPool:
                 worker = _WarmProvider(name, entry, env, url, self.connector)
                 self.entries[key] = worker
             self.entries.move_to_end(key)
-        return worker.call(tool, arguments, timeout)
+            # Holding the LRU lock through the call prevents another thread
+            # from evicting a worker that is still executing a tool.
+            return worker.call(tool, arguments, timeout)
 
     def close(self):
         with self.lock:
@@ -155,5 +177,5 @@ class WarmProviderPool:
             self.closed = True
             workers = list(self.entries.values())
             self.entries.clear()
-        for worker in workers:
-            worker.close()
+            for worker in workers:
+                worker.close()
