@@ -48,6 +48,15 @@ _INSTRUCTION = (
 )
 
 
+# A bounded non-progress window is per work item, not per nested block: opening
+# another scope or reusing an active helper must not reset it.
+_MAX_NONPROGRESS_CHOICES = 96
+_EXECUTABLE_OPERATIONS = frozenset({
+    "call", "assign", "local", "return", "throw", "break", "continue",
+    "register", "constructor_call",
+})
+
+
 class IncrementalJavaBuilder:
     def __init__(self, router, spec, messages, context, behaviors, program=None):
         self.router, self.spec, self.context = router, spec, context
@@ -63,6 +72,9 @@ class IncrementalJavaBuilder:
         self.drafts, self.declaration_draft = [], {}
         self.value_stack, self.type_stack = [], []
         self.last_declaration = {}
+        self._progress_epoch = {}
+        self._nonprogress_choices = {}
+        self._stalled_declarations = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
         from .source_ui_callback_authoring import seed_source_ui_callbacks
@@ -168,6 +180,23 @@ class IncrementalJavaBuilder:
         return declare_method(self, owner=owner, purpose=purpose, behavior=behavior, metadata=metadata,
                               name=name, kind=kind, reuse=reuse)
 
+    def _record_nonprogress(self, member):
+        member_id = member["id"]
+        attempts = self._nonprogress_choices.get(member_id, 0) + 1
+        self._nonprogress_choices[member_id] = attempts
+        if attempts >= _MAX_NONPROGRESS_CHOICES:
+            raise RuntimeError(
+                "INCREMENTAL_JAVA_NO_SEMANTIC_PROGRESS: "
+                f"member={member_id}; {attempts} model choices without an executable "
+                "operation; no-op scopes, repeated declarations and lookup loops "
+                "cannot satisfy implementation obligations"
+            )
+
+    def _record_progress(self, member):
+        member_id = member["id"]
+        self._progress_epoch[member_id] = self._progress_epoch.get(member_id, 0) + 1
+        self._nonprogress_choices[member_id] = 0
+
     def author_block(self, member, scope, path, body=None):
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
@@ -177,7 +206,18 @@ class IncrementalJavaBuilder:
         self.member, self.scope, self.path, self.block = member, scope, path, body
         blocked_declarations = set()
         while True:
-            options = operation_options(member, scope, body, blocked_declarations)
+            member_id = member["id"]
+            epoch = self._progress_epoch.get(member_id, 0)
+            stalled = {op for (owner, op), marker in self._stalled_declarations.items()
+                       if owner == member_id and marker == epoch}
+            options = operation_options(
+                member, scope, body, blocked_declarations | stalled,
+                nesting_depth=(len(self.path) + 1) // 2,
+            )
+            if not options:
+                raise RuntimeError(
+                    f"INCREMENTAL_JAVA_NO_AVAILABLE_OPERATION: member={member_id}"
+                )
             self.current_operation = ""
             operation = self.ask(choice("op", options), "kind")["op"]
             self.current_operation = operation
@@ -185,6 +225,7 @@ class IncrementalJavaBuilder:
                 break
             if operation == "lookup":
                 self.lookup()
+                self._record_nonprogress(member)
                 continue
             if operation in {*DECLARATION_OPS, "constructor", "override"}:
                 pending_before = len(self.pending)
@@ -192,16 +233,28 @@ class IncrementalJavaBuilder:
                 finish_new_members(self, pending_before)
                 if self.last_declaration.get("outcome") in {"reused", "active"}:
                     blocked_declarations.add(operation)
+                    # The same active helper may not be requested again merely
+                    # by opening a fresh nested block. Reset only after actual
+                    # executable work, not another declaration or condition.
+                    if operation == "method" and self.last_declaration["outcome"] == "active":
+                        self._stalled_declarations[(member_id, operation)] = epoch
+                self._record_nonprogress(member)
                 continue
             pending_before = len(self.pending)
+            progress_before = self._progress_epoch.get(member_id, 0)
             node = author_operation(self, operation)
             if node is None:
+                self._record_nonprogress(member)
                 continue
             body.append(node)
             self.history[node["id"]] = node
             self.rejection = {}
             blocked_declarations.clear()
             finish_new_members(self, pending_before)
+            if operation in _EXECUTABLE_OPERATIONS:
+                self._record_progress(member)
+            elif self._progress_epoch.get(member_id, 0) == progress_before:
+                self._record_nonprogress(member)
             if operation in {"return", "throw", "break", "continue"}:
                 break
         self.member, self.scope, self.path, self.block, self.current_operation = previous
