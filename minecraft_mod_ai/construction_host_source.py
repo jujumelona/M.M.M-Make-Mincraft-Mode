@@ -102,19 +102,29 @@ def _compose_preferred_source(
     A template must pass the same source/compiler boundary before publication.
     Failed rules do not degrade into the unrelated incremental-Java repair loop.
     """
-    from .template_first_route import checked_rule_template_ready, render_checked_rule
+    from .template_first_route import (
+        checked_rule_template_ready, resolve_inspected_template_behaviors,
+        render_checked_rule,
+    )
     bindings = spec.get("bindings") or {}
-    if context.get("host_direct_feature_source") and checked_rule_template_ready(
-        spec, behaviors,
-        callbacks=prompt["available_fabric_callbacks"],
-        retained=prompt["retained_typed_behavior"],
-        owned_runtime_records=prompt["owned_runtime_records"],
-        source_ui_callbacks=json.loads(bindings.get("source_ui_callbacks_json") or "[]"),
-    ):
+    route_kwargs = {
+        "callbacks": prompt["available_fabric_callbacks"],
+        "retained": prompt["retained_typed_behavior"],
+        "owned_runtime_records": prompt["owned_runtime_records"],
+        "source_ui_callbacks": json.loads(bindings.get("source_ui_callbacks_json") or "[]"),
+    }
+    selected = None
+    if context.get("host_direct_feature_source"):
+        selected = (list(behaviors) if checked_rule_template_ready(
+            spec, behaviors, **route_kwargs,
+        ) else resolve_inspected_template_behaviors(
+            router, spec, behaviors, **route_kwargs,
+        ))
+    if selected:
         source = render_checked_rule(
             router, spec, context,
             package=prompt["package"], name=prompt["public_class"],
-            behaviors=behaviors, state_access=state_access,
+            behaviors=selected, state_access=state_access,
             prerequisite_apis=prompt["materialized_prerequisite_api"],
         )
         _verification_boundary()(
@@ -125,7 +135,7 @@ def _compose_preferred_source(
         print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
             "owner": prompt["package"] + "." + prompt["public_class"],
             "mode": "checked_host_rule_template",
-            "assigned_behaviors": len(behaviors),
+            "assigned_behaviors": len(selected),
         }, ensure_ascii=False), flush=True)
         return source
 
