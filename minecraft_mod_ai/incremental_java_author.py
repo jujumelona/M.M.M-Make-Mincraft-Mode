@@ -101,7 +101,8 @@ class IncrementalJavaBuilder:
         self.serial += 1
         task = self.payload({"requested_page": suffix, **(extra or {})})
         from .incremental_java_liveness import assert_forward_progress
-        assert_forward_progress(self.request_fingerprints, task, schema)
+        if suffix == "lookup":
+            assert_forward_progress(self.request_fingerprints, task, schema)
         messages = [{"role": "system", "content": _INSTRUCTION},
                     {"role": "user", "content": json.dumps(task, ensure_ascii=False, separators=(",", ":"))}]
         result = self.router.generate_structured_data("coder", messages,

@@ -467,3 +467,37 @@ def test_unresolved_dependencies_block_every_new_declaration_family():
     builder = SimpleNamespace(program={"members": [parent, child]}, member=parent)
     options = ["field", "method", "type", "constructor", "override", "call", "complete"]
     assert frontier_options(builder, parent, parent["body"], options, set()) == ["call"]
+
+
+
+def test_recursive_anonymous_block_growth_is_not_model_selectable():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    member = {"id": "root", "kind": "method", "body": []}
+    # An unfinished anonymous block is on the active draft stack.
+    builder = SimpleNamespace(program={"members": [member]}, member=member,
+                              drafts=[{"id": "n1", "op": "block", "body": []}])
+    options = ["block", "if", "call", "return", "complete"]
+    assert frontier_options(builder, member, [], options, set()) == [
+        "if", "call", "return", "complete"
+    ]
+    builder.drafts.clear()
+    assert frontier_options(builder, member, [], options, set()) == options
+
+
+def test_descendant_helper_cannot_declare_grandchild_even_if_parent_has_effect():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options, helper_delegation_allowed
+
+    parent = {"id": "parent", "kind": "method", "body": [
+        {"op": "call", "method": "externalLibraryMethod"}], "implementation_status": "authoring"}
+    child = {"id": "child", "kind": "method", "created_by": "parent",
+             "body": [{"op": "call", "method": "externalLibraryMethod"}],
+             "implementation_status": "authoring"}
+    builder = SimpleNamespace(program={"members": [parent, child]}, member=child, drafts=[])
+    options = ["method", "call", "return", "complete"]
+    assert frontier_options(builder, child, child["body"], options, set()) == [
+        "call", "return", "complete"
+    ]
+    assert not helper_delegation_allowed(builder)

@@ -115,10 +115,16 @@ def frontier_options(builder, current, body, options, declared_ids):
     """
     outstanding = _unconnected(builder, body, declared_ids)
     ancestor = _waiting_ancestor(builder, current)
+    # A nested helper must implement its own body; it cannot indefinitely
+    # delegate all of its work into another unfinished helper.
+    nested_member = bool(current.get("created_by"))
+    # Anonymous lexical blocks nested inside another anonymous lexical block
+    # create no new behavior. Refuse recursive structural growth at its source.
+    nested_block = any(row.get("op") == "block" for row in getattr(builder, "drafts", ()))
     builder.frontier_unconnected = (outstanding if current["kind"] not in
                                     {"class", "record", "enum"} else [])
     builder.frontier_feedback = {}
-    if (outstanding or ancestor) and current["kind"] not in {"class", "record", "enum"}:
+    if (outstanding or ancestor or nested_member) and current["kind"] not in {"class", "record", "enum"}:
         excluded = {"field", "method", "type", "constructor", "override"}
         if outstanding:
             excluded.add("complete")
@@ -131,12 +137,15 @@ def frontier_options(builder, current, body, options, declared_ids):
                             "operation, or implement this method directly; a new "
                             "declaration is not an implementation."),
         }
+    if nested_block:
+        options = [op for op in options if op != "block"]
     return options
 
 
 def helper_delegation_allowed(builder):
     """Use the same dependency invariant for expression-level new_helper."""
     return (not getattr(builder, "frontier_unconnected", ())
+            and not (builder.member or {}).get("created_by")
             and _waiting_ancestor(builder, builder.member) is None)
 
 
