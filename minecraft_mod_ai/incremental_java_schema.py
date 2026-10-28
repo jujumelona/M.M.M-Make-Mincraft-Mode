@@ -37,8 +37,15 @@ SIMPLE_OPS = ("call", "local", "assign", "if", "while", "do", "foreach", "for", 
               "throw", "block", "synchronized", "switch", "try", "lambda", "register")
 DECLARATION_OPS = ("field", "method", "type")
 
+# This bounds the authoring *structure*, not the size of a requested feature.
+# A feature may have arbitrarily many sequential operations or helper members,
+# but uncontrolled recursive Java blocks cannot consume the Python call stack.
+MAX_CONTROL_FLOW_NESTING = 24
+_NESTED_OPERATIONS = frozenset({"if", "while", "do", "foreach", "for",
+                                "block", "synchronized", "switch", "try", "lambda"})
 
-def operation_options(member, scope, body, blocked_declarations):
+
+def operation_options(member, scope, body, blocked_declarations, *, nesting_depth=0):
     if member["kind"] in {"class", "record", "enum"}:
         # Type layouts have no executable operations. Reusing one overload must
         # not remove the ability to declare other methods or constructors.
@@ -50,4 +57,10 @@ def operation_options(member, scope, body, blocked_declarations):
         options.append("continue")
     if member["kind"] == "constructor" and not body:
         options.append("constructor_call")
+    # A bare block does not perform an action, and opening a new empty block
+    # inside another empty block is a no-progress loop for a small model.
+    if not body:
+        options = [option for option in options if option != "block"]
+    if nesting_depth >= MAX_CONTROL_FLOW_NESTING:
+        options = [option for option in options if option not in _NESTED_OPERATIONS]
     return [option for option in options if option not in blocked_declarations]
