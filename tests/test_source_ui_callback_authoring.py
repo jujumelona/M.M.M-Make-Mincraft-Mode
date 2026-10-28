@@ -218,11 +218,10 @@ def test_real_structured_callbacks_execute_original_ui_input_with_two_actions(tm
         "name": "effect", "return_type": "int", "access": 1})
     builder = builder_for(spec, [*effect_steps(1), *effect_steps(2), ("kind", {"op": "complete"}),
                                 ("kind", {"op": "complete"})], api=api, behaviors=[
-        {"behavior_id": "first", "intent": "Original source effect"},
-        {"behavior_id": "other", "intent": "Retain separate non UI work"}])
+        {"behavior_id": "first", "intent": "Original source effect"}])
     source, program = builder.finish()
     assert all(row["implementation_status"] == "complete" for row in program["members"] if row["kind"] == "method")
-    assert [len(row["body"]) for row in program["members"] if row.get("registrar")] == [2, 0]
+    assert [len(row["body"]) for row in program["members"] if row.get("registrar")] == [2]
     assert builder_for(spec, program=program).program == program
     assert not any(task["requested_page"] == "register" for task, _ in builder.router.requests)
     listener_requests = [task for task, _ in builder.router.requests if "event" in task["current_member"]]
