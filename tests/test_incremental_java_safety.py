@@ -23,7 +23,7 @@ def test_plain_lexical_block_is_not_a_model_action():
 
 
 def test_deep_new_helper_chain_is_deferred_instead_of_recursing():
-    from minecraft_mod_ai.incremental_java_author import _MAX_ACTIVE_MEMBER_DEPTH
+    from minecraft_mod_ai.incremental_java_liveness import _MAX_ACTIVE_MEMBER_DEPTH
 
     class Coder:
         def __init__(self):
@@ -93,7 +93,7 @@ def test_declarations_without_an_executable_statement_fail_explicitly():
 
 
 def test_control_flow_depth_is_constrained_and_scope_restored():
-    from minecraft_mod_ai.incremental_java_author import _MAX_CONTROL_FLOW_DEPTH
+    from minecraft_mod_ai.incremental_java_liveness import _MAX_CONTROL_FLOW_DEPTH
 
     class Coder:
         def __init__(self):
