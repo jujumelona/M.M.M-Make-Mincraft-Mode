@@ -13,6 +13,12 @@ _REFERENCE_FIELDS = frozenset((
     "arguments", "initializer", "receiver", "label",
 ))
 _BLOCK_FIELDS = frozenset(("body", "otherwise", "finally", "cases", "catches"))
+# Protect Python and JSON-schema traversal without capping total generated work.
+_MAX_CONTROL_NESTING = 24
+_NESTED_CONTROL_OPS = frozenset((
+    "if", "while", "do", "foreach", "for", "block", "synchronized",
+    "switch", "try", "lambda",
+))
 _JAVA_LITERAL = re.compile(r""""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'""")
 
 
@@ -120,12 +126,17 @@ def frontier_options(builder, current, body, options, declared_ids):
     nested_member = bool(current.get("created_by"))
     # Anonymous lexical blocks nested inside another anonymous lexical block
     # create no new behavior. Refuse recursive structural growth at its source.
-    nested_block = any(row.get("op") == "block" for row in getattr(builder, "drafts", ()))
+    drafts = getattr(builder, "drafts", ())
+    nested_block = any(row.get("op") == "block" for row in drafts)
+    at_depth_limit = len(drafts) >= _MAX_CONTROL_NESTING
     builder.frontier_unconnected = (outstanding if current["kind"] not in
                                     {"class", "record", "enum"} else [])
     builder.frontier_feedback = {}
     if (outstanding or ancestor or nested_member) and current["kind"] not in {"class", "record", "enum"}:
         excluded = {"field", "method", "type", "constructor", "override"}
+        if nested_member:
+            # Event callbacks must not register fresh listeners recursively.
+            excluded.add("register")
         if outstanding:
             excluded.add("complete")
         options = [op for op in options if op not in excluded]
@@ -139,6 +150,8 @@ def frontier_options(builder, current, body, options, declared_ids):
         }
     if nested_block:
         options = [op for op in options if op != "block"]
+    if at_depth_limit:
+        options = [op for op in options if op not in _NESTED_CONTROL_OPS]
     return options
 
 

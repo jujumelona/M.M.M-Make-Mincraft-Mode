@@ -501,3 +501,31 @@ def test_descendant_helper_cannot_declare_grandchild_even_if_parent_has_effect()
         "call", "return", "complete"
     ]
     assert not helper_delegation_allowed(builder)
+
+
+
+def test_control_nesting_guard_protects_recursive_host_and_json_schema():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    member = {"id": "m1", "kind": "method", "body": []}
+    # The depth limit applies only to nested control frames, never to the
+    # number of independent Java statements or generated feature files.
+    drafts = [{"id": str(i), "op": "if"} for i in range(24)]
+    builder = SimpleNamespace(program={"members": [member]}, member=member, drafts=drafts)
+    options = ["if", "for", "while", "switch", "try", "lambda", "call", "assign", "complete"]
+    assert frontier_options(builder, member, [], options, set()) == ["call", "assign", "complete"]
+    builder.drafts = drafts[:23]
+    assert frontier_options(builder, member, [], options, set()) == options
+
+
+def test_new_listener_cannot_register_another_listener_recursively():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.incremental_java_progress import frontier_options
+
+    listener = {"id": "m4", "kind": "method", "created_by": "m1",
+                "event": {"event_owner": "example.Callback"},
+                "body": [], "implementation_status": "authoring"}
+    builder = SimpleNamespace(program={"members": [listener]}, member=listener, drafts=[])
+    options = ["register", "method", "block", "call", "complete"]
+    assert frontier_options(builder, listener, [], options, set()) == ["block", "call", "complete"]
