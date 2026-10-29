@@ -7,13 +7,37 @@ from .incremental_java_render import render_program, render_member_fragment
 from .java_region_parser import _parse, _text
 
 
+def _repair_entrypoint(program, diagnostic):
+    no_effect = re.search(
+        r"INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: entrypoint=([A-Za-z0-9_]+)",
+        diagnostic,
+    )
+    if no_effect:
+        member = next(
+            (row for row in program["members"] if row["id"] == no_effect[1]), None,
+        )
+        if member is None:
+            return None, diagnostic
+        behavior_id = (member.get("behavior") or {}).get("behavior_id") or member["id"]
+        return member, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: " + str(behavior_id)
+    match = re.search(
+        r"CONSTRUCTION_FILE_BEHAVIOR_(?:METHOD_MISSING|NOOP): (.+)", diagnostic,
+    )
+    if match:
+        member = next(
+            (row for row in program["members"] if row.get("registrar")
+             and str((row.get("behavior") or {}).get("behavior_id")) == match[1].strip()),
+            None,
+        )
+        return member, diagnostic
+    return None, diagnostic
+
+
 def map_behavior_diagnostic(source, spec, context, diagnostic):
-    match = re.search(r"CONSTRUCTION_FILE_BEHAVIOR_(?:METHOD_MISSING|NOOP): (.+)", diagnostic)
     program = (context.get("incremental_state") or {}).get("program")
-    if match is None or not program:
+    if not program:
         return diagnostic
-    member = next((row for row in program["members"] if row.get("registrar")
-                   and str((row.get("behavior") or {}).get("behavior_id")) == match[1].strip()), None)
+    member, diagnostic = _repair_entrypoint(program, diagnostic)
     if member is None:
         return diagnostic
     raw, mapping = render_program(program)

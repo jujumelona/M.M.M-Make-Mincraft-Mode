@@ -7,7 +7,11 @@ import re
 from .incremental_java_context import _erase, _formals
 from .incremental_java_history import PAGE
 from .incremental_java_render import validate_value_type
-from .incremental_java_schema import choice, obj
+from .incremental_java_schema import MAX_CONTROL_FLOW_NESTING, choice, obj
+
+MAX_TYPE_EXPRESSION_NESTING = MAX_CONTROL_FLOW_NESTING
+MAX_TYPE_EVIDENCE_LOOKUPS = 2
+MAX_TYPE_COMPONENTS = 255
 from .java_operation_ir import PRIMITIVES
 
 _LANGUAGE_TYPES = ("String", "Object", "java.lang.String", "java.lang.Object", "Runnable",
@@ -139,7 +143,7 @@ def _wildcard_type(builder, suffix):
 def _union_type(builder, suffix):
     frame = builder.type_stack[-1]
     frame.update(construction="@union", alternatives=[])
-    count = _count(builder, suffix + "_alternatives", minimum=2)
+    count = _count(builder, suffix + "_alternatives", minimum=2, maximum=MAX_TYPE_COMPONENTS)
     frame["alternative_count"] = count
     for index in range(count):
         frame["alternative_index"] = index
@@ -153,7 +157,7 @@ def _parameterized_type(builder, suffix):
     base = select_java_type(builder, suffix + "_base", reference_only=True, named_only=True)
     formals = _type_parameters(builder, base)
     frame.update(base=base, formals=formals, arguments=[])
-    count = _count(builder, suffix + "_type_arguments") if formals is None else len(formals)
+    count = _count(builder, suffix + "_type_arguments", maximum=MAX_TYPE_COMPONENTS) if formals is None else len(formals)
     frame["argument_count"] = count
     if not count:
         return base
@@ -173,21 +177,35 @@ def _constructed_type(builder, marker, suffix):
     return _parameterized_type(builder, suffix)
 
 
+def _type_choice_options(builder, expected, settings, lookups):
+    options = _options(builder, expected, settings)
+    return [value for value in options
+            if value != "@lookup" or lookups < MAX_TYPE_EVIDENCE_LOOKUPS]
+
+
+def _check_type_depth(stack, suffix):
+    if len(stack) >= MAX_TYPE_EXPRESSION_NESTING:
+        raise RuntimeError("JAVA_TYPE_EXPRESSION_NESTING_EXHAUSTED: " + suffix)
+
+
 def select_java_type(builder, suffix, *, expected="", initial=None, field="type", metadata=None, **settings):
     stack = getattr(builder, "type_stack", [])
+    _check_type_depth(stack, suffix)
     request = {"field": field, "purpose": suffix, "expected": expected, "reference_only": settings.get("reference_only", False)}
     if metadata is not None:
         request["metadata"] = deepcopy(metadata)
     stack.append(request)
     builder.type_stack = stack
     selected = initial
+    lookups = 0
     try:
         while True:
             if selected is None:
-                selected = builder.ask(choice("type", _options(builder, expected, settings)), suffix,
+                selected = builder.ask(choice("type", _type_choice_options(builder, expected, settings, lookups)), suffix,
                                        {"current_type_request": request, "type_stack": stack})["type"]
             if selected == "@lookup":
                 builder.lookup()
+                lookups += 1
                 selected = None
                 continue
             if selected.startswith("@"):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .incremental_java_schema import TYPE, BOOL, obj, choice
+from .incremental_java_navigation import record_navigation_transition
 from .incremental_java_render import validate_type
 
 
@@ -102,6 +103,7 @@ def replace_declaration(builder, member, slot):
 def repair_related_declaration(builder, current):
     rows = [row for row in builder.program["members"] if declaration_slots(row)]
     offset, size = 0, 10
+    transitions = {}
     while True:
         page = rows[offset:offset + size]
         options = [row["id"] for row in page]
@@ -118,6 +120,9 @@ def repair_related_declaration(builder, current):
             with builder.declaration_scope(target):
                 replace_declaration(builder, target, "declaration")
             return
+        record_navigation_transition(
+            transitions, offset, selected, error="JAVA_REPAIR_DECLARATION_NAVIGATION_CYCLE",
+        )
         offset += size if selected == "@next" else -size
 
 
@@ -136,10 +141,14 @@ def revise_operation(builder, node):
 
 def _replacement_operation(builder, operation):
     from .incremental_java_operations import author_operation
-    while True:
+    # A register operation can be cancelled or unavailable (no indexed event).
+    # Re-entering it forever is not a correction and can spin without any model
+    # request when the event catalogue is empty.
+    for _ in range(2):
         revised = author_operation(builder, operation)
         if revised is not None:
             return revised
+    raise ValueError("JAVA_INCREMENTAL_REPAIR_OPERATION_UNAVAILABLE: " + operation)
 
 
 def create_helper(builder, node):

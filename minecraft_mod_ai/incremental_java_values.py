@@ -1,6 +1,8 @@
 """Author Java values from closed choices; the host owns every source token."""
 from __future__ import annotations
 
+from .incremental_java_navigation import record_navigation_transition
+
 from .incremental_java_calls import _signature
 from .incremental_java_model import method_metadata
 from .incremental_java_progress import finish_new_members
@@ -109,6 +111,7 @@ class ValueAuthor:
     def _local(self, *, writable=False):
         visible = self._visible_locals(writable=writable)
         names, offset = list(visible), 0
+        transitions = {}
         while True:
             page = {name: visible[name] for name in names[offset:offset + 10]}
             options = list(page)
@@ -120,15 +123,23 @@ class ValueAuthor:
                 "local_candidates": page, "local_offset": offset, "local_total": len(names)})["name"]
             if name in page:
                 return JavaValue(name, page[name]["type"], writable=not page[name].get("final", False))
+            record_navigation_transition(
+                transitions, offset, name, error="JAVA_LOCAL_SELECTION_NAVIGATION_CYCLE",
+            )
             offset += 10 if name == "next_page" else -10
 
     def _field(self, *, writable=False):
+        rejected_receivers = {}
         while True:
             receiver = select_receiver(self, "field_receiver")
             self.frame.update(receiver=receiver.source, receiver_type=receiver.java_type)
             selected = select_member(self.builder, receiver, "FIELD", "field_member", writable=writable)
             if selected != "change_receiver":
                 break
+            record_navigation_transition(
+                rejected_receivers, (receiver.source, receiver.java_type),
+                selected, error="JAVA_FIELD_RECEIVER_SELECTION_CYCLE",
+            )
         self.frame["field_contract"] = selected
         java_type = selected.get("generic_return_type", selected["return_type"])
         return JavaValue(receiver.source + "." + selected["name"], java_type, writable=True)
@@ -146,6 +157,7 @@ class ValueAuthor:
 
     def _new(self, expected):
         options = {"non_array": True} if self.frame.get("statement_expression") else {}
+        rejected_types = {}
         while True:
             java_type = self.builder.select_java_type("new_type", expected=expected, reference_only=True, **options)
             self.frame["new_type"] = java_type
@@ -155,6 +167,10 @@ class ValueAuthor:
             selected = select_member(self.builder, receiver, "CONSTRUCTOR", "constructor_member")
             if selected != "change_receiver":
                 break
+            record_navigation_transition(
+                rejected_types, java_type, selected,
+                error="JAVA_CONSTRUCTOR_SELECTION_CYCLE",
+            )
         self.frame.update(receiver=java_type, receiver_type=java_type,
                           method=selected["name"], call_contract=_signature(selected))
         self.builder.arguments(self.frame)
@@ -207,18 +223,31 @@ class ValueAuthor:
         return self._invoke(self.frame)
 
     def _reference(self, expected):
-        kind = request(self.builder, choice("reference_kind", ("method", "constructor")), "reference_kind")["reference_kind"]
+        return _select_reference_value(self, expected)
+
+
+def _select_reference_value(author, expected):
+    # A change_receiver choice is navigation, not recursive value creation.
+    visited = {}
+    for _ in range(32):
+        kind = request(author.builder, choice("reference_kind", ("method", "constructor")), "reference_kind")["reference_kind"]
         if kind == "method":
-            receiver = select_call(self, self.frame, reference=True)
-            return JavaValue(receiver.source + "::" + self.frame["method"], expected)
-        java_type = self.builder.select_java_type("reference_type", reference_only=True)
-        if not java_type.endswith("[]"):
-            receiver = JavaReceiver(java_type, java_type, static=True)
-            contract = select_member(self.builder, receiver, "CONSTRUCTOR", "constructor_member")
-            if contract == "change_receiver":
-                return self._reference(expected)
-            self.frame["call_contract"] = _signature(contract)
+            receiver = select_call(author, author.frame, reference=True)
+            return JavaValue(receiver.source + "::" + author.frame["method"], expected)
+        java_type = author.builder.select_java_type("reference_type", reference_only=True)
+        if java_type.endswith("[]"):
+            return JavaValue(java_type + "::new", expected)
+        receiver = JavaReceiver(java_type, java_type, static=True)
+        contract = select_member(author.builder, receiver, "CONSTRUCTOR", "constructor_member")
+        if contract == "change_receiver":
+            record_navigation_transition(
+                visited, java_type, contract,
+                error="JAVA_REFERENCE_CONSTRUCTOR_SELECTION_CYCLE",
+            )
+            continue
+        author.frame["call_contract"] = _signature(contract)
         return JavaValue(java_type + "::new", expected)
+    raise RuntimeError("JAVA_REFERENCE_CONSTRUCTOR_SELECTION_EXHAUSTED")
 
 
 def author_value(builder, slot, expected="java.lang.Object", *, allow_update=False) -> str:

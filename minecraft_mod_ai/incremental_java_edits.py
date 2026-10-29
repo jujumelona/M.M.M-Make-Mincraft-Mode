@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .incremental_java_history import child_blocks, operation_view, walk_nodes, PAGE
+from .incremental_java_navigation import record_navigation_transition
 from .incremental_java_scope import scope_at
 from .incremental_java_schema import SIMPLE_OPS, choice
 
@@ -37,12 +38,16 @@ def insert_before(builder, member, node):
     operation = builder.ask(choice("op", options), "repair_insert_kind")["op"]
     builder.current_operation = operation
     inserted = author_operation(builder, operation)
+    # A newly inserted statement inherits the diagnostic origin. Subsequent
+    # compile failures must not restart the repair budget under a fresh node id.
+    inserted["_repair_origin"] = node.get("_repair_origin", node["id"])
     container.insert(index, inserted)
     builder.history[inserted["id"]] = inserted
 
 
 def _select_anchor(builder, candidates):
     offset = 0
+    transitions = {}
     while True:
         page = candidates[offset:offset + PAGE]
         options = [node["id"] for node in page]
@@ -55,6 +60,9 @@ def _select_anchor(builder, candidates):
             "anchor_offset": offset, "anchor_total": len(candidates)})["anchor_id"]
         if selected in {node["id"] for node in page}:
             return selected
+        record_navigation_transition(
+            transitions, offset, selected, error="JAVA_REPAIR_ANCHOR_NAVIGATION_CYCLE",
+        )
         offset += PAGE if selected == "@next" else -PAGE
 
 

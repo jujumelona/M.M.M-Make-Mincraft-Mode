@@ -56,32 +56,77 @@ _MAX_NONPROGRESS_CHOICES = 96
 _DIRECT_PROGRESS_AFTER = 12
 _LOOKUP_EXHAUSTED_AFTER = 32
 _EXECUTABLE_OPERATIONS = frozenset({
-    "call", "assign", "local", "return", "throw", "break", "continue",
+    "call", "assign", "return", "throw", "break", "continue",
     "register", "constructor_call",
 })
 
 
-def _assert_live_behavior_entrypoints(program):
-    """A generated registration or callback must not consist only of no-op wrappers.
+def _semantic_operation_key(node, scope):
+    """Identify a distinct observable operation, not just a syntactically valid AST node.
 
-    This is a structural safety gate, not a claim that Java compilation proves
-    the user's gameplay semantics. The later behavioral acceptance still runs.
+    Local declarations and writes to bare local variables only prepare an effect.
+    They cannot indefinitely reset the per-member liveness watchdog.
     """
-    from .incremental_java_history import walk_nodes
+    operation = node.get("op")
+    if operation not in _EXECUTABLE_OPERATIONS:
+        return None
+    if operation == "assign":
+        target = str(node.get("target") or "").strip()
+        if target in {row.get("name") for row in scope.get("locals", ())}:
+            return None
+    ignored = {"id", "_repair_origin"}
+    if operation == "call":
+        # A method returning a value can still mutate the Minecraft world.
+        # Capturing its return value neither proves nor disproves the effect.
+        # Generated temporary names must not make the same call look new.
+        ignored.update({"name", "result_type"})
+    elif operation == "register":
+        # Re-registering the same event with a freshly allocated handler name
+        # is not a new observation point for this implementation obligation.
+        ignored.add("handler")
+    return json.dumps(
+        {key: value for key, value in node.items() if key not in ignored},
+        ensure_ascii=False, sort_keys=True, default=str,
+    )
 
+
+def _member_local_names(member, nodes):
+    """Collect method-local declarations and parameters, including nested scopes."""
+    names = {row.get("name") for row in member.get("metadata", {}).get("parameters", ())}
+    names.update(node.get("name") for node in nodes
+                 if node.get("op") in {"local", "lambda", "for", "foreach"})
+    names.update(node.get("name") for node in nodes
+                 if node.get("op") == "call" and node.get("result_type"))
+    return names
+
+
+def _node_has_potential_effect(node, local_names):
+    operation = node.get("op")
+    if operation == "assign":
+        target = str(node.get("target") or "").strip()
+        return bool(target) and target not in local_names
+    if operation in {"call", "register", "constructor_call", "throw"}:
+        return True
+    return operation == "return" and bool(node.get("value"))
+
+
+def _member_has_potential_effect(member):
+    """A necessary structural effect condition, not a gameplay semantics proof.
+
+    Local writes and declarations alone cannot satisfy a runtime callback.
+    Compiler and behavior acceptance remain separate requirements.
+    """
+    nodes = tuple(walk_nodes(member.get("body") or ()))
+    local_names = _member_local_names(member, nodes)
+    return any(_node_has_potential_effect(node, local_names) for node in nodes)
+
+
+def _assert_live_behavior_entrypoints(program):
+    """Reject empty callback/registration bodies after compiler validation."""
     for member in program["members"]:
         if not (member.get("registrar") or member.get("event")):
             continue
-        visible = False
-        for node in walk_nodes(member.get("body") or []):
-            operation = node.get("op")
-            if operation in {"call", "assign", "register", "constructor_call", "throw"}:
-                visible = True
-                break
-            if operation == "return" and node.get("value"):
-                visible = True
-                break
-        if not visible:
+        if not _member_has_potential_effect(member):
             raise RuntimeError(
                 "INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: "
                 f"entrypoint={member['id']}; implementation contains only "
@@ -106,6 +151,7 @@ class IncrementalJavaBuilder:
         self.last_declaration = {}
         self._progress_epoch = {}
         self._nonprogress_choices = {}
+        self._semantic_operation_keys = {}
         self._stalled_declarations = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
@@ -229,6 +275,19 @@ class IncrementalJavaBuilder:
         self._progress_epoch[member_id] = self._progress_epoch.get(member_id, 0) + 1
         self._nonprogress_choices[member_id] = 0
 
+    def _record_operation_progress(self, member, node, scope):
+        signature = _semantic_operation_key(node, scope)
+        if signature is None:
+            self._record_nonprogress(member)
+            return
+        accepted = self._semantic_operation_keys.setdefault(member["id"], set())
+        if signature in accepted:
+            # Repeating an already accepted effect cannot keep a stalled member alive.
+            self._record_nonprogress(member)
+            return
+        accepted.add(signature)
+        self._record_progress(member)
+
     def author_block(self, member, scope, path, body=None):
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
@@ -296,10 +355,8 @@ class IncrementalJavaBuilder:
                 self.rejection = {}
                 blocked_declarations.clear()
                 finish_new_members(self, pending_before)
-                if operation in _EXECUTABLE_OPERATIONS:
-                    self._record_progress(member)
-                elif self._progress_epoch.get(member_id, 0) == progress_before:
-                    self._record_nonprogress(member)
+                if self._progress_epoch.get(member_id, 0) == progress_before:
+                    self._record_operation_progress(member, node, scope)
                 if operation in {"return", "throw", "break", "continue"}:
                     break
         finally:
@@ -309,7 +366,8 @@ class IncrementalJavaBuilder:
         from .incremental_java_progress import finish_member
         while self.pending:
             finish_member(self, self.pending.popleft())
-        _assert_live_behavior_entrypoints(self.program)
+        # Candidate source must reach the verifier: an early no-op is a
+        # mapped, repairable diagnostic rather than an unrecoverable author error.
         return self.render()
 
     def render(self):

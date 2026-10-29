@@ -6,6 +6,16 @@ from copy import deepcopy
 from .incremental_java_schema import SCHEMAS
 from .incremental_java_render import validate_type
 
+# These are per-Java-construct safety bounds. They do not limit the total
+# number of methods, fields or statements a generated mod can contain.
+_MAX_SWITCH_CASES = 255
+_MAX_CATCH_CLAUSES = 255
+
+
+def _check_structured_section_count(rows, limit, section):
+    if len(rows) >= limit:
+        raise RuntimeError("JAVA_STRUCTURED_SECTION_EXHAUSTED: " + section)
+
 
 def _child(builder, node, key, *, scope=None, **changes):
     scope = deepcopy(builder.scope) if scope is None else scope
@@ -86,6 +96,7 @@ def _block(builder, node):
 def _switch(builder, node):
     node.update(selector=builder.expression("selector"), cases=[])
     while builder.enabled("case"):
+        _check_structured_section_count(node["cases"], _MAX_SWITCH_CASES, "switch_cases")
         case = {"label": "" if builder.enabled("default_case") else builder.expression("label")}
         node["active_case_label"] = case["label"]
         scope = deepcopy(builder.scope)
@@ -101,6 +112,7 @@ def _try(builder, node):
     node["catches"] = []
     more = not final or builder.enabled("catch")
     while more:
+        _check_structured_section_count(node["catches"], _MAX_CATCH_CLAUSES, "catch_clauses")
         caught = builder.typed(SCHEMAS["catch"], "catch_type", "type", allow_union=True)
         validate_type(caught["type"])
         caught["name"] = "mmmCaught" + builder.allocate("e")[1:]

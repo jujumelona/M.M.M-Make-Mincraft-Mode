@@ -5,6 +5,10 @@ from .incremental_java_model import initial_scope
 from .incremental_java_scope import scope_at, nested_scopes
 
 
+def _is_behavior_entrypoint(member):
+    return bool(member.get("registrar") or member.get("event"))
+
+
 def _append_return(builder, body, return_type):
     builder.block = body
     body.append({"id": builder.allocate("n"), "op": "return", "value": builder.expression("value", return_type)})
@@ -22,7 +26,7 @@ def _complete_lambda(builder, member, node):
 def _complete_member(builder, member, diagnostic, missing_return):
     if member["kind"] in {"class", "record", "enum"} and "does not override abstract method" in diagnostic:
         builder.author_block(member, initial_scope(member), [], body=member["body"])
-    elif "CONSTRUCTION_FILE_BEHAVIOR_" in diagnostic and member.get("registrar"):
+    elif "CONSTRUCTION_FILE_BEHAVIOR_" in diagnostic and _is_behavior_entrypoint(member):
         member["body"][:] = [item for item in member["body"] if item["op"] != "return" or item.get("value")]
         builder.author_block(member, scope_at(member), [], body=member["body"])
     elif missing_return and member["metadata"].get("return_type", "void") != "void":

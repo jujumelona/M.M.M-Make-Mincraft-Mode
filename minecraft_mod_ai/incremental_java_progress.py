@@ -2,8 +2,24 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 
 from .incremental_java_context import _generated
+
+# Bound recursive helper dependencies, not total helpers or feature size.
+MAX_HELPER_DEPENDENCY_DEPTH = 32
+
+
+@contextmanager
+def _helper_dependency_frame(builder):
+    previous = getattr(builder, "_active_member_depth", 0)
+    if previous >= MAX_HELPER_DEPENDENCY_DEPTH:
+        raise RuntimeError("JAVA_HELPER_DEPENDENCY_NESTING_EXHAUSTED")
+    builder._active_member_depth = previous + 1
+    try:
+        yield
+    finally:
+        builder._active_member_depth = previous
 from .incremental_java_model import initial_scope
 
 
@@ -91,21 +107,24 @@ def declaration_feedback(builder):
 
 def finish_member(builder, member):
     """A child's locals, open operations, and diagnostics cannot leak to its caller."""
-    previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
-                builder.rejection, builder.last_declaration)
-    with builder.declaration_scope(member):
-        builder.current_operation, builder.declaration_draft = "", {}
-        builder.latest_api, builder.rejection, builder.last_declaration = {}, {}, {}
-        member["implementation_status"] = "authoring"
-        try:
-            # Publish the actual list before filling it, so accepted child work is
-            # visible through the program even while its parent is still active.
-            body = member.setdefault("body", [])
-            builder.author_block(member, initial_scope(member), [], body=body)
-            member["implementation_status"] = "complete"
-        finally:
-            (builder.current_operation, builder.declaration_draft, builder.latest_api,
-             builder.rejection, builder.last_declaration) = previous
+    # Reject excessive dependency depth before reading or modifying caller
+    # state. The depth guard must also cover declaration_scope setup.
+    with _helper_dependency_frame(builder):
+        previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
+                    builder.rejection, builder.last_declaration)
+        with builder.declaration_scope(member):
+            builder.current_operation, builder.declaration_draft = "", {}
+            builder.latest_api, builder.rejection, builder.last_declaration = {}, {}, {}
+            member["implementation_status"] = "authoring"
+            try:
+                # Publish the actual list before filling it, so accepted child work is
+                # visible through the program even while its parent is still active.
+                body = member.setdefault("body", [])
+                builder.author_block(member, initial_scope(member), [], body=body)
+                member["implementation_status"] = "complete"
+            finally:
+                (builder.current_operation, builder.declaration_draft, builder.latest_api,
+                 builder.rejection, builder.last_declaration) = previous
 
 
 def finish_new_members(builder, pending_before):

@@ -1,6 +1,8 @@
 """Paginated generated/indexed member selection and exact invocation contracts."""
 from __future__ import annotations
 
+from .incremental_java_navigation import record_navigation_transition
+
 from copy import deepcopy
 
 from .incremental_java_calls import _signature
@@ -81,6 +83,7 @@ def _specialize(builder, receiver, selected):
 
 def select_member(builder, receiver, kind, suffix, *, nonvoid=False, writable=False, allow_helper=False):
     query, location, history = "", ("generated", 0), []
+    transitions = {}
     filters = {"nonvoid": nonvoid, "writable": writable}
     while True:
         rows, page, following = _member_page(builder, receiver, kind, query, location, filters)
@@ -99,6 +102,10 @@ def select_member(builder, receiver, kind, suffix, *, nonvoid=False, writable=Fa
             return _specialize(builder, receiver, rows[picked])
         if picked in {"new_helper", "change_receiver"}:
             return picked
+        record_navigation_transition(
+            transitions, (query, location), picked,
+            error="JAVA_MEMBER_SELECTION_NAVIGATION_CYCLE",
+        )
         if picked == "search":
             query = request(builder, obj({"query": {"type": "string"}}), "member_search")["query"]
             location, history = ("generated", 0), []
@@ -135,12 +142,17 @@ def _can_declare(builder, receiver):
 def _select_call_contract(author, node, *, nonvoid, reference):
     builder = author.builder
     allow_helper = True
+    rejected_receivers = {}
     while True:
         receiver = select_receiver(author, "call_receiver", reference=reference)
         node.update(receiver=receiver.source, receiver_type=receiver.java_type)
         selected = select_member(builder, receiver, "METHOD", "call_member", nonvoid=nonvoid,
                                  allow_helper=allow_helper and _can_declare(builder, receiver))
         if selected == "change_receiver":
+            record_navigation_transition(
+                rejected_receivers, (receiver.source, receiver.java_type),
+                selected, error="JAVA_CALL_RECEIVER_SELECTION_CYCLE",
+            )
             continue
         if selected == "new_helper":
             selected = author.helper_contract(nonvoid=nonvoid, owner=receiver.java_type, static=receiver.static)

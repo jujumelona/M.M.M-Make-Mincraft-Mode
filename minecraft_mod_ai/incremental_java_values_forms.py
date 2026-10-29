@@ -8,6 +8,10 @@ from .incremental_java_values_model import JavaValue, count, request
 _BINARY = ("+", "-", "*", "/", "%", "&&", "||", "&", "|", "^", "==", "!=", "<", "<=", ">", ">=", "<<", ">>", ">>>")
 _BOOLEAN = frozenset({"&&", "||", "==", "!=", "<", "<=", ">", ">="})
 
+# A large runtime array is still implementable with allocation and loops.
+# Model-driven literal element authoring must never request unbounded calls.
+MAX_LITERAL_ARRAY_ELEMENTS = 255
+
 
 class ValueForms:
     def __init__(self, author):
@@ -86,7 +90,7 @@ class ValueForms:
         return JavaValue("(" + code + ")", java_type)
 
     def _array_elements(self, java_type):
-        length = count(self.builder, "array_elements_count")
+        length = count(self.builder, "array_elements_count", maximum=MAX_LITERAL_ARRAY_ELEMENTS)
         self.frame["elements"] = []
         for index in range(length):
             value = self.author.value("element:" + str(index), java_type[:-2])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .incremental_java_schema import SCHEMAS, COUNT, TYPE, obj, choice
+from .incremental_java_navigation import record_navigation_transition
 from .incremental_java_render import validate_type
 
 
@@ -101,6 +102,7 @@ def _override(builder):
 
 def _select_override(builder, rows):
     offset, size = 0, 10
+    transitions = {}
     while True:
         indexed = {"override" + str(index): row for index, row in enumerate(rows[offset:offset + size], offset)}
         options = list(indexed)
@@ -112,6 +114,9 @@ def _select_override(builder, rows):
             "override_candidates": indexed, "override_offset": offset, "override_total": len(rows)})["override_id"]
         if selected in indexed:
             return indexed[selected]
+        record_navigation_transition(
+            transitions, offset, selected, error="JAVA_OVERRIDE_SELECTION_NAVIGATION_CYCLE",
+        )
         offset += size if selected == "@next" else -size
 
 

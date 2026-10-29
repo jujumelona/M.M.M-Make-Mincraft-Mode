@@ -44,7 +44,8 @@ def _mapped_target(builder, diagnostic):
 def _count_attempt(builder, member, node, slot):
     state = builder.context.setdefault("incremental_state", {})
     attempts = state.setdefault("repair_attempts", {})
-    key = member["id"] + ":" + (node["id"] if node else "declaration") + ":" + slot
+    root = node.get("_repair_origin", node["id"]) if node else "declaration"
+    key = member["id"] + ":" + root + ":" + slot
     attempts[key] = attempts.get(key, 0) + 1
     acceptance = (builder.context.get("feature_work_order") or {}).get("acceptance") or {}
     limit = acceptance.get("max_operation_repair_attempts", 2)
@@ -83,12 +84,22 @@ def _perform_repair(builder, member, node, slot, diagnostic):
         replace_node(builder, node, slot)
 
 
+def _repair_choice_pages(options):
+    # Two evidence reads, then an obligatory concrete correction. Do not
+    # count a lookup as a source repair or silently accept an empty mutation.
+    from .incremental_java_values import MAX_VALUE_EVIDENCE_LOOKUPS
+    for _ in range(MAX_VALUE_EVIDENCE_LOOKUPS):
+        yield [*options, "lookup"]
+    yield list(options)
+
+
 def _select_repair(builder, options):
-    while True:
-        selected = builder.ask(choice("repair", [*options, "lookup"]), "repair_target")["repair"]
+    for choices in _repair_choice_pages(options):
+        selected = builder.ask(choice("repair", choices), "repair_target")["repair"]
         if selected != "lookup":
             return selected
         builder.lookup()
+    raise AssertionError("unreachable")
 
 
 def repair_incremental_program(router, source, diagnostic, *, program, spec, messages,
