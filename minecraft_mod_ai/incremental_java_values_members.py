@@ -81,8 +81,16 @@ def _specialize(builder, receiver, selected):
 
 def select_member(builder, receiver, kind, suffix, *, nonvoid=False, writable=False, allow_helper=False):
     query, location, history = "", ("generated", 0), []
+    page_visits = {}
     filters = {"nonvoid": nonvoid, "writable": writable}
     while True:
+        state = (query, location)
+        page_visits[state] = page_visits.get(state, 0) + 1
+        if page_visits[state] > 2:
+            raise RuntimeError(
+                "JAVA_MEMBER_SELECTION_NAVIGATION_CYCLE: "
+                f"receiver={receiver.java_type} kind={kind} query={query!r} location={location}"
+            )
         rows, page, following = _member_page(builder, receiver, kind, query, location, filters)
         options = [*rows, "search", "change_receiver"]
         if allow_helper:
@@ -135,12 +143,17 @@ def _can_declare(builder, receiver):
 def _select_call_contract(author, node, *, nonvoid, reference):
     builder = author.builder
     allow_helper = True
+    rejected_receivers = {}
     while True:
         receiver = select_receiver(author, "call_receiver", reference=reference)
         node.update(receiver=receiver.source, receiver_type=receiver.java_type)
         selected = select_member(builder, receiver, "METHOD", "call_member", nonvoid=nonvoid,
                                  allow_helper=allow_helper and _can_declare(builder, receiver))
         if selected == "change_receiver":
+            key = (receiver.source, receiver.java_type)
+            rejected_receivers[key] = rejected_receivers.get(key, 0) + 1
+            if rejected_receivers[key] > 2:
+                raise RuntimeError("JAVA_CALL_RECEIVER_SELECTION_CYCLE: " + repr(key))
             continue
         if selected == "new_helper":
             selected = author.helper_contract(nonvoid=nonvoid, owner=receiver.java_type, static=receiver.static)
