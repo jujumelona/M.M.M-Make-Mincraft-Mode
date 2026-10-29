@@ -114,6 +114,26 @@ def _independent_feature_work_items(plan, features, behaviors):
     return items
 
 
+def _context_only_feature(feature, source_behaviors):
+    rid = feature["requirement_id"]
+    matches = [row for row in source_behaviors
+               if row.get("requirement_id") == rid]
+    if not matches:
+        return False
+    statement = str(feature.get("statement") or "").strip()
+    return all(
+        row.get("source_status") == "source_preserved_unresolved"
+        and not str(row.get("trigger") or "").strip()
+        and not (row.get("state_reads") or row.get("state_writes")
+                 or row.get("runtime_state_reads")
+                 or row.get("runtime_state_writes"))
+        and str(row.get("intent") or "").strip() == statement
+        and str(row.get("effects") or "").strip() == statement
+        for row in matches
+    )
+
+
+
 def compile_request_feature_jobs(
     plan: AuthoredPlan, *, adapter: Any, mod_id: str, package_name: str,
     content_modules: Sequence[Any], content_jobs: Sequence[ArtifactJob],
@@ -132,27 +152,9 @@ def compile_request_feature_jobs(
     # the approved request scope, but never ask a 9B model to invent a hook.
     source_behaviors = plan.request_scope.get("behavior_requirements", ())
 
-    def _context_only(feature):
-        rid = feature["requirement_id"]
-        matches = [row for row in source_behaviors
-                   if row.get("requirement_id") == rid]
-        if not matches:
-            return False
-        statement = str(feature.get("statement") or "").strip()
-        return all(
-            row.get("source_status") == "source_preserved_unresolved"
-            and not str(row.get("trigger") or "").strip()
-            and not (row.get("state_reads") or row.get("state_writes")
-                     or row.get("runtime_state_reads")
-                     or row.get("runtime_state_writes"))
-            and str(row.get("intent") or "").strip() == statement
-            and str(row.get("effects") or "").strip() == statement
-            for row in matches
-        )
-
     non_interface = tuple(feature for feature in plan.request_scope.get(
         "requirements", ()) if not _owned_interface(feature))
-    concrete = tuple(feature for feature in non_interface if _feature_needs_source(plan, feature, _context_only))
+    concrete = tuple(feature for feature in non_interface if _feature_needs_source(plan, feature, lambda item: _context_only_feature(item, source_behaviors)))
     if non_interface and not concrete:
         # A request consisting only of ungrounded headings is not a success.
         raise ValueError("REQUEST_FEATURE_EXECUTABLE_BEHAVIOR_REQUIRED")
