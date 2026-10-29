@@ -21,7 +21,7 @@ def test_local_preparation_does_not_count_as_runtime_effect():
     ) is None
     assert _semantic_operation_key(
         {"id": "n3", "op": "call", "method": "calculate", "result_type": "int"}, scope
-    ) is None
+    ) is not None
     assert _semantic_operation_key(
         {"id": "n4", "op": "assign", "target": "this.count", "value": "1"}, scope
     ) is not None
@@ -195,3 +195,77 @@ def test_navigation_tracker_allows_legal_backtracking_but_detects_cycle():
     record_navigation_transition(history, "page0", "next", error="CYCLE")
     with pytest.raises(RuntimeError, match="CYCLE"):
         record_navigation_transition(history, "page0", "next", error="CYCLE")
+
+
+
+def test_captured_calls_remain_potential_effects_without_fresh_signatures():
+    # Minecraft mutators such as block-placement methods may return a boolean.
+    scope = {"locals": []}
+    first = {"id": "n1", "op": "call", "receiver": "world", "method": "setBlock",
+             "arguments": ["pos", "state"], "result_type": "boolean",
+             "name": "mmmValue1"}
+    second = {**first, "id": "n2", "name": "mmmValue947"}
+    assert _semantic_operation_key(first, scope) == _semantic_operation_key(second, scope)
+    assert _semantic_operation_key(first, scope) is not None
+    distinct = {**first, "arguments": ["otherPos", "state"]}
+    assert _semantic_operation_key(distinct, scope) != _semantic_operation_key(first, scope)
+
+
+def test_duplicate_registration_does_not_reset_semantic_progress():
+    scope = {"locals": []}
+    first = {"id": "n1", "op": "register", "event_owner": "demo.Events",
+             "event_field": "CLICK", "handler": "mmmHelper1"}
+    second = {**first, "id": "n2", "handler": "mmmHelper2"}
+    assert _semantic_operation_key(first, scope) == _semantic_operation_key(second, scope)
+
+
+def test_repair_cannot_spin_when_event_registration_is_unavailable(monkeypatch):
+    from minecraft_mod_ai import incremental_java_operations as operations
+    from minecraft_mod_ai.incremental_java_repair_slots import _replacement_operation
+
+    calls = []
+
+    def unavailable(_builder, operation):
+        calls.append(operation)
+        return None
+
+    monkeypatch.setattr(operations, "author_operation", unavailable)
+    with pytest.raises(ValueError, match="JAVA_INCREMENTAL_REPAIR_OPERATION_UNAVAILABLE"):
+        _replacement_operation(object(), "register")
+    assert calls == ["register", "register"]
+
+
+def test_register_event_search_cycle_is_rejected():
+    from minecraft_mod_ai.incremental_java_events import select_event
+
+    class API:
+        def callbacks(self):
+            return [{"event_id": "demo.Events#CLICK",
+                     "parameters": ["java.lang.String"]}]
+
+    class Builder:
+        api = API()
+        def ask(self, _schema, suffix, _extra=None):
+            if suffix == "register":
+                return {"event_id": "@search"}
+            assert suffix == "register_lookup"
+            return {"query": "*", "offset": 0}
+
+    with pytest.raises(RuntimeError, match="JAVA_EVENT_SELECTION_NAVIGATION_CYCLE"):
+        select_event(Builder())
+
+
+def test_constructor_reference_reselection_is_not_recursive(monkeypatch):
+    from minecraft_mod_ai import incremental_java_values as values
+
+    class Builder:
+        value_stack = [{"slot": "reference", "expected_type": "java.lang.Object"}]
+        def select_java_type(self, *_args, **_kwargs):
+            return "demo.Target"
+
+    monkeypatch.setattr(values, "request",
+                        lambda _builder, _schema, _suffix: {"reference_kind": "constructor"})
+    monkeypatch.setattr(values, "select_member",
+                        lambda *_args, **_kwargs: "change_receiver")
+    with pytest.raises(RuntimeError, match="JAVA_REFERENCE_CONSTRUCTOR_SELECTION_CYCLE"):
+        values.ValueAuthor(Builder())._reference("java.util.function.Supplier")
