@@ -84,12 +84,17 @@ def _perform_repair(builder, member, node, slot, diagnostic):
         replace_node(builder, node, slot)
 
 
-def _select_repair(builder, options):
-    # Discovery must end in an actual correction. This budget belongs to one
-    # diagnostic, not the size of the requested mod or its source tree.
+def _repair_choice_pages(options):
+    # Two evidence reads, then an obligatory concrete correction. Do not
+    # count a lookup as a source repair or silently accept an empty mutation.
     from .incremental_java_values import MAX_VALUE_EVIDENCE_LOOKUPS
-    for lookups in range(MAX_VALUE_EVIDENCE_LOOKUPS + 1):
-        choices = [*options, *(["lookup"] if lookups < MAX_VALUE_EVIDENCE_LOOKUPS else [])]
+    for _ in range(MAX_VALUE_EVIDENCE_LOOKUPS):
+        yield [*options, "lookup"]
+    yield list(options)
+
+
+def _select_repair(builder, options):
+    for choices in _repair_choice_pages(options):
         selected = builder.ask(choice("repair", choices), "repair_target")["repair"]
         if selected != "lookup":
             return selected
