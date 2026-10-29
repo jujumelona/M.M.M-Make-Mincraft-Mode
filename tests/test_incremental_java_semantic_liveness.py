@@ -269,3 +269,78 @@ def test_constructor_reference_reselection_is_not_recursive(monkeypatch):
                         lambda *_args, **_kwargs: "change_receiver")
     with pytest.raises(RuntimeError, match="JAVA_REFERENCE_CONSTRUCTOR_SELECTION_CYCLE"):
         values.ValueAuthor(Builder())._reference("java.util.function.Supplier")
+
+
+
+def test_type_lookup_cannot_spin_indefinitely():
+    from minecraft_mod_ai.incremental_java_type_choices import select_java_type
+
+    builder = _builder(None)
+    calls = []
+    builder.lookup = lambda: calls.append("lookup")
+
+    def choose(schema, _suffix, _extra=None):
+        options = schema["properties"]["type"]["enum"]
+        return {"type": "@lookup" if "@lookup" in options else "int"}
+
+    builder.ask = choose
+    assert select_java_type(builder, "field_type") == "int"
+    assert calls == ["lookup", "lookup"]
+    assert builder.type_stack == []
+
+
+def test_type_construction_depth_guard_keeps_original_stack():
+    from minecraft_mod_ai.incremental_java_type_choices import (
+        select_java_type, MAX_TYPE_EXPRESSION_NESTING,
+    )
+
+    builder = _builder(None)
+    builder.type_stack = [{"purpose": str(index)}
+                          for index in range(MAX_TYPE_EXPRESSION_NESTING)]
+    original = list(builder.type_stack)
+    with pytest.raises(RuntimeError, match="JAVA_TYPE_EXPRESSION_NESTING_EXHAUSTED"):
+        select_java_type(builder, "nested_type")
+    assert builder.type_stack == original
+
+
+def test_override_catalog_backtracking_cycle_is_bounded():
+    from minecraft_mod_ai.incremental_java_declarations import _select_override
+
+    class Builder:
+        def ask(self, _schema, _suffix, extra=None):
+            return {"override_id": "@next" if extra["override_offset"] == 0 else "@previous"}
+
+    rows = [{"name": "method" + str(i), "kind": "METHOD"} for i in range(20)]
+    with pytest.raises(RuntimeError, match="JAVA_OVERRIDE_SELECTION_NAVIGATION_CYCLE"):
+        _select_override(Builder(), rows)
+
+
+def test_repair_anchor_catalog_backtracking_cycle_is_bounded():
+    from minecraft_mod_ai.incremental_java_edits import _select_anchor
+
+    class Builder:
+        def ask(self, _schema, _suffix, extra=None):
+            return {"anchor_id": "@next" if extra["anchor_offset"] == 0 else "@previous"}
+
+    nodes = [{"id": "n" + str(i), "op": "call"} for i in range(20)]
+    with pytest.raises(RuntimeError, match="JAVA_REPAIR_ANCHOR_NAVIGATION_CYCLE"):
+        _select_anchor(Builder(), nodes)
+
+
+def test_repair_related_declaration_pagination_cycle_is_bounded():
+    from minecraft_mod_ai.incremental_java_repair_slots import repair_related_declaration
+
+    class Builder:
+        def __init__(self):
+            self.program = {"members": [
+                {"id": "m" + str(i), "name": "M" + str(i), "kind": "method",
+                 "owner": "Feature", "purpose": "test",
+                 "metadata": {"return_type": "int"}} for i in range(20)
+            ]}
+        def ask(self, _schema, _suffix, extra=None):
+            return {"declaration_id": "@next"
+                    if extra["declaration_offset"] == 0 else "@previous"}
+
+    builder = Builder()
+    with pytest.raises(RuntimeError, match="JAVA_REPAIR_DECLARATION_NAVIGATION_CYCLE"):
+        repair_related_declaration(builder, builder.program["members"][0])
