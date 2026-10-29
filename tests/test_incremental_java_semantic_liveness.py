@@ -78,3 +78,75 @@ def test_value_expression_nesting_is_bounded_without_mutating_stack():
                 pass
         assert len(builder.value_stack) == MAX_VALUE_EXPRESSION_NESTING
     assert builder.value_stack == []
+
+
+def test_local_catalog_page_cycle_is_rejected(monkeypatch):
+    from minecraft_mod_ai import incremental_java_values as values
+
+    builder = _builder(None)
+    builder.scope["locals"] = [
+        {"name": "local" + str(i), "type": "int"} for i in range(20)
+    ]
+
+    def choose(_builder, schema, suffix, extra=None):
+        assert suffix == "local_value"
+        return {"name": "next_page" if extra["local_offset"] == 0 else "previous_page"}
+
+    monkeypatch.setattr(values, "request", choose)
+    with pytest.raises(RuntimeError, match="JAVA_LOCAL_SELECTION_NAVIGATION_CYCLE"):
+        values.ValueAuthor(builder)._local()
+
+
+def test_member_catalog_page_cycle_is_rejected(monkeypatch):
+    from minecraft_mod_ai import incremental_java_values_members as members
+    from minecraft_mod_ai.incremental_java_values_model import JavaReceiver
+
+    builder = _builder(None)
+
+    def catalog(_builder, receiver, kind, query, location, filters):
+        if location[1] == 0:
+            return ({"m1": {"name": "entry"}}, {"total": 20}, ("api", 10))
+        return ({"m2": {"name": "entry2"}}, {"total": 20}, None)
+
+    def choose(_builder, schema, suffix, extra=None):
+        assert suffix == "field_member"
+        return {"member_id": "next_page" if not extra.get("member_page", {}).get("offset") else "previous_page"}
+
+    # Supply the real page offset in the test catalog, so selection alternates.
+    def catalog_with_offset(_builder, receiver, kind, query, location, filters):
+        rows, page, following = catalog(_builder, receiver, kind, query, location, filters)
+        return rows, {**page, "offset": location[1]}, following
+
+    monkeypatch.setattr(members, "_member_page", catalog_with_offset)
+    monkeypatch.setattr(members, "request", choose)
+    with pytest.raises(RuntimeError, match="JAVA_MEMBER_SELECTION_NAVIGATION_CYCLE"):
+        members.select_member(builder, JavaReceiver("this", "Feature"), "FIELD", "field_member")
+
+
+def test_repair_discovery_cannot_replace_a_concrete_edit_forever():
+    from minecraft_mod_ai.incremental_java_repair import _select_repair
+
+    class Builder:
+        lookups = 0
+
+        def ask(self, schema, suffix):
+            options = schema["properties"]["repair"]["enum"]
+            return {"repair": "lookup" if "lookup" in options else "mapped_operand"}
+
+        def lookup(self):
+            self.lookups += 1
+
+    builder = Builder()
+    assert _select_repair(builder, ["mapped_operand"]) == "mapped_operand"
+    assert builder.lookups == 2
+
+
+def test_inserted_repair_operations_share_original_error_budget():
+    from minecraft_mod_ai.incremental_java_repair import _count_attempt
+
+    builder = _builder(None)
+    member = builder.member
+    _count_attempt(builder, member, {"id": "n1"}, "value")
+    _count_attempt(builder, member, {"id": "n2", "_repair_origin": "n1"}, "value")
+    with pytest.raises(ValueError, match="JAVA_INCREMENTAL_OPERATION_REPAIR_EXHAUSTED"):
+        _count_attempt(builder, member, {"id": "n3", "_repair_origin": "n1"}, "value")
