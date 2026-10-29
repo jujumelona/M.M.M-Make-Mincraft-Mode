@@ -1,6 +1,8 @@
 """Paginated generated/indexed member selection and exact invocation contracts."""
 from __future__ import annotations
 
+from .incremental_java_navigation import record_navigation_transition
+
 from copy import deepcopy
 
 from .incremental_java_calls import _signature
@@ -81,16 +83,9 @@ def _specialize(builder, receiver, selected):
 
 def select_member(builder, receiver, kind, suffix, *, nonvoid=False, writable=False, allow_helper=False):
     query, location, history = "", ("generated", 0), []
-    page_visits = {}
+    transitions = {}
     filters = {"nonvoid": nonvoid, "writable": writable}
     while True:
-        state = (query, location)
-        page_visits[state] = page_visits.get(state, 0) + 1
-        if page_visits[state] > 2:
-            raise RuntimeError(
-                "JAVA_MEMBER_SELECTION_NAVIGATION_CYCLE: "
-                f"receiver={receiver.java_type} kind={kind} query={query!r} location={location}"
-            )
         rows, page, following = _member_page(builder, receiver, kind, query, location, filters)
         options = [*rows, "search", "change_receiver"]
         if allow_helper:
@@ -107,6 +102,10 @@ def select_member(builder, receiver, kind, suffix, *, nonvoid=False, writable=Fa
             return _specialize(builder, receiver, rows[picked])
         if picked in {"new_helper", "change_receiver"}:
             return picked
+        record_navigation_transition(
+            transitions, (query, location), picked,
+            error="JAVA_MEMBER_SELECTION_NAVIGATION_CYCLE",
+        )
         if picked == "search":
             query = request(builder, obj({"query": {"type": "string"}}), "member_search")["query"]
             location, history = ("generated", 0), []
@@ -150,10 +149,10 @@ def _select_call_contract(author, node, *, nonvoid, reference):
         selected = select_member(builder, receiver, "METHOD", "call_member", nonvoid=nonvoid,
                                  allow_helper=allow_helper and _can_declare(builder, receiver))
         if selected == "change_receiver":
-            key = (receiver.source, receiver.java_type)
-            rejected_receivers[key] = rejected_receivers.get(key, 0) + 1
-            if rejected_receivers[key] > 2:
-                raise RuntimeError("JAVA_CALL_RECEIVER_SELECTION_CYCLE: " + repr(key))
+            record_navigation_transition(
+                rejected_receivers, (receiver.source, receiver.java_type),
+                selected, error="JAVA_CALL_RECEIVER_SELECTION_CYCLE",
+            )
             continue
         if selected == "new_helper":
             selected = author.helper_contract(nonvoid=nonvoid, owner=receiver.java_type, static=receiver.static)
