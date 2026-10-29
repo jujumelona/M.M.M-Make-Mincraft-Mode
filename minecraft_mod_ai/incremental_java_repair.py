@@ -84,11 +84,16 @@ def _perform_repair(builder, member, node, slot, diagnostic):
 
 
 def _select_repair(builder, options):
-    while True:
-        selected = builder.ask(choice("repair", [*options, "lookup"]), "repair_target")["repair"]
+    # Discovery must end in an actual correction. This budget belongs to one
+    # diagnostic, not the size of the requested mod or its source tree.
+    from .incremental_java_values import MAX_VALUE_EVIDENCE_LOOKUPS
+    for lookups in range(MAX_VALUE_EVIDENCE_LOOKUPS + 1):
+        choices = [*options, *(["lookup"] if lookups < MAX_VALUE_EVIDENCE_LOOKUPS else [])]
+        selected = builder.ask(choice("repair", choices), "repair_target")["repair"]
         if selected != "lookup":
             return selected
         builder.lookup()
+    raise AssertionError("unreachable")
 
 
 def repair_incremental_program(router, source, diagnostic, *, program, spec, messages,
