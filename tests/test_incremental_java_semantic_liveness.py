@@ -447,3 +447,36 @@ def test_callback_local_only_assignments_cannot_masquerade_as_gameplay_effects()
                             {"id": "n4", "op": "assign", "operator": "+=",
                              "target": "this.mmmField1", "value": "1"}]}
     _assert_live_behavior_entrypoints({"members": [real_effect]})
+
+
+
+def test_finite_preparation_then_fabric_event_effect_still_compiles_and_executes(tmp_path):
+    """Constructive witness: a model can escape local preparation and finish.
+
+    This is an existence test with a deterministic scripted policy, not
+    evidence of MiMo 9B inference accuracy.
+    """
+    from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
+    from test_incremental_java_author import OperationCoder, _inputs, _compile_claims
+
+    class FinitePreparationCoder(OperationCoder):
+        def __init__(self):
+            super().__init__()
+            self.steps["m1"] = iter([
+                *[("local", {"type": "int"}) for _ in range(10)],
+                ("field", {"type": "int", "purpose": "Count observed events",
+                           "static": False, "final": False}),
+                ("register", {}),
+            ])
+
+    behavior, spec, context, messages = _inputs()
+    model = FinitePreparationCoder()
+    source, program = compose_incremental_feature(
+        model, spec, messages, construction_context=context, behaviors=[behavior]
+    )
+    registrars = [m for m in program["members"] if m.get("registrar")]
+    assert len(registrars) == 1
+    assert sum(node["op"] == "local" for node in registrars[0]["body"]) == 10
+    assert any(node["op"] == "register" for node in registrars[0]["body"])
+    assert "this.mmmField1" in source
+    _compile_claims(tmp_path, source)
