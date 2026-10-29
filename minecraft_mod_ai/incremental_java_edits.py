@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .incremental_java_history import child_blocks, operation_view, walk_nodes, PAGE
+from .incremental_java_navigation import record_navigation_transition
 from .incremental_java_scope import scope_at
 from .incremental_java_schema import SIMPLE_OPS, choice
 
@@ -46,6 +47,7 @@ def insert_before(builder, member, node):
 
 def _select_anchor(builder, candidates):
     offset = 0
+    transitions = {}
     while True:
         page = candidates[offset:offset + PAGE]
         options = [node["id"] for node in page]
@@ -58,6 +60,9 @@ def _select_anchor(builder, candidates):
             "anchor_offset": offset, "anchor_total": len(candidates)})["anchor_id"]
         if selected in {node["id"] for node in page}:
             return selected
+        record_navigation_transition(
+            transitions, offset, selected, error="JAVA_REPAIR_ANCHOR_NAVIGATION_CYCLE",
+        )
         offset += PAGE if selected == "@next" else -PAGE
 
 
