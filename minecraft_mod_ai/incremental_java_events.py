@@ -13,6 +13,13 @@ _MAX_EVENT_SELECTION_NAVIGATION = 128
 PAGE = 10
 
 
+def _event_navigation_step(count):
+    count += 1
+    if count > _MAX_EVENT_SELECTION_NAVIGATION:
+        raise RuntimeError("JAVA_EVENT_SELECTION_NAVIGATION_EXHAUSTED")
+    return count
+
+
 def select_event(builder):
     events = builder.api.callbacks()
     if not events:
@@ -27,9 +34,7 @@ def select_event(builder):
     transitions = {}
     navigation_steps = 0
     while True:
-        navigation_steps += 1
-        if navigation_steps > _MAX_EVENT_SELECTION_NAVIGATION:
-            raise RuntimeError("JAVA_EVENT_SELECTION_NAVIGATION_EXHAUSTED")
+        navigation_steps = _event_navigation_step(navigation_steps)
         matching = _matching(events, query)
         available = matching[offset:offset + PAGE]
         indexed = {event["event_id"]: event for event in available}
