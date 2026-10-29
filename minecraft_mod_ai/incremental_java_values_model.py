@@ -5,7 +5,11 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .incremental_java_schema import obj
+from .incremental_java_schema import MAX_CONTROL_FLOW_NESTING, obj
+
+# Expression trees and statement blocks need independent stack bounds. Long
+# computations remain authorable as sequential statements.
+MAX_VALUE_EXPRESSION_NESTING = MAX_CONTROL_FLOW_NESTING
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,11 @@ def value_frame(builder, slot, expected, *, writable=False):
     if not hasattr(builder, "value_stack"):
         builder.value_stack = []
     previous = builder.value_stack
+    if len(previous) >= MAX_VALUE_EXPRESSION_NESTING:
+        raise RuntimeError(
+            "JAVA_VALUE_EXPRESSION_NESTING_EXHAUSTED: "
+            f"slot={slot}; author intermediate results as sequential Java operations"
+        )
     frame = {"slot": slot, "expected_type": expected, "writable": writable}
     previous.append(frame)
     try:
