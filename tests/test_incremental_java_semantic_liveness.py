@@ -383,3 +383,21 @@ def test_repeated_catch_clauses_have_finite_structural_limit():
 
     with pytest.raises(RuntimeError, match="JAVA_STRUCTURED_SECTION_EXHAUSTED: catch_clauses"):
         _try(Builder(), {"id": "n1", "op": "try"})
+
+
+
+def test_type_component_count_is_bounded_by_schema():
+    from minecraft_mod_ai.incremental_java_type_choices import (
+        MAX_TYPE_COMPONENTS, _count,
+    )
+
+    class Builder:
+        def ask(self, schema, suffix):
+            assert suffix == "test_type_count"
+            constraint = schema["properties"]["count"]
+            assert constraint["minimum"] == 2
+            assert constraint["maximum"] == MAX_TYPE_COMPONENTS
+            return {"count": 2}
+
+    assert _count(Builder(), "test_type_count", minimum=2,
+                  maximum=MAX_TYPE_COMPONENTS) == 2
