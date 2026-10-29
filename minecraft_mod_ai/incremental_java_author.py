@@ -56,9 +56,31 @@ _MAX_NONPROGRESS_CHOICES = 96
 _DIRECT_PROGRESS_AFTER = 12
 _LOOKUP_EXHAUSTED_AFTER = 32
 _EXECUTABLE_OPERATIONS = frozenset({
-    "call", "assign", "local", "return", "throw", "break", "continue",
+    "call", "assign", "return", "throw", "break", "continue",
     "register", "constructor_call",
 })
+
+
+def _semantic_operation_key(node, scope):
+    """Identify a distinct observable operation, not just a syntactically valid AST node.
+
+    Local declarations and writes to bare local variables only prepare an effect.
+    They cannot indefinitely reset the per-member liveness watchdog.
+    """
+    operation = node.get("op")
+    if operation not in _EXECUTABLE_OPERATIONS:
+        return None
+    if operation == "assign":
+        target = str(node.get("target") or "").strip()
+        if target in {row.get("name") for row in scope.get("locals", ())}:
+            return None
+    if operation == "call" and node.get("result_type"):
+        # A captured result has not yet been connected to a game effect.
+        return None
+    return json.dumps(
+        {key: value for key, value in node.items() if key != "id"},
+        ensure_ascii=False, sort_keys=True, default=str,
+    )
 
 
 def _assert_live_behavior_entrypoints(program):
@@ -106,6 +128,7 @@ class IncrementalJavaBuilder:
         self.last_declaration = {}
         self._progress_epoch = {}
         self._nonprogress_choices = {}
+        self._semantic_operation_keys = {}
         self._stalled_declarations = {}
         self.history = {n["id"]: n for m in self.program["members"] for n in walk_nodes(m.get("body", []))}
         self.identities = {m["id"] for m in self.program["members"]} | self.history.keys()
@@ -229,6 +252,19 @@ class IncrementalJavaBuilder:
         self._progress_epoch[member_id] = self._progress_epoch.get(member_id, 0) + 1
         self._nonprogress_choices[member_id] = 0
 
+    def _record_operation_progress(self, member, node, scope):
+        signature = _semantic_operation_key(node, scope)
+        if signature is None:
+            self._record_nonprogress(member)
+            return
+        accepted = self._semantic_operation_keys.setdefault(member["id"], set())
+        if signature in accepted:
+            # Repeating an already accepted effect cannot keep a stalled member alive.
+            self._record_nonprogress(member)
+            return
+        accepted.add(signature)
+        self._record_progress(member)
+
     def author_block(self, member, scope, path, body=None):
         from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
@@ -296,10 +332,8 @@ class IncrementalJavaBuilder:
                 self.rejection = {}
                 blocked_declarations.clear()
                 finish_new_members(self, pending_before)
-                if operation in _EXECUTABLE_OPERATIONS:
-                    self._record_progress(member)
-                elif self._progress_epoch.get(member_id, 0) == progress_before:
-                    self._record_nonprogress(member)
+                if self._progress_epoch.get(member_id, 0) == progress_before:
+                    self._record_operation_progress(member, node, scope)
                 if operation in {"return", "throw", "break", "continue"}:
                     break
         finally:
