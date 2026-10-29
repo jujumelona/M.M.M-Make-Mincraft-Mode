@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import re
 
+from .incremental_java_navigation import record_navigation_transition
 from .incremental_java_schema import SCHEMAS, choice
+
+# Applies to choosing one framework observation point, not to the number of
+# events or statements a generated Minecraft feature can implement.
+_MAX_EVENT_SELECTION_NAVIGATION = 128
 
 PAGE = 10
 
@@ -19,7 +24,12 @@ def select_event(builder):
             "Query a framework observation API name or input type, not the name of a completed gameplay feature. "
             "Use * to browse all indexed events. The callback body will implement the domain condition.")})
         query, offset = page["query"], page["offset"]
+    transitions = {}
+    navigation_steps = 0
     while True:
+        navigation_steps += 1
+        if navigation_steps > _MAX_EVENT_SELECTION_NAVIGATION:
+            raise RuntimeError("JAVA_EVENT_SELECTION_NAVIGATION_EXHAUSTED")
         matching = _matching(events, query)
         available = matching[offset:offset + PAGE]
         indexed = {event["event_id"]: event for event in available}
@@ -33,6 +43,10 @@ def select_event(builder):
             return indexed[selected]
         if selected == "@cancel":
             return None
+        record_navigation_transition(
+            transitions, (query, offset), selected,
+            error="JAVA_EVENT_SELECTION_NAVIGATION_CYCLE",
+        )
         if selected == "@next":
             offset += PAGE
         else:
