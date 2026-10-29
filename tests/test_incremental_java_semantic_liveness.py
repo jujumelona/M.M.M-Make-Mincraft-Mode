@@ -344,3 +344,42 @@ def test_repair_related_declaration_pagination_cycle_is_bounded():
     builder = Builder()
     with pytest.raises(RuntimeError, match="JAVA_REPAIR_DECLARATION_NAVIGATION_CYCLE"):
         repair_related_declaration(builder, builder.program["members"][0])
+
+
+
+def test_repeated_switch_cases_have_finite_structural_limit():
+    from minecraft_mod_ai.incremental_java_operations import _switch
+
+    class Builder:
+        path = []
+        scope = {"switch_depth": 0, "locals": []}
+        def enabled(self, _suffix):
+            return True
+        def expression(self, _slot):
+            return "1"
+        def author_block(self, _member, _scope, _path):
+            return []
+        member = {"id": "m1", "kind": "method"}
+
+    with pytest.raises(RuntimeError, match="JAVA_STRUCTURED_SECTION_EXHAUSTED: switch_cases"):
+        _switch(Builder(), {"id": "n1", "op": "switch"})
+
+
+def test_repeated_catch_clauses_have_finite_structural_limit():
+    from minecraft_mod_ai.incremental_java_operations import _try
+
+    class Builder:
+        path = []
+        scope = {"switch_depth": 0, "locals": []}
+        member = {"id": "m1", "kind": "method"}
+        def enabled(self, _suffix):
+            return True
+        def typed(self, *_args, **_kwargs):
+            return {"type": "java.lang.Exception"}
+        def allocate(self, _prefix):
+            return "e1"
+        def author_block(self, _member, _scope, _path):
+            return []
+
+    with pytest.raises(RuntimeError, match="JAVA_STRUCTURED_SECTION_EXHAUSTED: catch_clauses"):
+        _try(Builder(), {"id": "n1", "op": "try"})
