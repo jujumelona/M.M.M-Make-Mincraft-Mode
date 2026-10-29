@@ -108,9 +108,9 @@ def _compose_preferred_source(
     )
     bindings = spec.get("bindings") or {}
     route_kwargs = {
-        "callbacks": prompt["available_fabric_callbacks"],
-        "retained": prompt["retained_typed_behavior"],
-        "owned_runtime_records": prompt["owned_runtime_records"],
+        "callbacks": prompt.get("available_fabric_callbacks") or [],
+        "retained": prompt.get("retained_typed_behavior") or {},
+        "owned_runtime_records": prompt.get("owned_runtime_records") or [],
         "source_ui_callbacks": json.loads(bindings.get("source_ui_callbacks_json") or "[]"),
     }
     selected = None
