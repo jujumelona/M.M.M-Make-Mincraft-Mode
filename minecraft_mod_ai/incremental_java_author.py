@@ -90,31 +90,35 @@ def _semantic_operation_key(node, scope):
     )
 
 
+def _member_local_names(member, nodes):
+    """Collect method-local declarations and parameters, including nested scopes."""
+    names = {row.get("name") for row in member.get("metadata", {}).get("parameters", ())}
+    names.update(node.get("name") for node in nodes
+                 if node.get("op") in {"local", "lambda", "for", "foreach"})
+    names.update(node.get("name") for node in nodes
+                 if node.get("op") == "call" and node.get("result_type"))
+    return names
+
+
+def _node_has_potential_effect(node, local_names):
+    operation = node.get("op")
+    if operation == "assign":
+        target = str(node.get("target") or "").strip()
+        return bool(target) and target not in local_names
+    if operation in {"call", "register", "constructor_call", "throw"}:
+        return True
+    return operation == "return" and bool(node.get("value"))
+
+
 def _member_has_potential_effect(member):
-    """Reject declarations and writes to method-local variables as runtime effects.
+    """A necessary structural effect condition, not a gameplay semantics proof.
 
-    This is only a necessary structural condition; compiler and behavior
-    acceptance still determine whether an effect implements the requirement.
+    Local writes and declarations alone cannot satisfy a runtime callback.
+    Compiler and behavior acceptance remain separate requirements.
     """
-    from .incremental_java_history import walk_nodes
-
     nodes = tuple(walk_nodes(member.get("body") or ()))
-    local_names = {row.get("name") for row in member.get("metadata", {}).get("parameters", ())}
-    local_names.update(node.get("name") for node in nodes
-                       if node.get("op") in {"local", "lambda", "for", "foreach"})
-    local_names.update(node.get("name") for node in nodes
-                       if node.get("op") == "call" and node.get("result_type"))
-    for node in nodes:
-        operation = node.get("op")
-        if operation == "assign":
-            target = str(node.get("target") or "").strip()
-            if target and target not in local_names:
-                return True
-        elif operation in {"call", "register", "constructor_call", "throw"}:
-            return True
-        elif operation == "return" and node.get("value"):
-            return True
-    return False
+    local_names = _member_local_names(member, nodes)
+    return any(_node_has_potential_effect(node, local_names) for node in nodes)
 
 
 def _assert_live_behavior_entrypoints(program):
