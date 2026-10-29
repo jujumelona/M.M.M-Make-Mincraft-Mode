@@ -109,7 +109,14 @@ class ValueAuthor:
     def _local(self, *, writable=False):
         visible = self._visible_locals(writable=writable)
         names, offset = list(visible), 0
+        page_visits = {}
         while True:
+            page_visits[offset] = page_visits.get(offset, 0) + 1
+            if page_visits[offset] > 2:
+                raise RuntimeError(
+                    "JAVA_LOCAL_SELECTION_NAVIGATION_CYCLE: "
+                    f"offset={offset} candidates={len(names)}"
+                )
             page = {name: visible[name] for name in names[offset:offset + 10]}
             options = list(page)
             if offset + 10 < len(names):
@@ -123,12 +130,17 @@ class ValueAuthor:
             offset += 10 if name == "next_page" else -10
 
     def _field(self, *, writable=False):
+        rejected_receivers = {}
         while True:
             receiver = select_receiver(self, "field_receiver")
             self.frame.update(receiver=receiver.source, receiver_type=receiver.java_type)
             selected = select_member(self.builder, receiver, "FIELD", "field_member", writable=writable)
             if selected != "change_receiver":
                 break
+            key = (receiver.source, receiver.java_type)
+            rejected_receivers[key] = rejected_receivers.get(key, 0) + 1
+            if rejected_receivers[key] > 2:
+                raise RuntimeError("JAVA_FIELD_RECEIVER_SELECTION_CYCLE: " + repr(key))
         self.frame["field_contract"] = selected
         java_type = selected.get("generic_return_type", selected["return_type"])
         return JavaValue(receiver.source + "." + selected["name"], java_type, writable=True)
@@ -146,6 +158,7 @@ class ValueAuthor:
 
     def _new(self, expected):
         options = {"non_array": True} if self.frame.get("statement_expression") else {}
+        rejected_types = {}
         while True:
             java_type = self.builder.select_java_type("new_type", expected=expected, reference_only=True, **options)
             self.frame["new_type"] = java_type
@@ -155,6 +168,9 @@ class ValueAuthor:
             selected = select_member(self.builder, receiver, "CONSTRUCTOR", "constructor_member")
             if selected != "change_receiver":
                 break
+            rejected_types[java_type] = rejected_types.get(java_type, 0) + 1
+            if rejected_types[java_type] > 2:
+                raise RuntimeError("JAVA_CONSTRUCTOR_SELECTION_CYCLE: " + java_type)
         self.frame.update(receiver=java_type, receiver_type=java_type,
                           method=selected["name"], call_contract=_signature(selected))
         self.builder.arguments(self.frame)
