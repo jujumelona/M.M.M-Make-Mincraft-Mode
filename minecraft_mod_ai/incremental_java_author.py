@@ -74,11 +74,18 @@ def _semantic_operation_key(node, scope):
         target = str(node.get("target") or "").strip()
         if target in {row.get("name") for row in scope.get("locals", ())}:
             return None
-    if operation == "call" and node.get("result_type"):
-        # A captured result has not yet been connected to a game effect.
-        return None
+    ignored = {"id", "_repair_origin"}
+    if operation == "call":
+        # A method returning a value can still mutate the Minecraft world.
+        # Capturing its return value neither proves nor disproves the effect.
+        # Generated temporary names must not make the same call look new.
+        ignored.update({"name", "result_type"})
+    elif operation == "register":
+        # Re-registering the same event with a freshly allocated handler name
+        # is not a new observation point for this implementation obligation.
+        ignored.add("handler")
     return json.dumps(
-        {key: value for key, value in node.items() if key != "id"},
+        {key: value for key, value in node.items() if key not in ignored},
         ensure_ascii=False, sort_keys=True, default=str,
     )
 
