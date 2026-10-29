@@ -339,6 +339,16 @@ def test_independent_actions_use_separate_java_compilation_units():
     ]
     assert len({row[0]["behavior_id"] for row in rows_by_job}) == 2
     assert all(len(rows) == 1 for rows in rows_by_job)
+    tasks_by_job = [
+        json.loads(job.deterministic_inputs["_canonical_inputs"]["event_callback_input"]
+                   ["bindings"]["construction_tasks_json"])
+        for job in jobs
+    ]
+    assert all(len(tasks) == 2 for tasks in tasks_by_job)
+    assert all(
+        {task["behavior_id"] for task in tasks} == {rows[0]["behavior_id"]}
+        for tasks, rows in zip(tasks_by_job, rows_by_job, strict=True)
+    )
 
 
 def test_atomic_stateful_actions_stay_in_single_java_owner():
