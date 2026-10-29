@@ -191,7 +191,7 @@ def test_navigation_tracker_allows_legal_backtracking_but_detects_cycle():
     for state, action in moves:
         record_navigation_transition(history, state, action, error="CYCLE")
     assert history[("page0", "next")] == 1
-    for _ in range(2):
-        record_navigation_transition(history, "page0", "next", error="CYCLE")
+    # The first matching transition in 'moves' was already recorded.
+    record_navigation_transition(history, "page0", "next", error="CYCLE")
     with pytest.raises(RuntimeError, match="CYCLE"):
         record_navigation_transition(history, "page0", "next", error="CYCLE")
