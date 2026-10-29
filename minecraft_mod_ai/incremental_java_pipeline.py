@@ -58,15 +58,19 @@ def repair_member(router, source, diagnostic, *, context):
     return source
 
 
+def _verify_observable_program(context):
+    program = (context.get("incremental_state") or {}).get("program")
+    if program:
+        from .incremental_java_author import _assert_live_behavior_entrypoints
+        _assert_live_behavior_entrypoints(program)
+
+
 def verify_full_source(source, spec, context, *, package, name, source_context=(), verifier, state_validators):
     from .incremental_java_state import validate_program_state, map_behavior_diagnostic
     validate_program_state(source, spec, context, validators=state_validators)
     try:
         verified = verifier(source, spec, context, package=package, name=name, source_context=source_context)
-        program = (context.get("incremental_state") or {}).get("program")
-        if program:
-            from .incremental_java_author import _assert_live_behavior_entrypoints
-            _assert_live_behavior_entrypoints(program)
+        _verify_observable_program(context)
         return verified
     except (ValueError, RuntimeError) as exc:
         diagnostic = map_behavior_diagnostic(source, spec, context, str(exc))
