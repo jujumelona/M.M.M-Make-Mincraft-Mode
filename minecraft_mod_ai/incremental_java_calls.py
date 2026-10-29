@@ -100,7 +100,14 @@ def _select_overload(builder, candidates):
     if len(candidates) == 1:
         return candidates[0]
     offset = 0
+    page_visits = {}
     while True:
+        page_visits[offset] = page_visits.get(offset, 0) + 1
+        if page_visits[offset] > 2:
+            raise RuntimeError(
+                "JAVA_OVERLOAD_SELECTION_NAVIGATION_CYCLE: "
+                f"offset={offset} candidates={len(candidates)}"
+            )
         page = {"overload" + str(index): _signature(row)
                 for index, row in enumerate(candidates[offset:offset + _PAGE], offset)}
         options = list(page)
