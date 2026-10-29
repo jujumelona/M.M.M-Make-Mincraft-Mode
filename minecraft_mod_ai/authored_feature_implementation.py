@@ -232,7 +232,9 @@ def compile_request_feature_jobs(
         bindings["construction_behaviors_json"] = json.dumps(
             behavior_rows, ensure_ascii=False, separators=(",", ":"))
         required_task_ids = {row["behavior_id"] + ".logic" for row in behavior_rows}
-        current_tasks = [task for task in construction_tasks if rid in task.requirement_ids]
+        current_tasks = [task for task in construction_tasks
+                         if rid in task.requirement_ids
+                         and (behavior_identity is None or task.behavior_id == behavior_identity)]
         if not required_task_ids <= {task.task_id for task in current_tasks}:
             raise ValueError("CONSTRUCTION_TASK_GRAPH_MISSING_BEHAVIORS: " + rid)
         bindings["construction_tasks_json"] = json.dumps([
