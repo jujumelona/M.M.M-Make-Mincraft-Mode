@@ -150,3 +150,48 @@ def test_inserted_repair_operations_share_original_error_budget():
     _count_attempt(builder, member, {"id": "n2", "_repair_origin": "n1"}, "value")
     with pytest.raises(ValueError, match="JAVA_INCREMENTAL_OPERATION_REPAIR_EXHAUSTED"):
         _count_attempt(builder, member, {"id": "n3", "_repair_origin": "n1"}, "value")
+
+
+
+def test_unimplemented_registrar_is_mapped_to_a_repairable_source_diagnostic():
+    from minecraft_mod_ai.incremental_java_pipeline import verify_full_source
+
+    builder = _builder(None)
+    source, program = builder.render()
+    builder.context["incremental_state"]["program"] = program
+
+    with pytest.raises(ValueError, match="CONSTRUCTION_FILE_BEHAVIOR_NOOP"):
+        verify_full_source(
+            source, builder.spec, builder.context,
+            package=program["package"], name=program["class_name"],
+            verifier=lambda *args, **kwargs: "verified",
+            state_validators=(lambda *args: None, lambda *args: None),
+        )
+
+
+def test_no_effect_callback_mapping_uses_member_identity_not_guessed_event():
+    from minecraft_mod_ai.incremental_java_state import _repair_entrypoint
+
+    callback = {"id": "m2", "event": {"event_id": "known"},
+                "behavior": {"behavior_id": "damage_effect"}}
+    selected, diagnostic = _repair_entrypoint(
+        {"members": [callback]},
+        "INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: entrypoint=m2; no effects",
+    )
+    assert selected is callback
+    assert diagnostic == "CONSTRUCTION_FILE_BEHAVIOR_NOOP: damage_effect"
+
+
+def test_navigation_tracker_allows_legal_backtracking_but_detects_cycle():
+    from minecraft_mod_ai.incremental_java_navigation import record_navigation_transition
+
+    history = {}
+    moves = [("page0", "next"), ("page1", "previous"), ("page0", "previous"),
+             ("generated", "next"), ("page0", "search")]
+    for state, action in moves:
+        record_navigation_transition(history, state, action, error="CYCLE")
+    assert history[("page0", "next")] == 1
+    for _ in range(2):
+        record_navigation_transition(history, "page0", "next", error="CYCLE")
+    with pytest.raises(RuntimeError, match="CYCLE"):
+        record_navigation_transition(history, "page0", "next", error="CYCLE")
