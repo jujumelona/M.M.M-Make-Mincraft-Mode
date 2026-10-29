@@ -343,7 +343,8 @@ class IncrementalJavaBuilder:
         from .incremental_java_progress import finish_member
         while self.pending:
             finish_member(self, self.pending.popleft())
-        _assert_live_behavior_entrypoints(self.program)
+        # Candidate source must reach the verifier: an early no-op is a
+        # mapped, repairable diagnostic rather than an unrecoverable author error.
         return self.render()
 
     def render(self):
