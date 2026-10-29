@@ -223,29 +223,31 @@ class ValueAuthor:
         return self._invoke(self.frame)
 
     def _reference(self, expected):
-        # Constructor re-selection is a single decision, not recursive
-        # construction. Repeated change_receiver can otherwise recurse until
-        # Python fails even though no Java expression has been produced.
-        visited = {}
-        for _ in range(32):
-            kind = request(self.builder, choice("reference_kind", ("method", "constructor")), "reference_kind")["reference_kind"]
-            if kind == "method":
-                receiver = select_call(self, self.frame, reference=True)
-                return JavaValue(receiver.source + "::" + self.frame["method"], expected)
-            java_type = self.builder.select_java_type("reference_type", reference_only=True)
-            if java_type.endswith("[]"):
-                return JavaValue(java_type + "::new", expected)
-            receiver = JavaReceiver(java_type, java_type, static=True)
-            contract = select_member(self.builder, receiver, "CONSTRUCTOR", "constructor_member")
-            if contract == "change_receiver":
-                record_navigation_transition(
-                    visited, java_type, contract,
-                    error="JAVA_REFERENCE_CONSTRUCTOR_SELECTION_CYCLE",
-                )
-                continue
-            self.frame["call_contract"] = _signature(contract)
+        return _select_reference_value(self, expected)
+
+
+def _select_reference_value(author, expected):
+    # A change_receiver choice is navigation, not recursive value creation.
+    visited = {}
+    for _ in range(32):
+        kind = request(author.builder, choice("reference_kind", ("method", "constructor")), "reference_kind")["reference_kind"]
+        if kind == "method":
+            receiver = select_call(author, author.frame, reference=True)
+            return JavaValue(receiver.source + "::" + author.frame["method"], expected)
+        java_type = author.builder.select_java_type("reference_type", reference_only=True)
+        if java_type.endswith("[]"):
             return JavaValue(java_type + "::new", expected)
-        raise RuntimeError("JAVA_REFERENCE_CONSTRUCTOR_SELECTION_EXHAUSTED")
+        receiver = JavaReceiver(java_type, java_type, static=True)
+        contract = select_member(author.builder, receiver, "CONSTRUCTOR", "constructor_member")
+        if contract == "change_receiver":
+            record_navigation_transition(
+                visited, java_type, contract,
+                error="JAVA_REFERENCE_CONSTRUCTOR_SELECTION_CYCLE",
+            )
+            continue
+        author.frame["call_contract"] = _signature(contract)
+        return JavaValue(java_type + "::new", expected)
+    raise RuntimeError("JAVA_REFERENCE_CONSTRUCTOR_SELECTION_EXHAUSTED")
 
 
 def author_value(builder, slot, expected="java.lang.Object", *, allow_update=False) -> str:
