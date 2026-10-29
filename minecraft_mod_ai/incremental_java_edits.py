@@ -37,8 +37,6 @@ def insert_before(builder, member, node):
     operation = builder.ask(choice("op", options), "repair_insert_kind")["op"]
     builder.current_operation = operation
     inserted = author_operation(builder, operation)
-    if inserted is None:
-        raise ValueError("JAVA_INCREMENTAL_REPAIR_INSERT_NO_OPERATION")
     # A newly inserted statement inherits the diagnostic origin. Subsequent
     # compile failures must not restart the repair budget under a fresh node id.
     inserted["_repair_origin"] = node.get("_repair_origin", node["id"])
