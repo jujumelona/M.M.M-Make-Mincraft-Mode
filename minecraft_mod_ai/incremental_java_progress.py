@@ -2,8 +2,24 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 
 from .incremental_java_context import _generated
+
+# Bound recursive helper dependencies, not total helpers or feature size.
+MAX_HELPER_DEPENDENCY_DEPTH = 32
+
+
+@contextmanager
+def _helper_dependency_frame(builder):
+    previous = getattr(builder, "_active_member_depth", 0)
+    if previous >= MAX_HELPER_DEPENDENCY_DEPTH:
+        raise RuntimeError("JAVA_HELPER_DEPENDENCY_NESTING_EXHAUSTED")
+    builder._active_member_depth = previous + 1
+    try:
+        yield
+    finally:
+        builder._active_member_depth = previous
 from .incremental_java_model import initial_scope
 
 
@@ -93,7 +109,7 @@ def finish_member(builder, member):
     """A child's locals, open operations, and diagnostics cannot leak to its caller."""
     previous = (builder.current_operation, builder.declaration_draft, builder.latest_api,
                 builder.rejection, builder.last_declaration)
-    with builder.declaration_scope(member):
+    with _helper_dependency_frame(builder), builder.declaration_scope(member):
         builder.current_operation, builder.declaration_draft = "", {}
         builder.latest_api, builder.rejection, builder.last_declaration = {}, {}, {}
         member["implementation_status"] = "authoring"
