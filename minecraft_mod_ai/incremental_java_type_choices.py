@@ -11,6 +11,7 @@ from .incremental_java_schema import MAX_CONTROL_FLOW_NESTING, choice, obj
 
 MAX_TYPE_EXPRESSION_NESTING = MAX_CONTROL_FLOW_NESTING
 MAX_TYPE_EVIDENCE_LOOKUPS = 2
+MAX_TYPE_COMPONENTS = 255
 from .java_operation_ir import PRIMITIVES
 
 _LANGUAGE_TYPES = ("String", "Object", "java.lang.String", "java.lang.Object", "Runnable",
@@ -142,7 +143,7 @@ def _wildcard_type(builder, suffix):
 def _union_type(builder, suffix):
     frame = builder.type_stack[-1]
     frame.update(construction="@union", alternatives=[])
-    count = _count(builder, suffix + "_alternatives", minimum=2)
+    count = _count(builder, suffix + "_alternatives", minimum=2, maximum=MAX_TYPE_COMPONENTS)
     frame["alternative_count"] = count
     for index in range(count):
         frame["alternative_index"] = index
@@ -156,7 +157,7 @@ def _parameterized_type(builder, suffix):
     base = select_java_type(builder, suffix + "_base", reference_only=True, named_only=True)
     formals = _type_parameters(builder, base)
     frame.update(base=base, formals=formals, arguments=[])
-    count = _count(builder, suffix + "_type_arguments") if formals is None else len(formals)
+    count = _count(builder, suffix + "_type_arguments", maximum=MAX_TYPE_COMPONENTS) if formals is None else len(formals)
     frame["argument_count"] = count
     if not count:
         return base
