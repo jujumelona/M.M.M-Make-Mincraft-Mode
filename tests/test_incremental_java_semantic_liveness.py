@@ -423,3 +423,27 @@ def test_nested_helper_chain_is_bounded_without_limiting_sibling_count():
         with _helper_dependency_frame(builder):
             assert builder._active_member_depth == 1
         assert builder._active_member_depth == 0
+
+
+
+def test_callback_local_only_assignments_cannot_masquerade_as_gameplay_effects():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+
+    local_only = {"id": "m2", "event": {"event_id": "example.Events#ACTION"},
+                  "metadata": {"parameters": [{"name": "observed", "type": "String"}]},
+                  "body": [
+                      {"id": "n1", "op": "local", "name": "mmmValue1",
+                       "type": "int", "value": "0"},
+                      {"id": "n2", "op": "assign", "operator": "=",
+                       "target": "mmmValue1", "value": "7"},
+                      {"id": "n3", "op": "assign", "operator": "=",
+                       "target": "observed", "value": "null"},
+                  ]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [local_only]})
+
+    real_effect = {**local_only,
+                   "body": [*local_only["body"],
+                            {"id": "n4", "op": "assign", "operator": "+=",
+                             "target": "this.mmmField1", "value": "1"}]}
+    _assert_live_behavior_entrypoints({"members": [real_effect]})
