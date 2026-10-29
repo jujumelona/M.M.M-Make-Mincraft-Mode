@@ -401,3 +401,25 @@ def test_type_component_count_is_bounded_by_schema():
 
     assert _count(Builder(), "test_type_count", minimum=2,
                   maximum=MAX_TYPE_COMPONENTS) == 2
+
+
+
+def test_nested_helper_chain_is_bounded_without_limiting_sibling_count():
+    from minecraft_mod_ai.incremental_java_progress import (
+        MAX_HELPER_DEPENDENCY_DEPTH, _helper_dependency_frame, finish_member,
+    )
+
+    class Builder:
+        _active_member_depth = MAX_HELPER_DEPENDENCY_DEPTH
+
+    builder = Builder()
+    with pytest.raises(RuntimeError, match="JAVA_HELPER_DEPENDENCY_NESTING_EXHAUSTED"):
+        finish_member(builder, {"id": "m999"})
+    assert builder._active_member_depth == MAX_HELPER_DEPENDENCY_DEPTH
+
+    # Sequential sibling helper completion is not part of the nesting budget.
+    builder._active_member_depth = 0
+    for _ in range(100):
+        with _helper_dependency_frame(builder):
+            assert builder._active_member_depth == 1
+        assert builder._active_member_depth == 0
