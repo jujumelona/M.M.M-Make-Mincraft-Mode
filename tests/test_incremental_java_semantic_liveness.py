@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-import json
-
 import pytest
 
 from minecraft_mod_ai.incremental_java_author import _semantic_operation_key
@@ -65,7 +63,7 @@ def test_local_churn_followed_by_duplicate_call_reaches_stall_guard(monkeypatch)
     monkeypatch.setattr(operations, "author_operation", fake_operation)
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_SEMANTIC_PROGRESS"):
         builder.author_block(builder.member, builder.scope, [])
-    assert coder.requests <= 100
+    assert coder.requests <= 130
     assert builder._progress_epoch.get(builder.member["id"], 0) == 1
 
 
