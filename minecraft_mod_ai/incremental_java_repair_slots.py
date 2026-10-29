@@ -136,10 +136,14 @@ def revise_operation(builder, node):
 
 def _replacement_operation(builder, operation):
     from .incremental_java_operations import author_operation
-    while True:
+    # A register operation can be cancelled or unavailable (no indexed event).
+    # Re-entering it forever is not a correction and can spin without any model
+    # request when the event catalogue is empty.
+    for _ in range(2):
         revised = author_operation(builder, operation)
         if revised is not None:
             return revised
+    raise ValueError("JAVA_INCREMENTAL_REPAIR_OPERATION_UNAVAILABLE: " + operation)
 
 
 def create_helper(builder, node):
