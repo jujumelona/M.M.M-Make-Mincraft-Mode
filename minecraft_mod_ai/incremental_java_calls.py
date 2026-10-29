@@ -1,6 +1,8 @@
 """Resolve call contracts and author their arguments one expression at a time."""
 from __future__ import annotations
 
+from .incremental_java_navigation import record_navigation_transition
+
 import re
 
 from .incremental_java_context import _erase, _ground_argument
@@ -100,14 +102,8 @@ def _select_overload(builder, candidates):
     if len(candidates) == 1:
         return candidates[0]
     offset = 0
-    page_visits = {}
+    transitions = {}
     while True:
-        page_visits[offset] = page_visits.get(offset, 0) + 1
-        if page_visits[offset] > 2:
-            raise RuntimeError(
-                "JAVA_OVERLOAD_SELECTION_NAVIGATION_CYCLE: "
-                f"offset={offset} candidates={len(candidates)}"
-            )
         page = {"overload" + str(index): _signature(row)
                 for index, row in enumerate(candidates[offset:offset + _PAGE], offset)}
         options = list(page)
@@ -119,6 +115,9 @@ def _select_overload(builder, candidates):
             "overload_candidates": page, "overload_offset": offset, "overload_total": len(candidates)})["overload_id"]
         if selected in page:
             return candidates[int(selected.removeprefix("overload"))]
+        record_navigation_transition(
+            transitions, offset, selected, error="JAVA_OVERLOAD_SELECTION_NAVIGATION_CYCLE",
+        )
         offset += _PAGE if selected == "next_page" else -_PAGE
 
 
