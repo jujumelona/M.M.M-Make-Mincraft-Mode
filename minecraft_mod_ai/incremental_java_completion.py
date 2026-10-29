@@ -22,7 +22,7 @@ def _complete_lambda(builder, member, node):
 def _complete_member(builder, member, diagnostic, missing_return):
     if member["kind"] in {"class", "record", "enum"} and "does not override abstract method" in diagnostic:
         builder.author_block(member, initial_scope(member), [], body=member["body"])
-    elif "CONSTRUCTION_FILE_BEHAVIOR_" in diagnostic and member.get("registrar"):
+    elif "CONSTRUCTION_FILE_BEHAVIOR_" in diagnostic and (member.get("registrar") or member.get("event")):
         member["body"][:] = [item for item in member["body"] if item["op"] != "return" or item.get("value")]
         builder.author_block(member, scope_at(member), [], body=member["body"])
     elif missing_return and member["metadata"].get("return_type", "void") != "void":
