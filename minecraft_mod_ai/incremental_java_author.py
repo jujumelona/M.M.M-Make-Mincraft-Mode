@@ -90,27 +90,39 @@ def _semantic_operation_key(node, scope):
     )
 
 
-def _assert_live_behavior_entrypoints(program):
-    """A generated registration or callback must not consist only of no-op wrappers.
+def _member_has_potential_effect(member):
+    """Reject declarations and writes to method-local variables as runtime effects.
 
-    This is a structural safety gate, not a claim that Java compilation proves
-    the user's gameplay semantics. The later behavioral acceptance still runs.
+    This is only a necessary structural condition; compiler and behavior
+    acceptance still determine whether an effect implements the requirement.
     """
     from .incremental_java_history import walk_nodes
 
+    nodes = tuple(walk_nodes(member.get("body") or ()))
+    local_names = {row.get("name") for row in member.get("metadata", {}).get("parameters", ())}
+    local_names.update(node.get("name") for node in nodes
+                       if node.get("op") in {"local", "lambda", "for", "foreach"})
+    local_names.update(node.get("name") for node in nodes
+                       if node.get("op") == "call" and node.get("result_type"))
+    for node in nodes:
+        operation = node.get("op")
+        if operation == "assign":
+            target = str(node.get("target") or "").strip()
+            if target and target not in local_names:
+                return True
+        elif operation in {"call", "register", "constructor_call", "throw"}:
+            return True
+        elif operation == "return" and node.get("value"):
+            return True
+    return False
+
+
+def _assert_live_behavior_entrypoints(program):
+    """Reject empty callback/registration bodies after compiler validation."""
     for member in program["members"]:
         if not (member.get("registrar") or member.get("event")):
             continue
-        visible = False
-        for node in walk_nodes(member.get("body") or []):
-            operation = node.get("op")
-            if operation in {"call", "assign", "register", "constructor_call", "throw"}:
-                visible = True
-                break
-            if operation == "return" and node.get("value"):
-                visible = True
-                break
-        if not visible:
+        if not _member_has_potential_effect(member):
             raise RuntimeError(
                 "INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: "
                 f"entrypoint={member['id']}; implementation contains only "
