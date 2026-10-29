@@ -480,3 +480,29 @@ def test_finite_preparation_then_fabric_event_effect_still_compiles_and_executes
     assert any(node["op"] == "register" for node in registrars[0]["body"])
     assert "this.mmmField1" in source
     _compile_claims(tmp_path, source)
+
+
+
+def test_literal_array_count_is_bounded_before_generating_elements(monkeypatch):
+    from minecraft_mod_ai.incremental_java_values_forms import (
+        ValueForms, MAX_LITERAL_ARRAY_ELEMENTS,
+    )
+    from minecraft_mod_ai import incremental_java_values_forms as forms
+
+    class Builder:
+        value_stack = [{"slot": "value"}]
+
+    class Author:
+        builder = Builder()
+        frame = {"slot": "value"}
+        def value(self, *_args):
+            raise AssertionError("No elements should be emitted for empty array")
+
+    def bounded_count(_builder, suffix, *, minimum=0, maximum=None):
+        assert suffix == "array_elements_count"
+        assert minimum == 0
+        assert maximum == MAX_LITERAL_ARRAY_ELEMENTS
+        return 0
+
+    monkeypatch.setattr(forms, "count", bounded_count)
+    assert ValueForms(Author())._array_elements("int[]") == "new int[] {}"
