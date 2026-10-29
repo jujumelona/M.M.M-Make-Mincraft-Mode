@@ -114,6 +114,12 @@ def _independent_feature_work_items(plan, features, behaviors):
     return items
 
 
+def _has_runtime_state_claim(row):
+    return any(row.get(key) for key in (
+        "state_reads", "state_writes", "runtime_state_reads", "runtime_state_writes"
+    ))
+
+
 def _context_only_feature(feature, source_behaviors):
     rid = feature["requirement_id"]
     matches = [row for row in source_behaviors
@@ -124,9 +130,7 @@ def _context_only_feature(feature, source_behaviors):
     return all(
         row.get("source_status") == "source_preserved_unresolved"
         and not str(row.get("trigger") or "").strip()
-        and not (row.get("state_reads") or row.get("state_writes")
-                 or row.get("runtime_state_reads")
-                 or row.get("runtime_state_writes"))
+        and not _has_runtime_state_claim(row)
         and str(row.get("intent") or "").strip() == statement
         and str(row.get("effects") or "").strip() == statement
         for row in matches
