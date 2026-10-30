@@ -22,21 +22,17 @@ _OBSERVERS = frozenset({
 
 def native_write_targets(behavior, bindings):
     """Keep custom model state separate from Minecraft-owned runtime state."""
-    from .construction_behavior_state import _runtime_owned_state_reference
-
     targets = []
     for name in behavior.get("runtime_state_writes") or ():
         if not isinstance(name, str) or not name:
-            continue
+            raise ValueError("INCREMENTAL_JAVA_RUNTIME_WRITE_NAME_INVALID")
         binding = bindings.get(name) if isinstance(bindings, Mapping) else None
-        if isinstance(binding, Mapping):
-            status = binding.get("semantic_status")
-            if status == "host_native_runtime_owner" or binding.get("binding") == "world_state":
-                targets.append(name)
-            elif status not in {"verified_scalar_state", "host_owned_state_model"} and _runtime_owned_state_reference(name):
-                targets.append(name)
-        elif _runtime_owned_state_reference(name):
-            targets.append(name)
+        if isinstance(binding, Mapping) and binding.get("semantic_status") in {
+                "verified_scalar_state", "host_owned_state_model"}:
+            continue
+        # Runtime writes are live-world obligations by contract. Unknown
+        # names are not free permission to create a detached Java scalar.
+        targets.append(name)
     return tuple(dict.fromkeys(targets))
 
 
