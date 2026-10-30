@@ -255,6 +255,53 @@ def _checked_source_target(root: Path, relative: str) -> Path:
     return path
 
 
+def _obsolete_custom_sources(root, symbols, metadata, behavior_id, package,
+                             current_digest):
+    """Validate and identify older owned Mixins for the SAME behavior.
+
+    Replacing a source-site binding must also retire its receipt, injectors
+    and fabric.mod.json entry. Removing an unverified or edited file is never
+    permitted; such a conflict needs explicit manual reconciliation.
+    """
+    folder = root / ".mmm/source-producers"
+    if not folder.is_dir():
+        return []
+    mixins = metadata.get("mixins", [])
+    result = []
+    for path in sorted(folder.glob("*.json")):
+        if path.is_symlink():
+            raise ValueError("SOURCE_SITE_RECEIPT_SYMLINK")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("schema") != (
+                "mmm/inspected-custom-source-receipt-v1"):
+            raise ValueError("SOURCE_SITE_RECEIPT_SCHEMA_INVALID")
+        if data.get("behavior_id") != behavior_id or data.get("package") != package:
+            continue
+        old_digest = hashlib.sha256((
+            behavior_id + "\0" + data["source_site_ref"] + "\0" + data["at"]
+        ).encode()).hexdigest()[:16]
+        if path.stem != old_digest:
+            raise ValueError("SOURCE_SITE_RECEIPT_ID_MISMATCH")
+        if old_digest == current_digest:
+            continue
+        old = plan_verified_custom_event(
+            symbols=symbols, source_site_ref=data["source_site_ref"],
+            behavior_id=behavior_id, package=package, mod_id=metadata["id"],
+            at=data["at"], side=data["side"], java_version=data["java_version"],
+        )
+        if old["mixin_config"] not in {
+            entry if isinstance(entry, str) else entry.get("config")
+            for entry in mixins
+        }:
+            raise ValueError("SOURCE_SITE_OLD_MIXIN_NOT_REGISTERED")
+        for name, contents in old["files"].items():
+            target = _checked_source_target(root, name)
+            if not target.is_file() or target.read_text(encoding="utf-8") != contents:
+                raise ValueError("SOURCE_SITE_OBSOLETE_SOURCE_CONFLICT: " + name)
+        result.append((path, path.read_text(encoding="utf-8"), old))
+    return result
+
+
 def materialize_verified_custom_event(
     *, project_root: str | Path, symbols: Mapping, source_site_ref: str,
     behavior_id: str, package: str, at: str = "HEAD", side: str = "COMMON",
@@ -301,6 +348,8 @@ def materialize_verified_custom_event(
         }
         receipt_path = root / ".mmm/source-producers" / (digest + ".json")
         expected_receipt = json.dumps(receipt, sort_keys=True, ensure_ascii=False) + "\n"
+        obsolete = _obsolete_custom_sources(
+            root, symbols, metadata, behavior_id, package, digest)
         if receipt_path.is_symlink():
             raise ValueError("SOURCE_SITE_RECEIPT_SYMLINK")
         if (receipt_path.exists() and
@@ -313,14 +362,24 @@ def materialize_verified_custom_event(
         original_manifest = manifest.read_text(encoding="utf-8")
         manifest_entry = ({"config": result["mixin_config"], "environment": "client"}
                           if side == "CLIENT" else result["mixin_config"])
-        should_register = not any(
-            (item if isinstance(item, str) else item.get("config"))
-            == result["mixin_config"] for item in mixins
-        )
-        if should_register:
-            metadata["mixins"] = [*mixins, manifest_entry]
+        old_config_names = {old["mixin_config"] for _, _, old in obsolete}
+        active = [entry for entry in mixins if
+                  (entry if isinstance(entry, str) else entry.get("config"))
+                  not in old_config_names]
+        matching = [entry for entry in active
+                    if (entry if isinstance(entry, str) else entry.get("config"))
+                    == result["mixin_config"]]
+        if matching and any(entry != manifest_entry for entry in matching):
+            raise ValueError("SOURCE_SITE_MIXIN_ENVIRONMENT_MISMATCH")
+        if len(matching) > 1:
+            raise ValueError("SOURCE_SITE_MIXIN_REGISTRATION_DUPLICATE")
+        if not matching:
+            active.append(manifest_entry)
+        manifest_changed = active != mixins
+        if manifest_changed:
+            metadata["mixins"] = active
         new_manifest = (json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
-                        if should_register else original_manifest)
+                        if manifest_changed else original_manifest)
         created_files = []
         receipt_created = False
         try:
@@ -331,11 +390,19 @@ def materialize_verified_custom_event(
                     # a mocked/failed writer can raise just after os.replace.
                     created_files.append((path, contents))
                     _atomic_write(path, contents)
-            if should_register:
+            if manifest_changed:
                 _atomic_write(manifest, new_manifest)
             if not receipt_path.exists():
                 receipt_created = True
                 _atomic_write(receipt_path, expected_receipt)
+            for old_receipt, _, old_plan in obsolete:
+                for relative, contents in old_plan["files"].items():
+                    old_target = _checked_source_target(root, relative)
+                    if old_target.is_file() and old_target.read_text(encoding="utf-8") == contents:
+                        old_target.unlink()
+                    elif old_target.exists():
+                        raise ValueError("SOURCE_SITE_OBSOLETE_SOURCE_CHANGED: " + relative)
+                old_receipt.unlink()
         except Exception:
             # One failed write cannot publish a partially registered Mixin.
             # The two locks exclude concurrent publishers while rolling back.
@@ -347,7 +414,19 @@ def materialize_verified_custom_event(
                     receipt_path.unlink()
                 else:
                     incomplete.append(str(receipt_path))
-            if should_register and manifest.is_file():
+            # Restore deleted previous producers before removing the new one.
+            for old_receipt, old_receipt_bytes, old_plan in obsolete:
+                for relative, contents in old_plan["files"].items():
+                    old_target = _checked_source_target(root, relative)
+                    if not old_target.exists():
+                        _atomic_write(old_target, contents)
+                    elif old_target.read_text(encoding="utf-8") != contents:
+                        incomplete.append(str(old_target))
+                if not old_receipt.exists():
+                    _atomic_write(old_receipt, old_receipt_bytes)
+                elif old_receipt.read_text(encoding="utf-8") != old_receipt_bytes:
+                    incomplete.append(str(old_receipt))
+            if manifest_changed and manifest.is_file():
                 current = manifest.read_text(encoding="utf-8")
                 if current == new_manifest:
                     _atomic_write(manifest, original_manifest)
