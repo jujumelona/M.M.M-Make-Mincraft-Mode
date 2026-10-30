@@ -190,3 +190,15 @@ def test_block_free_operation_catalog_still_allows_genuine_control_flow():
     options = operation_options(_member(), _scope(), body, set(), nesting_depth=7)
     assert "block" not in options
     assert {"call", "assign", "if", "while", "try", "return", "complete"} <= set(options)
+
+
+def test_active_helper_self_call_is_rejected_before_accepting_node():
+    from minecraft_mod_ai.incremental_java_author import _reject_current_self_call
+
+    member = {"id": "m3", "name": "mmmHelper3", "kind": "method"}
+    with pytest.raises(RuntimeError, match="JAVA_ACTIVE_MEMBER_SELF_CALL: m3"):
+        _reject_current_self_call(member, {
+            "op": "call", "receiver": "this", "method": "mmmHelper3"})
+    _reject_current_self_call(member, {
+        "op": "call", "receiver": "this", "method": "otherHelper"})
+    _reject_current_self_call(member, {"op": "local", "name": "temporary"})
