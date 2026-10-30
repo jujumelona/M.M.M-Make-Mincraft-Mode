@@ -769,5 +769,6 @@ def test_constant_false_branch_cannot_forge_observable_effect():
     branch["otherwise"] = [dict(update, id="n3")]
     _assert_live_behavior_entrypoints({"members": [callback]})
     branch["condition"] = "true"
+    branch["body"] = []
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
         _assert_live_behavior_entrypoints({"members": [callback]})
