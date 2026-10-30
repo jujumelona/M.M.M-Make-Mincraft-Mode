@@ -11,7 +11,12 @@ def _source_digest(source):
 
 
 def direct_source_dependencies(context):
-    return {'include_qualified_sources': True} if context.get('host_direct_feature_source') else {}
+    # Source-owned registration deliberately disables the direct-AST verifier
+    # mode to enable exact event receipts. Its event owner may live in a
+    # distinct generated Java package and still must be part of javac closure.
+    return {'include_qualified_sources': True} if (
+        context.get('host_direct_feature_source') or context.get('host_source_owned')
+    ) else {}
 
 
 def _source_records(sources):
