@@ -314,6 +314,33 @@ class IncrementalJavaBuilder:
         self.member, self.scope, self.path, self.block = member, scope, path, body
         blocked_declarations = set()
         try:
+            # A world registrar has no gameplay implementation to design:
+            # the host installs its inspected observation and immediately
+            # schedules the listener body as a separate work item. Do not
+            # force a 9B coder to select 'register', page the event inventory,
+            # and then remember to select 'complete'. This is deterministic
+            # control flow, not a prompt or a retry limit.
+            if not path and member.get("registrar"):
+                from .incremental_java_work import _world_bound
+                from .incremental_java_progress import finish_new_members
+                if _world_bound(self, member):
+                    existing = [node for node in body if node.get("op") == "register"]
+                    if len(existing) > 1:
+                        raise RuntimeError(
+                            "JAVA_DUPLICATE_ORIGINAL_OCCURRENCE_REGISTRATION: " + member["id"])
+                    if existing:
+                        return body
+                    pending_before = len(self.pending)
+                    self.current_operation = "register"
+                    node = _safe_author_operation(self, member, "register")
+                    if node is None:
+                        raise RuntimeError(
+                            "JAVA_HOST_OBSERVATION_NOT_MATERIALIZED: " + member["id"])
+                    body.append(node)
+                    self.history[node["id"]] = node
+                    finish_new_members(self, pending_before)
+                    self._record_operation_progress(member, node, scope)
+                    return body
             while True:
                 member_id = member["id"]
                 epoch = self._progress_epoch.get(member_id, 0)
