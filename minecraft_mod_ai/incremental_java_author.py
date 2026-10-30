@@ -121,47 +121,55 @@ def _member_has_potential_effect(member):
     return any(_node_has_potential_effect(node, local_names) for node in nodes)
 
 
-def _observable_member_ids(program):
-    """Resolve generated-helper effects transitively instead of counting self-calls.
-
-    A completed helper is useful only if it reaches a non-generated call,
-    registration, field write, or terminal failure. A cycle of generated calls
-    without such an effect is not implementation progress.
-    """
+def _generated_call_targets(member, node, generated):
+    """Resolve generated callee identity without guessing from the call name."""
     from .incremental_java_calls import _owner_matches
 
+    contract = node.get("call_contract") or {}
+    owner = contract.get("owner") or node.get("receiver_type")
+    if not owner and str(node.get("receiver") or "") in {"", "this"}:
+        owner = member["owner"]
+    return {target["id"] for target in generated.get(node.get("method"), ())
+            if owner and _owner_matches(target["owner"], owner)}
+
+
+def _member_effect_edges(member, generated):
+    """Return real effects and dependencies, not just syntactic operations."""
+    nodes = tuple(walk_nodes(member.get("body") or ()))
+    local_names = _member_local_names(member, nodes)
+    dependencies = set()
+    effect = False
+    for node in nodes:
+        if node.get("op") == "call":
+            targets = _generated_call_targets(member, node, generated)
+            dependencies.update(targets)
+            if not targets:
+                effect = True
+        elif node.get("op") not in {"return", "constructor_call"}:
+            effect |= _node_has_potential_effect(node, local_names)
+    return effect, dependencies
+
+
+def _observable_member_ids(program):
+    """Transitively verify that helper calls lead to an external effect."""
     members = {row["id"]: row for row in program["members"] if row.get("kind") == "method"}
     generated = {}
     for member in members.values():
         generated.setdefault(member["name"], []).append(member)
 
-    directly_effectful, dependencies = set(), {}
+    observable, dependencies = set(), {}
     for member in members.values():
-        names = _member_local_names(member, tuple(walk_nodes(member.get("body") or ())))
-        dependencies[member["id"]] = set()
-        for node in walk_nodes(member.get("body") or ()):
-            if node.get("op") == "call":
-                contract = node.get("call_contract") or {}
-                owner = contract.get("owner") or node.get("receiver_type")
-                receiver = str(node.get("receiver") or "")
-                if not owner and receiver in {"", "this"}:
-                    owner = member["owner"]
-                matches = [target for target in generated.get(node.get("method"), ())
-                           if owner and _owner_matches(target["owner"], owner)]
-                if matches:
-                    dependencies[member["id"]].update(row["id"] for row in matches)
-                else:
-                    directly_effectful.add(member["id"])
-            elif _node_has_potential_effect(node, names):
-                directly_effectful.add(member["id"])
+        effect, targets = _member_effect_edges(member, generated)
+        dependencies[member["id"]] = targets
+        if effect:
+            observable.add(member["id"])
 
-    observable = set(directly_effectful)
     while True:
-        newly_observable = {source for source, targets in dependencies.items()
-                            if targets & observable}
-        if newly_observable <= observable:
+        incoming = {source for source, targets in dependencies.items()
+                    if targets & observable}
+        if incoming <= observable:
             return observable
-        observable.update(newly_observable)
+        observable.update(incoming)
 
 
 def _assert_live_behavior_entrypoints(program):
@@ -176,6 +184,13 @@ def _assert_live_behavior_entrypoints(program):
                 f"entrypoint={member['id']}; implementation contains only "
                 "declarations, empty control flow, or non-effectful returns"
             )
+
+
+def _reject_active_self_call(member, node):
+    if (node is not None and node.get("op") == "call"
+            and node.get("method") == member.get("name")
+            and node.get("receiver") in {"", "this"}):
+        raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + member["id"])
 
 
 class IncrementalJavaBuilder:
@@ -391,10 +406,7 @@ class IncrementalJavaBuilder:
                 pending_before = len(self.pending)
                 progress_before = self._progress_epoch.get(member_id, 0)
                 node = author_operation(self, operation)
-                if (node is not None and operation == "call"
-                        and node.get("method") == member.get("name")
-                        and node.get("receiver") in {"", "this"}):
-                    raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + member_id)
+                _reject_active_self_call(member, node)
                 if node is None:
                     self._record_nonprogress(member)
                     continue
