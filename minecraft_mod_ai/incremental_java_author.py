@@ -242,7 +242,10 @@ def _assert_live_behavior_entrypoints(program):
 
 
 def _reject_active_self_call(member, node):
-    if (node is not None and node.get("op") == "call"
+    if node is None or node.get("op") != "call":
+        return
+    identity = node.get("generated_member_id")
+    if (identity == member["id"] or not identity
             and node.get("method") == member.get("name")
             and node.get("receiver") in {"", "this"}):
         raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + member["id"])
