@@ -1017,15 +1017,32 @@ def compose_first_pass_java(
             source, symbols=dict(construction_context.get("symbols") or {}),
             owner=package_name + "." + class_name,
             target_path=str(spec["target_path"]))
-    if pending_custom_source_sites:
-        from .source_owned_custom_event import materialize_verified_custom_event
-        for site in pending_custom_source_sites:
-            materialize_verified_custom_event(**site)
-    if pending_ui_source_plans:
-        from .source_owned_ui_event import materialize_typed_ui_occurrence
-        for planned in pending_ui_source_plans:
-            materialize_typed_ui_occurrence(
-                planned, project_root=construction_context["project_root"],
-                symbols=construction_context.get("symbols") or {})
+    if (construction_context or {}).get("defer_source_publication"):
+        ledger = construction_context.get("pending_source_publications")
+        if not isinstance(ledger, list):
+            raise ValueError("HOST_SOURCE_PUBLICATION_LEDGER_REQUIRED")
+        # Do not let a half-authored Java class publish working Mixins. Plans
+        # are serializable, so a rejected compiler candidate can resume and
+        # re-publish the exact same verified source-site dependencies.
+        ledger.extend(
+            {"kind": "custom", "args": {
+                key: value for key, value in site.items()
+                if key not in {"project_root", "symbols"}
+            }} for site in pending_custom_source_sites
+        )
+        ledger.extend({"kind": "ui", "plan": planned}
+                      for planned in pending_ui_source_plans)
+    else:
+        # Standalone first-pass authoring retains its existing API contract.
+        if pending_custom_source_sites:
+            from .source_owned_custom_event import materialize_verified_custom_event
+            for site in pending_custom_source_sites:
+                materialize_verified_custom_event(**site)
+        if pending_ui_source_plans:
+            from .source_owned_ui_event import materialize_typed_ui_occurrence
+            for planned in pending_ui_source_plans:
+                materialize_typed_ui_occurrence(
+                    planned, project_root=construction_context["project_root"],
+                    symbols=construction_context.get("symbols") or {})
     return source
 
