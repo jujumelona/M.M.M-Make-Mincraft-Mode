@@ -164,3 +164,17 @@ def test_java_logging_and_event_registration_cannot_claim_native_world_mutation(
         symbols = {"method": {"kind": "METHOD", "owner": owner,
                               "name": method, "parameters": ["String"]}}
         assert not _inspected_call(node, symbols)
+
+
+def test_verified_source_ui_event_is_selectable_in_incremental_coder_context():
+    from minecraft_mod_ai.incremental_java_context import _combine_checked_events
+
+    original = [CALLBACK]
+    custom = {"event_id": "example.OriginalOccurrence#EVENT",
+              "event_owner": "example.OriginalOccurrence", "event_field": "EVENT",
+              "behavior_id": "resource", "provenance": "host_typed_ui_action"}
+    rows = _combine_checked_events(original, [custom])
+    assert {row["event_id"] for row in rows} == {
+        "example.Events#ACTION", "example.OriginalOccurrence#EVENT"}
+    with pytest.raises(ValueError, match="JAVA_CALLBACK_EVENT_ABI_CONFLICT"):
+        _combine_checked_events(original, [{**CALLBACK, "return_type": "boolean"}])
