@@ -324,10 +324,8 @@ def _obsolete_producers(root, planned, symbols):
 
 def materialize_typed_ui_occurrence(planned, *, project_root, symbols):
     """Install only host-rendered files and record the exact ownership recipe."""
-    import fcntl
-
     from .project_write_lock import project_write_lock
-    from .source_owned_custom_event import _atomic_write
+    from .source_owned_custom_event import _atomic_write, _producer_cross_process_lock
 
     expected = _render_recipe(planned["recipe"], symbols)
     if _canonical(planned) != _canonical(expected):
@@ -337,8 +335,7 @@ def materialize_typed_ui_occurrence(planned, *, project_root, symbols):
     # transports, otherwise a parallel stale read can erase the other's entry.
     lock = _path(root, ".mmm/source-producer.lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with project_write_lock(root), lock.open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    with project_write_lock(root), _producer_cross_process_lock(lock):
         manifest, metadata = _manifest(root)
         if metadata["id"] != planned["recipe"]["mod_id"]:
             raise ValueError("UI_OCCURRENCE_MOD_ID_MISMATCH")
