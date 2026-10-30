@@ -526,7 +526,8 @@ def test_active_and_pending_generated_methods_are_hidden_from_call_catalogs():
         })
     names = {row["name"] for row in generated_members(builder, owner, "METHOD")}
     # Incomplete members remain in the program but may not be called.
-    assert {"helperm3", "helperm4", "helperm5"} <= names
+    assert {"helperm3", "helperm4"}.isdisjoint(names)
+    assert "helperm5" in names
     from minecraft_mod_ai.incremental_java_values_members import _generated_page
     from minecraft_mod_ai.incremental_java_values_model import JavaReceiver
     receiver = JavaReceiver("this", owner)
@@ -586,3 +587,42 @@ def test_pure_helper_return_does_not_fake_observable_side_effect():
               "body": [{"id": "n2", "op": "return", "value": "123"}]}
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
         _assert_live_behavior_entrypoints({"members": [callback, helper]})
+
+
+def test_non_effectful_completed_helper_does_not_reset_progress():
+    from minecraft_mod_ai.incremental_java_author import _semantic_progress_key
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    owner = builder.program["class_name"]
+    builder.member["name"] = "handler"
+    pure = {"id": "m12", "kind": "method", "owner": owner, "name": "valueOnly",
+            "metadata": method_metadata("int"), "implementation_status": "complete",
+            "body": [{"id": "n12", "op": "return", "value": "1"}]}
+    builder.program["members"].append(pure)
+    call = {"id": "n2", "op": "call", "receiver": "this",
+            "method": "valueOnly", "arguments": []}
+    assert _semantic_progress_key(builder, builder.member, call, builder.scope) is None
+    pure["body"] = [{"id": "n13", "op": "assign", "target": "this.counter", "value": "1"}]
+    assert _semantic_progress_key(builder, builder.member, call, builder.scope) is not None
+
+
+def test_overloads_do_not_inherit_effect_from_unrelated_generated_method():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    owner = builder.program["class_name"]
+    callback = {"id": "m1", "kind": "method", "owner": owner, "name": "callback",
+                "registrar": True, "metadata": method_metadata(),
+                "body": [{"id": "n1", "op": "call", "receiver": "this",
+                          "method": "process", "arguments": [],
+                          "call_contract": {"owner": owner, "name": "process",
+                                            "parameters": [], "return_type": "void"}}]}
+    pure = {"id": "m2", "kind": "method", "owner": owner, "name": "process",
+            "metadata": method_metadata(), "body": []}
+    effect = {"id": "m3", "kind": "method", "owner": owner, "name": "process",
+              "metadata": method_metadata(parameters=[{"type": "int", "name": "arg0"}]),
+              "body": [{"id": "n3", "op": "assign", "target": "this.count", "value": "1"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback, pure, effect]})
