@@ -8,9 +8,31 @@ import json
 def compose_source(router, spec, messages, *, source_context, construction_context, behaviors, legacy_author):
     if construction_context.get("host_direct_feature_source"):
         from .incremental_java_author import compose_incremental_feature
-        source, program = compose_incremental_feature(router, spec, messages,
-            construction_context=construction_context, behaviors=behaviors)
+        from .source_occurrence_error import SourceHookUnavailable
+        try:
+            source, program = compose_incremental_feature(router, spec, messages,
+                construction_context=construction_context, behaviors=behaviors)
+        except SourceHookUnavailable:
+            # The incremental registrar cannot invent an original occurrence.
+            # Escalate the *strategy*, not the prompt or the 9B model's retry
+            # counter. The host-first source author can construct a real
+            # project-owned player action or a checked source-site Mixin and
+            # binds the resulting exact callback ABI before authoring effects.
+            # It still rejects missing source sites and unverified gameplay.
+            state = construction_context["incremental_state"]
+            state.pop("program", None)
+            state["strategy"] = "host_source_owned"
+            host_context = {
+                **construction_context,
+                "host_direct_feature_source": False,
+                "host_source_owned": True,
+            }
+            return legacy_author(
+                router, spec, messages, source_context=source_context,
+                construction_context=host_context, behaviors=behaviors,
+            )
         construction_context["incremental_state"]["program"] = program
+        construction_context["incremental_state"]["strategy"] = "incremental_java"
         return source
     return legacy_author(router, spec, messages, source_context=source_context,
         construction_context=construction_context, behaviors=behaviors)
