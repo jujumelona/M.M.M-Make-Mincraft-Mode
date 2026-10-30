@@ -895,6 +895,15 @@ def compose_first_pass_java(
             # an invitation to generate another complete compilation unit.
             "previous_complete_members": finished[-3:],
         }
+        if source_owned and owned_behavior_id:
+            existing = (construction_context or {}).get("source_owned_reused_reads") or {}
+            if isinstance(existing, Mapping):
+                checked = existing.get(owned_behavior_id) or {}
+                if isinstance(checked, Mapping):
+                    body_task["verified_existing_runtime_reads"] = {
+                        name: dict(binding) for name, binding in checked.items()
+                        if isinstance(name, str) and isinstance(binding, Mapping)
+                    }
         if source_work_graph is not None and owned_behavior_id:
             from .feature_source_work_graph import member_source_work
             body_task["source_owned_work"] = member_source_work(
