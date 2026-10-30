@@ -33,7 +33,8 @@ def test_call_heads_select_declared_members_instead_of_free_java_receiver_code()
             return {"member_id": "m2"}
     coder = Coder()
     builder = _builder(coder)
-    builder.new_method(owner="Feature", purpose="Apply the effect", behavior={}, metadata=method_metadata())
+    helper = builder.new_method(owner="Feature", purpose="Apply the effect", behavior={}, metadata=method_metadata())
+    helper["implementation_status"] = "complete"
     node = author_operation(builder, "call")
     assert coder.calls == 2
     assert node["receiver"] == "this" and node["arguments"] == []
