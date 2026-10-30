@@ -8,8 +8,14 @@ from .java_operation_ir import parameter_types
 
 def _world_bound(builder, member):
     behavior = member.get("behavior") or {}
-    names = [*(behavior.get("runtime_state_reads") or ()), *(behavior.get("runtime_state_writes") or ())]
-    return any(builder.api.bindings.get(name, {}).get("binding") == "world_state" for name in names)
+    # Native mutations are obligations even when the planner has not yet
+    # located an owner. Unknown bindings must not turn a world write into a
+    # harmless scalar assignment or bypass the original event lifecycle.
+    if behavior.get("runtime_state_writes"):
+        return True
+    return any(
+        builder.api.bindings.get(name, {}).get("binding") == "world_state"
+        for name in behavior.get("runtime_state_reads") or ())
 
 
 def _needs_observation(builder, member, body):
