@@ -543,8 +543,9 @@ def test_generated_helper_cycle_is_not_observable_behavior():
     from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
     from minecraft_mod_ai.incremental_java_model import method_metadata
 
-    call = lambda name: {"id": "n1", "op": "call", "receiver": "this",
-                         "method": name, "arguments": []}
+    def call(name):
+        return {"id": "n1", "op": "call", "receiver": "this",
+                "method": name, "arguments": []}
     callback = {"id": "m1", "owner": "Feature", "kind": "method", "name": "eventCallback",
                 "metadata": method_metadata(), "registrar": True,
                 "body": [call("helperOne")]}
@@ -569,3 +570,19 @@ def test_externally_effectful_call_does_not_require_generated_helper():
                           "receiver_type": "net.minecraft.world.World",
                           "method": "setBlockState", "arguments": ["position", "state"]}]}
     _assert_live_behavior_entrypoints({"members": [callback]})
+
+
+
+def test_pure_helper_return_does_not_fake_observable_side_effect():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    callback = {"id": "m1", "owner": "Feature", "kind": "method",
+                "name": "onEvent", "registrar": True, "metadata": method_metadata(),
+                "body": [{"id": "n1", "op": "call", "receiver": "this",
+                          "method": "pureValue", "arguments": []}]}
+    helper = {"id": "m2", "owner": "Feature", "kind": "method",
+              "name": "pureValue", "metadata": method_metadata("int"),
+              "body": [{"id": "n2", "op": "return", "value": "123"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback, helper]})
