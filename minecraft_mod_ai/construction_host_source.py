@@ -93,6 +93,32 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
     return contract, requirement, behavior_rows, prompt, state_access
 
 
+def _exact_behavior_verification_spec(spec: dict, behaviors) -> dict:
+    """Bind the actual assigned behavior IDs into compiler admission.
+
+    An absent construction_behaviors_json used to skip entrypoint/event checks.
+    Work-graph input and verifier scope must be identical even when a caller
+    supplied only the structured behavior objects.
+    """
+    bindings = spec.get("bindings") or {}
+    if not bindings.get("request_feature_entrypoint"):
+        return spec
+    ids = [str(row.get("behavior_id") or "") for row in behaviors]
+    if not ids or any(not value for value in ids) or len(ids) != len(set(ids)):
+        raise HostJavaConstructionError("JAVA_HOST_BEHAVIOR_ID_SET_INVALID")
+    supplied = bindings.get("construction_behaviors_json")
+    if supplied:
+        selected = json.loads(supplied)
+        if not isinstance(selected, list):
+            raise HostJavaConstructionError("JAVA_HOST_BEHAVIOR_VERIFIER_SCOPE_INVALID")
+        expected = [str(row.get("behavior_id") or "") for row in selected
+                    if isinstance(row, dict)]
+        if expected != ids:
+            raise HostJavaConstructionError("JAVA_HOST_BEHAVIOR_VERIFIER_SCOPE_MISMATCH")
+        return spec
+    return {**spec, "bindings": {**bindings, "construction_behaviors_json":
+            json.dumps(list(behaviors), ensure_ascii=False, sort_keys=True)}}
+
 def compose_host_java_source(router, spec: dict, context: dict, *,
                              package: str, name: str, owner: str,
                              behaviors=(), source_context=()) -> str:
@@ -101,6 +127,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     from .incremental_java_pipeline import (compose_source, candidate_data, load_candidate, compile_attempts, exhausted)
     from .first_pass_java_source import compose_first_pass_java
 
+    spec = _exact_behavior_verification_spec(spec, behaviors)
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
         raise HostJavaConstructionError("JAVA_HOST_FABRIC_REQUIRED")
     if not context.get("java_classpath") or not context.get("project_root"):
@@ -117,7 +144,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
 
     identifier = _digest({
         "schema": "mmm/host-java-compilation-unit-v1",
-        "spec": spec, "owner": owner, "target": context["target"],
+        "spec": spec, "behaviors": list(behaviors), "owner": owner, "target": context["target"],
         "prerequisites": context.get("prerequisite_hashes", {}),
         "work_order": context.get("feature_work_order_sha256", ""),
         "implementation": construction_implementation_fingerprint(),
