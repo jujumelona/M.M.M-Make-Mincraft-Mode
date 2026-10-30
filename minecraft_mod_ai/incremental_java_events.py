@@ -20,22 +20,44 @@ def _event_navigation_step(count):
     return count
 
 
+def _resolve_event_query(events, query, offset):
+    """Never interpret a state/work-order page cursor as an event search."""
+    query = str(query)
+    matching = _matching(events, query)
+    if query.startswith("@") or not matching:
+        # A different lookup namespace or zero-result search cannot become
+        # an empty event-choice page. Show the REAL inspected event inventory.
+        return "*", 0, _matching(events, "*"), "event_query_not_in_catalog"
+    if offset >= len(matching):
+        return query, 0, matching, "event_offset_out_of_range"
+    return query, offset, matching, ""
+
+
 def select_event(builder):
     events = builder.api.callbacks()
     if not events:
-        builder.rejection = {"operand_diagnostic": "No indexed Event fields; author the interaction with call/lambda or new helpers."}
+        builder.rejection = {"operand_diagnostic": "No inspected callback exists for this source unit; materialize an occurrence producer first."}
         return None
     query, offset = "*", 0
     if len(events) > PAGE:
         page = builder.ask(SCHEMAS["lookup"], "register_lookup", {"lookup_instruction": (
-            "Query a framework observation API name or input type, not the name of a completed gameplay feature. "
-            "Use * to browse all indexed events. The callback body will implement the domain condition.")})
+            "Search ONLY the Fabric EVENT index. Never submit an @state_access, "
+            "@work_order, or other API cursor as an event query. Use * to browse "
+            "all inspected events; the listener must still implement the original trigger.")})
         query, offset = page["query"], page["offset"]
     transitions = {}
     navigation_steps = 0
+    invalid_searches = 0
     while True:
         navigation_steps = _event_navigation_step(navigation_steps)
-        matching = _matching(events, query)
+        query, offset, matching, issue = _resolve_event_query(events, query, offset)
+        if issue:
+            invalid_searches += 1
+            if invalid_searches > 4:
+                from .source_occurrence_error import SourceHookUnavailable
+                raise SourceHookUnavailable(
+                    str((builder.member.get("behavior") or {}).get("behavior_id") or builder.member["id"]),
+                    reason="event_query_namespace_stalled", inspected=len(events))
         available = matching[offset:offset + PAGE]
         indexed = {event["event_id"]: event for event in available}
         options = [*indexed, "@search", "@cancel"]
@@ -43,7 +65,8 @@ def select_event(builder):
             options.append("@next")
         selected = builder.ask(choice("event_id", options), "register", {"event_index": [
             {"event_id": event["event_id"], "inputs": event["parameters"]} for event in available],
-            "event_query": query, "event_offset": offset, "event_total": len(matching)})["event_id"]
+            "event_query": query, "event_offset": offset, "event_total": len(matching),
+            "event_search_diagnostic": issue})["event_id"]
         if selected in indexed:
             return indexed[selected]
         if selected == "@cancel":
