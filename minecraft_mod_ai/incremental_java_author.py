@@ -110,15 +110,16 @@ def _node_has_potential_effect(node, local_names):
     return operation == "return" and bool(node.get("value"))
 
 
-def _member_has_potential_effect(member):
-    """A necessary structural effect condition, not a gameplay semantics proof.
+def _member_has_potential_effect(member, members=()):
+    """Check effect reachability through generated helpers, not just call syntax.
 
-    Local writes and declarations alone cannot satisfy a runtime callback.
-    Compiler and behavior acceptance remain separate requirements.
+    An empty local-only helper or cyclic generated-helper graph must not
+    certify a callback. External calls remain conservative potential effects.
     """
-    nodes = tuple(walk_nodes(member.get("body") or ()))
-    local_names = _member_local_names(member, nodes)
-    return any(_node_has_potential_effect(node, local_names) for node in nodes)
+    from .incremental_java_effect_graph import has_reachable_effect
+    return has_reachable_effect(
+        member, members or (member,), _member_local_names, _node_has_potential_effect,
+    )
 
 
 def _assert_live_behavior_entrypoints(program):
@@ -126,7 +127,7 @@ def _assert_live_behavior_entrypoints(program):
     for member in program["members"]:
         if not (member.get("registrar") or member.get("event")):
             continue
-        if not _member_has_potential_effect(member):
+        if not _member_has_potential_effect(member, program["members"]):
             raise RuntimeError(
                 "INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: "
                 f"entrypoint={member['id']}; implementation contains only "
