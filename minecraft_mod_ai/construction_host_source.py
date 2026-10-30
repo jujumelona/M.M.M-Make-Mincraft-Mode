@@ -29,6 +29,15 @@ def _repair_runtime_bindings(spec, receipts):
         "runtime_state_bindings_json") or "{}"), receipts)
 
 
+def _saved_source_payload(source, direct_feature, state):
+    """Preserve the exact AST proof with a compiler-accepted direct source."""
+    persisted = {"source": source}
+    if direct_feature and state.get("program"):
+        persisted["program_json"] = json.dumps(
+            state["program"], ensure_ascii=False, separators=(",", ":"))
+    return persisted
+
+
 def _valid_checkpoint_payload(saved, direct_feature):
     if not saved:
         return {}
@@ -375,11 +384,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "receipts_json": json.dumps(
                     mutation_receipts, ensure_ascii=False, sort_keys=True),
             })
-        persisted = {"source": source}
-        if direct_feature and incremental_state.get("program"):
-            persisted["program_json"] = json.dumps(
-                incremental_state["program"], ensure_ascii=False, separators=(",", ":"))
-        _save_checkpoint(checkpoint, identifier, persisted)
+        _save_checkpoint(checkpoint, identifier, _saved_source_payload(
+            source, direct_feature, incremental_state))
         candidate.unlink(missing_ok=True)
         print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
             "target_path": spec["target_path"], "owner": owner,
