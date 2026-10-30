@@ -42,3 +42,6 @@ jobs:
           tests/test_incremental_java_pipeline.py
           tests/test_feature_source_owned_dispatch.py
           tests/test_direct_feature_source.py
+          tests/test_feature_source_work_graph.py
+          tests/test_source_owned_custom_event.py
+          tests/test_source_owned_hook.py
