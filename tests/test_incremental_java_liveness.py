@@ -29,7 +29,7 @@ def test_empty_block_is_not_a_source_of_new_empty_blocks():
     assert "block" not in options
     assert {"call", "if", "return", "complete", "register"} <= set(options)
     already_implemented = [{"id": "n1", "op": "call"}]
-    assert "block" in operation_options(_member(), _scope(), already_implemented, set())
+    assert "block" not in operation_options(_member(), _scope(), already_implemented, set())
 
 
 def test_control_flow_depth_gate_preserves_direct_operations():
@@ -165,3 +165,47 @@ def test_author_scope_restores_after_failed_model_page():
     assert builder.path is path_before
     assert builder.block is block_before
     assert builder.current_operation == operation_before
+
+
+def test_current_generated_helper_is_not_callable_but_other_pending_helpers_are():
+    from minecraft_mod_ai.incremental_java_calls import _generated_methods
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    active = builder.member
+    active["kind"] = "method"
+    active["name"] = "mmmHelper3"
+    active["implementation_status"] = "authoring"
+    assert _generated_methods(builder, active["owner"], "mmmHelper3") == []
+
+    other = {"id": "m99", "kind": "method", "owner": active["owner"],
+             "name": "distinctHelper", "implementation_status": "pending",
+             "metadata": method_metadata(), "body": []}
+    builder.program["members"].append(other)
+    assert len(_generated_methods(builder, active["owner"], "distinctHelper")) == 1
+
+
+def test_block_free_operation_catalog_still_allows_genuine_control_flow():
+    body = [{"id": "n1", "op": "local", "name": "temporary", "value": "0"}]
+    options = operation_options(_member(), _scope(), body, set(), nesting_depth=7)
+    assert "block" not in options
+    assert {"call", "assign", "if", "while", "try", "return", "complete"} <= set(options)
+
+
+def test_active_helper_self_call_is_rejected_before_accepting_node():
+    from minecraft_mod_ai.incremental_java_author import _reject_current_self_call
+
+    member = {"id": "m3", "name": "mmmHelper3", "kind": "method"}
+    with pytest.raises(RuntimeError, match="JAVA_ACTIVE_MEMBER_SELF_CALL: m3"):
+        _reject_current_self_call(member, {
+            "op": "call", "receiver": "this", "method": "mmmHelper3"})
+    _reject_current_self_call(member, {
+        "op": "call", "receiver": "this", "method": "otherHelper"})
+    _reject_current_self_call(member, {"op": "local", "name": "temporary"})
+    # A distinct overload is legal Java: it must remain callable.
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+    method = {**member, "metadata": method_metadata()}
+    _reject_current_self_call(method, {
+        "op": "call", "receiver": "this", "method": "mmmHelper3",
+        "call_contract": {"kind": "METHOD", "owner": "Feature",
+                          "name": "mmmHelper3", "parameters": ["int"]}})

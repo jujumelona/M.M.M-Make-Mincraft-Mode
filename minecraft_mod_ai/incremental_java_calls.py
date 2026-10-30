@@ -42,10 +42,18 @@ def _receiver_type(builder, receiver):
     return receiver if re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", receiver) else ""
 
 
+def _generated_call_candidate(builder, row, owner, method):
+    # A method under active authoring cannot implement itself. Other pending
+    # helpers remain valid forward declarations and are implemented later.
+    return (row["kind"] == "method" and row["name"] == method
+            and _owner_matches(row["owner"], owner)
+            and row["id"] != (builder.member or {}).get("id"))
+
+
 def _generated_methods(builder, owner, method):
     return [{"kind": "METHOD", "owner": row["owner"], "name": row["name"], **row["metadata"]}
             for row in builder.program.get("members", ())
-            if row["kind"] == "method" and row["name"] == method and _owner_matches(row["owner"], owner)]
+            if _generated_call_candidate(builder, row, owner, method)]
 
 
 def _lookup_pages(api, query):

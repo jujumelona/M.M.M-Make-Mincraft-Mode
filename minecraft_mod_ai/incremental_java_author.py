@@ -134,6 +134,20 @@ def _assert_live_behavior_entrypoints(program):
             )
 
 
+def _reject_current_self_call(member, node):
+    """Reject only the active overload, not every same-named Java method."""
+    if node is None or node.get("op") != "call":
+        return
+    if node.get("method") != member.get("name") or node.get("receiver") not in {"", "this"}:
+        return
+    from .java_operation_ir import parameter_types
+    contract = node.get("call_contract")
+    if contract and tuple(parameter_types(contract)) != tuple(
+            parameter_types(member.get("metadata") or {})):
+        return
+    raise RuntimeError("JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"])
+
+
 class IncrementalJavaBuilder:
     def __init__(self, router, spec, messages, context, behaviors, program=None):
         self.router, self.spec, self.context = router, spec, context
@@ -347,6 +361,7 @@ class IncrementalJavaBuilder:
                 pending_before = len(self.pending)
                 progress_before = self._progress_epoch.get(member_id, 0)
                 node = author_operation(self, operation)
+                _reject_current_self_call(member, node)
                 if node is None:
                     self._record_nonprogress(member)
                     continue
