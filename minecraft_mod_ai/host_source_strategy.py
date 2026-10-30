@@ -39,9 +39,9 @@ def _materialized_read_bindings(context: Mapping[str, Any]) -> dict[str, dict[st
             if (slot not in allowed
                     or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", slot)
                     or not isinstance(method.get("signature"), str)
-                    or not re.search(r"\\bpublic\\s+static\\b", method["signature"])
-                    or not re.search(r"\\b" + re.escape(symbol)
-                                     + r"\\s*\\(\\s*\\)", method["signature"])):
+                    or not re.search(r"\bpublic\s+static\b", method["signature"])
+                    or not re.search(r"\b" + re.escape(symbol)
+                                     + r"\s*\(\s*\)", method["signature"])):
                 continue
             result[slot] = {"owner": owner, "method": symbol,
                             "signature": method["signature"]}
