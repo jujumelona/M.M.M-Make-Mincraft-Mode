@@ -156,3 +156,28 @@ def test_native_runtime_write_remains_a_world_obligation_without_a_binding():
     assert _world_bound(builder, builder.member)
     assert work_options(builder, builder.member, builder.scope, [], [],
                         ["lookup", "register", "complete", "local"]) == ["register"]
+
+
+def test_event_search_navigation_cycle_uses_source_producer_fallback_not_runtime_crash():
+    events = _events(11)
+
+    class Api:
+        def callbacks(self):
+            return events
+
+    class Builder:
+        api = Api()
+        member = {"id": "m1", "registrar": True, "behavior": {"behavior_id": "b1"}}
+        rejection = {}
+        steps = 0
+
+        def ask(self, schema, suffix, extra=None):
+            self.steps += 1
+            if suffix == "register_lookup":
+                return {"query": "*", "offset": 0}
+            return {"event_id": "@search"}
+
+    builder = Builder()
+    assert select_event(builder) is None
+    assert "JAVA_EVENT_SELECTION_NAVIGATION_CYCLE" in builder.rejection["operand_diagnostic"]
+    assert builder.steps < 20
