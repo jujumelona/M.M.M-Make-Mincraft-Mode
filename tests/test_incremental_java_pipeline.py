@@ -12,8 +12,8 @@ def production_fixture(tmp_path, monkeypatch):
     behavior, spec, context, messages = _inputs()
     # This deterministic fixture stores a new custom claim counter in its own
     # field; it does not mutate a live Minecraft player/world owner.
-    behavior = {**behavior, "runtime_state_writes": [],
-                "state_writes": ["claimed locations"]}
+    behavior = {**behavior, "trigger": "Player initiates a location claim",
+                "runtime_state_writes": [], "state_writes": ["claimed locations"]}
     spec["bindings"]["construction_behaviors_json"] = json.dumps([behavior])
     prompt = json.loads(messages[-1]["content"])
     prompt.update(inspected_target_api={}, materialized_prerequisite_api=[], host_state_work_order_scope={})
