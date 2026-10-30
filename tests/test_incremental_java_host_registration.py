@@ -85,6 +85,7 @@ def test_ambiguous_hook_is_one_bounded_source_decision_not_event_paging():
 def _builder_without_model():
     builder = object.__new__(IncrementalJavaBuilder)
     builder.member = None
+    builder.context = {"host_registration_enabled": True}
     builder.scope = {}
     builder.path = []
     builder.block = []
@@ -156,6 +157,7 @@ def test_incremental_registration_uses_host_binding_instead_of_menu(monkeypatch)
     monkeypatch.setattr(events, "select_original_occurrence", lambda builder: (
         requests.append(builder.member["behavior"]["behavior_id"]) or chosen))
     class Builder:
+        context = {"host_registration_enabled": True}
         member = {"owner": "Owner", "behavior": {"behavior_id": "b-1"}}
         def new_method(self, **kwargs):
             return {"name": "listener", "metadata": kwargs["metadata"]}
