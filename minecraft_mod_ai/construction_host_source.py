@@ -334,12 +334,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     # immediate edit changed bytes. A SHA is an exact identity;
                     # the token-level no-progress gate separately handles
                     # formatting-only changes.
-                    rejected_sha = hashlib.sha256(source.encode()).hexdigest()
-                    if rejected_sha in rejected_compiler_fingerprints:
-                        raise HostJavaConstructionError(
-                            "JAVA_HOST_COMPILER_SOURCE_CYCLE: " + rejected_sha
-                        ) from compiler_error
-                    rejected_compiler_fingerprints.add(rejected_sha)
+                    from .incremental_java_pipeline import record_rejected_compiler_source
+                    record_rejected_compiler_source(source, rejected_compiler_fingerprints)
                     # A host-rendered rule is not an incremental Java program.
                     # Never send its diagnostic to the unrelated member repair
                     # loop or silently replace it with a different trigger.
