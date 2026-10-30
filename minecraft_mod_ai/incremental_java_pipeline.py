@@ -31,11 +31,11 @@ def compose_source(router, spec, messages, *, source_context, construction_conte
             state = construction_context["incremental_state"]
             state.pop("program", None)
             state["strategy"] = "host_source_owned"
-            host_context = {
-                **construction_context,
-                "host_direct_feature_source": False,
-                "host_source_owned": True,
-            }
+            from .host_source_strategy import prepare_source_owned_strategy
+            host_context = prepare_source_owned_strategy(
+                construction_context, behaviors,
+                side=str(spec.get("side") or "COMMON").upper(),
+            )
             return legacy_author(
                 router, spec, messages, source_context=source_context,
                 construction_context=host_context, behaviors=behaviors,
