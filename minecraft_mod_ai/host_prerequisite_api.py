@@ -102,23 +102,44 @@ def java_api_declarations(source: str, *, path: str) -> dict:
     }
 
 
-def read_prerequisite_apis(context: dict, *, target_path: str, source_context=()) -> list[dict]:
-    """Read all dependency APIs once, preserving overloads and generic types."""
-    root = Path(context["project_root"]).resolve()
-    rows, seen = [], set()
+def _prerequisite_paths(context, source_context):
+    """Combine explicit inputs with dependency-graph certified producer outputs."""
+    verified = context.get("_verified_prerequisite_source_hashes") or {}
+    if not isinstance(verified, dict):
+        raise ValueError("JAVA_VERIFIED_PREREQUISITE_SOURCES_INVALID")
     for item in source_context:
         relative = item.get("path") if isinstance(item, dict) else None
-        if not isinstance(relative, str) or not relative.endswith(".java"):
-            continue
-        requested = root / relative
-        absolute = requested.resolve()
-        if (not absolute.is_relative_to(root) or not absolute.is_file()
-                or requested.is_symlink() or relative == target_path or absolute in seen):
-            continue
-        seen.add(absolute)
-        rows.append(java_api_declarations(absolute.read_text(encoding="utf-8"), path=relative))
-    return rows
+        yield relative, verified.get(relative)
+    for relative in sorted(verified):
+        yield relative, verified[relative]
 
+
+def _read_prerequisite_source(root, relative, target_path, expected_sha256, seen):
+    if not isinstance(relative, str) or not relative.endswith(".java"):
+        return None
+    requested = root / relative
+    absolute = requested.resolve()
+    if (not absolute.is_relative_to(root) or not absolute.is_file()
+            or requested.is_symlink() or relative == target_path or absolute in seen):
+        return None
+    source = absolute.read_bytes()
+    if expected_sha256 is not None:
+        expected = str(expected_sha256).removeprefix("sha256:")
+        if hashlib.sha256(source).hexdigest() != expected:
+            raise ValueError("JAVA_VERIFIED_PREREQUISITE_SOURCE_CHANGED: " + relative)
+    seen.add(absolute)
+    return java_api_declarations(source.decode("utf-8"), path=relative)
+
+
+def read_prerequisite_apis(context: dict, *, target_path: str, source_context=()) -> list[dict]:
+    """Read only explicit or verified transitive Java prerequisites, byte-checked."""
+    root = Path(context["project_root"]).resolve()
+    rows, seen = [], set()
+    for relative, digest in _prerequisite_paths(context, source_context):
+        row = _read_prerequisite_source(root, relative, target_path, digest, seen)
+        if row is not None:
+            rows.append(row)
+    return rows
 
 
 def inspected_prerequisite_symbols(declarations: list[dict]) -> dict:
