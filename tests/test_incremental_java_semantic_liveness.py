@@ -794,3 +794,32 @@ def test_static_self_call_by_owner_and_same_named_overload_are_distinguished():
         _reject_active_self_call(current, {
             "op": "call", "receiver": "this", "method": "process",
         })
+
+
+def test_noop_behavior_repair_removes_terminal_throw_before_continuing():
+    from minecraft_mod_ai.incremental_java_completion import complete_program_block
+
+    class Builder:
+        def author_block(self, member, scope, path, body):
+            assert not body
+            body.append({"id": "n2", "op": "call", "receiver": "world",
+                         "method": "setBlockState", "arguments": []})
+            return body
+
+    member = {"id": "m1", "kind": "method", "registrar": True,
+              "owner": "Feature", "name": "callback",
+              "metadata": {"return_type": "void", "parameters": []},
+              "body": [{"id": "n1", "op": "throw",
+                        "value": "new IllegalStateException()"}]}
+    assert complete_program_block(
+        Builder(), member, None, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: behavior"
+    )
+    assert [node["op"] for node in member["body"]] == ["call"]
+
+
+def test_noop_repair_preserves_guarded_exception_checks():
+    from minecraft_mod_ai.incremental_java_completion import _repairable_behavior_body
+
+    conditional = {"id": "n1", "op": "if", "condition": "badInput",
+                   "body": [{"id": "n2", "op": "throw", "value": "exception"}]}
+    assert _repairable_behavior_body([conditional]) == [conditional]
