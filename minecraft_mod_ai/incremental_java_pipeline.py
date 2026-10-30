@@ -92,13 +92,16 @@ def candidate_data(source, diagnostic, state):
         receipts = state.get("native_mutation_receipts") or []
         result["native_mutation_receipts_json"] = json.dumps(
             receipts, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        result["source_publications_json"] = json.dumps(
+            state.get("source_publications") or [], ensure_ascii=False,
+            separators=(",", ":"), sort_keys=True)
     return result
 
 
 def load_candidate(pending, state, direct):
     if not pending:
         return pending
-    allowed = {"source", "diagnostic", "program_json", "strategy", "native_mutation_receipts_json"}
+    allowed = {"source", "diagnostic", "program_json", "strategy", "native_mutation_receipts_json", "source_publications_json"}
     if set(pending) - allowed or not {"source", "diagnostic"} <= set(pending):
         raise ValueError("JAVA_HOST_CANDIDATE_INVALID")
     strategy = pending.get("strategy")
@@ -114,8 +117,21 @@ def load_candidate(pending, state, direct):
         receipts = json.loads(raw)
         if not isinstance(receipts, list) or not all(isinstance(x, dict) for x in receipts):
             raise ValueError("JAVA_HOST_SOURCE_NATIVE_PROOF_INVALID")
+        raw_publications = pending.get("source_publications_json")
+        if not isinstance(raw_publications, str):
+            # Old candidates may have left their own source producers behind
+            # after a failed javac round. A Java-only replay has no validated
+            # dependency plan and must be reauthored, not accepted.
+            return {}
+        publications = json.loads(raw_publications)
+        if not isinstance(publications, list) or not all(
+            isinstance(item, dict) and item.get("kind") in {"custom", "ui"}
+            for item in publications
+        ):
+            raise ValueError("JAVA_HOST_SOURCE_PUBLICATION_CANDIDATE_INVALID")
         state.pop("program", None)
         state["native_mutation_receipts"] = receipts
+        state["source_publications"] = publications
         state["strategy"] = strategy
         return pending
     if strategy in {"host_verified_source", "host_rule_template"}:
