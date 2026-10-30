@@ -638,3 +638,28 @@ def test_all_live_local_features_use_host_owned_engine_even_without_state_labels
     assert prefer_source_owned_strategy(router, {}, []) is False
     assert prefer_source_owned_strategy(
         router, {"prefer_host_source_owned": False}, [behavior]) is False
+
+
+def test_cycle_A_B_A_rejected_before_third_source_repair():
+    from minecraft_mod_ai.incremental_java_pipeline import record_rejected_compiler_source
+    checked = set()
+    a = "package example; public class A { void test() {} }"
+    b = "package example; public class A { int n; void test() {} }"
+    assert record_rejected_compiler_source(a, checked)
+    assert record_rejected_compiler_source(b, checked)
+    with pytest.raises(ValueError, match="JAVA_HOST_COMPILER_SOURCE_CYCLE"):
+        record_rejected_compiler_source(a, checked)
+    assert len(checked) == 2
+
+
+def test_incremental_compiler_repair_cap_is_finite_with_separate_legacy_budget():
+    from minecraft_mod_ai.incremental_java_pipeline import (
+        MAX_INCREMENTAL_COMPILER_ATTEMPTS, compile_attempts, exhausted,
+    )
+    steps = list(compile_attempts(True, 2))
+    assert len(steps) == MAX_INCREMENTAL_COMPILER_ATTEMPTS == 64
+    assert not exhausted(True, steps[-2], 2)
+    assert exhausted(True, steps[-1], 2)
+    assert list(compile_attempts(False, 2)) == [0, 1, 2]
+    assert not exhausted(False, 1, 2)
+    assert exhausted(False, 2, 2)
