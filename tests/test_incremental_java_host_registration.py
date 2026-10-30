@@ -458,3 +458,52 @@ def test_compiler_resume_rejects_native_proof_on_non_ast_host_strategy():
             "strategy": "host_verified_source",
             "native_mutation_receipts_json": "[]",
         }, {}, True)
+
+
+def test_existing_declared_state_read_is_reused_without_duplicate_runtime_producer(monkeypatch):
+    from minecraft_mod_ai.host_source_strategy import prepare_source_owned_strategy
+    from minecraft_mod_ai import host_fabric_callback_abi
+    monkeypatch.setattr(host_fabric_callback_abi, "callback_interfaces",
+                        lambda *a, **k: [_event()])
+    context = {
+        "symbols": {},
+        "host_state_work_order_scope": {"declared_readable": ["credits"]},
+        "host_state_access": [{"owner": "example.AuthoredStateModel",
+            "methods": [{"name": "readState_credits",
+                         "signature": "public static int readState_credits() { return 1; }"}]}],
+    }
+    behavior = {"behavior_id": "state-reuse", "intent": "apply source-backed behavior",
+                "trigger": "checked callback", "effects": "update state",
+                "state_reads": ["credits"],
+                "runtime_state_reads": ["credits", "world.missing"]}
+    result = prepare_source_owned_strategy(context, [behavior], side="COMMON")
+    assert result["source_owned_reused_reads"]["state-reuse"]["credits"]["method"] == "readState_credits"
+    producers = [r["name"] for r in result["source_owned_work_graph"]["tasks"]
+                 if r["kind"] == "runtime_producer"]
+    assert producers == ["world.missing"]
+
+
+def test_unverified_state_label_is_not_a_callable_binding(monkeypatch):
+    from minecraft_mod_ai.host_source_strategy import prepare_source_owned_strategy
+    from minecraft_mod_ai import host_fabric_callback_abi
+    monkeypatch.setattr(host_fabric_callback_abi, "callback_interfaces",
+                        lambda *a, **k: [_event()])
+    behavior = {"behavior_id": "unbound", "intent": "new state mechanic",
+                "state_reads": ["credits"], "runtime_state_reads": ["credits"]}
+    result = prepare_source_owned_strategy({
+        "symbols": {},
+        "host_state_work_order_scope": {"declared_readable": ["credits"]},
+        "host_state_access": [],
+    }, [behavior], side="COMMON")
+    assert result["source_owned_reused_reads"] == {}
+    assert any(row["kind"] == "runtime_producer" and row["name"] == "credits"
+               for row in result["source_owned_work_graph"]["tasks"])
+
+
+def test_identical_compiler_repair_is_rejected_before_another_model_turn():
+    from minecraft_mod_ai.incremental_java_pipeline import require_compiler_repair_progress
+    with pytest.raises(ValueError, match="JAVA_HOST_COMPILER_REPAIR_NO_PROGRESS"):
+        require_compiler_repair_progress("class A {}", "class A {}", "cannot resolve symbol")
+    with pytest.raises(ValueError, match="JAVA_HOST_COMPILER_REPAIR_EMPTY"):
+        require_compiler_repair_progress("class A {}", "", "cannot resolve symbol")
+    assert require_compiler_repair_progress("class A {}", "class A { int n; }", "error")
