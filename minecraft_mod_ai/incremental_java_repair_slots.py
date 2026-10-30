@@ -151,12 +151,16 @@ def _replacement_operation(builder, operation):
     raise ValueError("JAVA_INCREMENTAL_REPAIR_OPERATION_UNAVAILABLE: " + operation)
 
 
+def _reject_recursive_helper_repair(builder, method):
+    if method["id"] == builder.member["id"]:
+        raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + method["id"])
+
+
 def create_helper(builder, node):
     from .incremental_java_declarations import author_declaration
     from .incremental_java_calls import _signature
     method = author_declaration(builder, "method")
-    if method["id"] == builder.member["id"]:
-        raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + method["id"])
+    _reject_recursive_helper_repair(builder, method)
     node["method"] = method["name"]
     node["generated_member_id"] = method["id"]
     node["receiver"] = "" if method["metadata"].get("static") else "this"
