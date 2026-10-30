@@ -12,6 +12,40 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+def _materialized_read_bindings(context: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """Reuse only canonical state accessors proven by actual declarations."""
+    import re
+    scope = context.get("host_state_work_order_scope") or {}
+    if not isinstance(scope, Mapping):
+        return {}
+    allowed = scope.get("declared_readable") or ()
+    if not isinstance(allowed, (list, tuple, set)):
+        return {}
+    allowed = {name for name in allowed if isinstance(name, str)}
+    result: dict[str, dict[str, str]] = {}
+    for row in context.get("host_state_access") or ():
+        if not isinstance(row, Mapping):
+            continue
+        owner = row.get("owner")
+        if not isinstance(owner, str) or not owner:
+            continue
+        for method in row.get("methods") or ():
+            if not isinstance(method, Mapping):
+                continue
+            symbol = method.get("name")
+            if not isinstance(symbol, str) or not symbol.startswith("readState_"):
+                continue
+            slot = symbol[len("readState_"):]
+            if (slot not in allowed
+                    or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", slot)
+                    or not isinstance(method.get("signature"), str)
+                    or not method["signature"].strip()):
+                continue
+            result[slot] = {"owner": owner, "method": symbol,
+                            "signature": method["signature"]}
+    return result
+
+
 def prepare_source_owned_strategy(
     context: Mapping[str, Any],
     behaviors: Sequence[Mapping[str, Any]],
@@ -25,6 +59,8 @@ def prepare_source_owned_strategy(
         graph = context["source_owned_work_graph"]
     else:
         obligations = []
+        existing_reads = _materialized_read_bindings(context)
+        reused_reads = {}
         inspected = callback_interfaces(
             context.get("symbols") or {}, side=side)
         for behavior in behaviors:
@@ -47,6 +83,10 @@ def prepare_source_owned_strategy(
             for name in dict.fromkeys(behavior.get("runtime_state_reads") or ()):
                 if not isinstance(name, str) or not name.strip():
                     raise ValueError("HOST_SOURCE_OBSERVATION_NAME_INVALID")
+                if (name in existing_reads
+                        and name in (behavior.get("state_reads") or ())):
+                    reused_reads.setdefault(owner, {})[name] = existing_reads[name]
+                    continue
                 obligations.append({
                     "behavior_id": owner,
                     "name": name,
@@ -75,12 +115,15 @@ def prepare_source_owned_strategy(
             producer_obligations=obligations,
             inspected_hooks=inspected,
         )
-    return {
+    result = {
         **context,
         "host_direct_feature_source": False,
         "host_source_owned": True,
         "source_owned_work_graph": graph,
     }
+    if not isinstance(context.get("source_owned_work_graph"), dict):
+        result["source_owned_reused_reads"] = reused_reads
+    return result
 
 
 def prefer_source_owned_strategy(
