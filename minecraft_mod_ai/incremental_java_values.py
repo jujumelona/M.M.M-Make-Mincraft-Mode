@@ -204,7 +204,8 @@ class ValueAuthor:
             finish_new_members(builder, before)
         finally:
             builder.value_stack = previous
-        return {"kind": "METHOD", "owner": member["owner"], "name": member["name"], **member["metadata"]}
+        return {"id": member["id"], "kind": "METHOD", "owner": member["owner"],
+                "name": member["name"], **member["metadata"]}
 
     def _generated_owner(self, owner):
         from .incremental_java_values_catalog import generated_type
@@ -219,7 +220,8 @@ class ValueAuthor:
 
     def _helper_value(self, contract):
         receiver = contract["owner"] if contract.get("static") else "this"
-        self.frame.update(receiver=receiver, receiver_type=contract["owner"], method=contract["name"], call_contract=_signature(contract))
+        self.frame.update(receiver=receiver, receiver_type=contract["owner"], method=contract["name"],
+                          call_contract=_signature(contract), generated_member_id=contract.get("id", ""))
         return self._invoke(self.frame)
 
     def _reference(self, expected):
