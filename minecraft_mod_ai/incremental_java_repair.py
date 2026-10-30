@@ -102,6 +102,13 @@ def _select_repair(builder, options):
     raise AssertionError("unreachable")
 
 
+def _validate_repaired_call(member, node):
+    """Compiler repair cannot reintroduce a direct recursive self-call."""
+    if node is not None:
+        from .incremental_java_author import _reject_active_self_call
+        _reject_active_self_call(member, node)
+
+
 def repair_incremental_program(router, source, diagnostic, *, program, spec, messages,
                                construction_context, behaviors):
     builder = IncrementalJavaBuilder(router, spec, messages, construction_context, behaviors, program=program)
@@ -122,10 +129,7 @@ def repair_incremental_program(router, source, diagnostic, *, program, spec, mes
     _count_attempt(builder, member, node, slot)
     builder.drafts = [node] if node else []
     _perform_repair(builder, member, node, slot, diagnostic)
-    # Compiler repair must not bypass the same active-self-call gate as normal authoring.
-    if node is not None:
-        from .incremental_java_author import _reject_active_self_call
-        _reject_active_self_call(member, node)
+    _validate_repaired_call(member, node)
     from .incremental_java_progress import finish_member
     while builder.pending:
         finish_member(builder, builder.pending.popleft())
