@@ -428,3 +428,60 @@ def test_mixin_manifest_wrong_environment_never_proves_runtime_source(
         read_verified_custom_event_receipts(
             project_root=tmp_path, symbols=SYMBOLS, behavior_ids=["buy_module"],
             package="example.generated", side=side)
+
+
+def test_custom_source_rebinding_retires_only_owned_obsolete_mixin(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod",
+                                    "mixins": ["unrelated.mixins.json"]}))
+    symbols = {**SYMBOLS, "replacementSite": {
+        "kind": "METHOD", "owner": "example.Transaction",
+        "name": "finishPurchase", "parameters": ["java.lang.String"],
+        "return_type": "boolean", "access": 1,
+    }}
+    arguments = dict(project_root=tmp_path, symbols=symbols,
+                     behavior_id="buy_module", package="example.generated")
+    previous = materialize_verified_custom_event(source_site_ref="opaqueMethod", **arguments)
+    current = materialize_verified_custom_event(source_site_ref="replacementSite", **arguments)
+    assert previous["mixin_config"] != current["mixin_config"]
+    assert all(not (tmp_path / path).exists() for path in previous["files"])
+    assert all((tmp_path / path).is_file() for path in current["files"])
+    registered = json.loads(manifest.read_text())["mixins"]
+    assert registered == ["unrelated.mixins.json", current["mixin_config"]]
+    verified = read_verified_custom_event_receipts(
+        project_root=tmp_path, symbols=symbols,
+        behavior_ids=["buy_module"], package="example.generated")
+    assert verified == [current["callback"]]
+    assert len(list((tmp_path / ".mmm/source-producers").glob("*.json"))) == 1
+
+
+def test_custom_rebinding_failure_rolls_back_previous_source(tmp_path, monkeypatch):
+    import minecraft_mod_ai.source_owned_custom_event as producer
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    symbols = {**SYMBOLS, "replacementSite": {
+        "kind": "METHOD", "owner": "example.Transaction",
+        "name": "finishPurchase", "parameters": ["java.lang.String"],
+        "return_type": "boolean", "access": 1,
+    }}
+    options = dict(project_root=tmp_path, symbols=symbols,
+                   behavior_id="buy_module", package="example.generated")
+    previous = materialize_verified_custom_event(source_site_ref="opaqueMethod", **options)
+    old_manifest = manifest.read_bytes()
+    atomic = producer._atomic_write
+    failed = []
+    def interrupt(path, content):
+        atomic(path, content)
+        if path.name.endswith(".json") and "source-producers" in str(path) and not failed:
+            failed.append(True)
+            raise OSError("rebinding receipt post-replace failed")
+    monkeypatch.setattr(producer, "_atomic_write", interrupt)
+    with pytest.raises(OSError, match="rebinding receipt post-replace failed"):
+        materialize_verified_custom_event(source_site_ref="replacementSite", **options)
+    assert failed
+    assert manifest.read_bytes() == old_manifest
+    assert all((tmp_path / path).read_text() == code for path, code in previous["files"].items())
+    assert len(list((tmp_path / ".mmm/source-producers").glob("*.json"))) == 1
