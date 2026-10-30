@@ -67,9 +67,9 @@ def _verified_event(event, allowed, behavior):
     if explicit and explicit != key:
         return False
     if checked.get("provenance") in {"verified_source_site_mixin", "host_typed_ui_action"}:
-        if checked.get("behavior_id") != behavior.get("behavior_id"):
-            return False
-    return True
+        return checked.get("behavior_id") == behavior.get("behavior_id")
+    from .source_owned_hook import _event_candidates_for_occurrence
+    return bool(_event_candidates_for_occurrence(behavior, [checked]))
 
 
 def _matching_registration(program, registrar, behavior, events):
