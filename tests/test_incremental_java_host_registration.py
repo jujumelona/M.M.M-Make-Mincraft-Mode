@@ -381,3 +381,21 @@ def test_host_registration_applies_to_stateless_features_too(monkeypatch):
     builder.author_block(member, {}, [], body=member["body"])
     assert calls == ["register"]
     assert [n["op"] for n in member["body"]] == ["register"]
+
+
+def test_live_llama_adapter_defaults_to_source_owned_graph_behind_router_proxy():
+    from minecraft_mod_ai.host_source_strategy import prefer_source_owned_strategy
+    from minecraft_mod_ai.incremental_java_registration_policy import host_registration_enabled
+
+    class Registry:
+        def role(self, profile, role):
+            assert (profile, role) == ("local", "coder")
+            return SimpleNamespace(adapter="llama_cpp")
+    direct = SimpleNamespace(profile="local", registry=Registry())
+    class Proxy:
+        def __getattr__(self, name):
+            return getattr(direct, name)
+    proxy = Proxy()
+    runtime = [{"behavior_id": "b1", "runtime_state_reads": ["world.location"]}]
+    assert prefer_source_owned_strategy(proxy, {}, runtime) is True
+    assert host_registration_enabled(SimpleNamespace(router=proxy, context={})) is True
