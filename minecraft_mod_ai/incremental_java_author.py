@@ -178,7 +178,12 @@ def _member_effect_edges(member, generated):
             dependencies.update(targets)
             if not targets:
                 effect = True
-        elif node.get("op") not in {"return", "constructor_call"}:
+        elif node.get("op") == "return":
+            # Returning a decision to a registered event can be the action.
+            # A pure helper returning a computed value cannot satisfy the
+            # caller's observable-behavior obligation by itself.
+            effect |= bool(member.get("event") and node.get("value"))
+        elif node.get("op") != "constructor_call":
             effect |= _node_has_potential_effect(node, local_names)
     return effect, dependencies
 
