@@ -174,12 +174,19 @@ def verify_job_binding(job, resolved, context):
 def _generator_source_context(job, *, spec, context, port_registry, base_dir):
     if base_dir is None or spec.get("language") != "java":
         return ()
-    from .request_runtime_records import generated_owner_source_context, verified_graph_java_source_paths
+    from .request_runtime_records import (
+        generated_owner_source_context, verified_graph_java_source_paths,
+        verified_completed_work_java_paths,
+    )
 
     required_paths = verified_graph_java_source_paths(
         job, context=context, port_registry=port_registry, project_root=base_dir,
     )
-    return generated_owner_source_context(base_dir, spec, required_paths=required_paths)
+    completed_paths = verified_completed_work_java_paths(
+        context, base_dir, target_path=spec["target_path"],
+    )
+    return generated_owner_source_context(
+        base_dir, spec, required_paths=(*required_paths, *completed_paths))
 
 
 def execute_generator_job(job, *, context, router, port_registry=None, base_dir=None):
