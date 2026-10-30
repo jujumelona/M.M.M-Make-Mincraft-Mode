@@ -47,11 +47,16 @@ def _callable_generated_method(member):
     return member.get("implementation_status") not in {"pending", "authoring"}
 
 
+def _matches_generated_call(row, owner, method):
+    return (row["kind"] == "method" and row["name"] == method
+            and _owner_matches(row["owner"], owner)
+            and _callable_generated_method(row))
+
+
 def _generated_methods(builder, owner, method):
     return [{"id": row["id"], "kind": "METHOD", "owner": row["owner"], "name": row["name"], **row["metadata"]}
             for row in builder.program.get("members", ())
-            if row["kind"] == "method" and row["name"] == method and _owner_matches(row["owner"], owner)
-            and _callable_generated_method(row)]
+            if _matches_generated_call(row, owner, method)]
 
 
 def _lookup_pages(api, query):
