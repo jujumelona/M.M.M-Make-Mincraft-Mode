@@ -594,3 +594,13 @@ def test_state_reader_with_unbound_context_parameter_is_not_reused():
         ]}],
     }
     assert _materialized_read_bindings(context) == {}
+
+
+def test_compiler_no_progress_detects_comment_and_formatting_only_rewrites():
+    from minecraft_mod_ai.incremental_java_pipeline import require_compiler_repair_progress
+    before = "package example; public class A { void go() { int x = 1; } }"
+    after = "package example;\npublic class A {\n // changed comment\nvoid go(){int x=1;}\n}"
+    with pytest.raises(ValueError, match="JAVA_HOST_COMPILER_REPAIR_TOKEN_NO_PROGRESS"):
+        require_compiler_repair_progress(before, after, "cannot find symbol")
+    actual = "package example; public class A { void go() { int x = 2; } }"
+    assert require_compiler_repair_progress(before, actual, "cannot find symbol") == actual
