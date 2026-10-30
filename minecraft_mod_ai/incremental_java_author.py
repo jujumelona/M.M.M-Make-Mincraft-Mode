@@ -320,7 +320,8 @@ class IncrementalJavaBuilder:
             # force a 9B coder to select 'register', page the event inventory,
             # and then remember to select 'complete'. This is deterministic
             # control flow, not a prompt or a retry limit.
-            if not path and member.get("registrar"):
+            from .incremental_java_registration_policy import host_registration_enabled
+            if not path and member.get("registrar") and host_registration_enabled(self):
                 from .incremental_java_work import _world_bound
                 from .incremental_java_progress import finish_new_members
                 if _world_bound(self, member):
