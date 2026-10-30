@@ -539,3 +539,46 @@ def test_source_owned_strategy_does_not_replay_conflicting_direct_author_prompt(
         behaviors=[behavior], legacy_author=capture,
     ) == "checked"
     assert json.loads(payload[0]["content"]) == original
+
+
+def test_custom_source_is_added_after_original_event_inventory_proved_irrelevant():
+    from minecraft_mod_ai.feature_source_work_graph import (
+        build_source_work_graph, bind_planned_custom_occurrence, bind_selected_hooks,
+    )
+    original = {"behavior_id": "b-transition",
+                "intent": "record original dimension arrival",
+                "trigger": "player enters a new dimension",
+                "effects": "record arrival"}
+    unrelated = {**_event(), "event_id": "example.PlayerDamage#AFTER_DAMAGE"}
+    graph = build_source_work_graph(
+        [original], producer_obligations=[], inspected_hooks=[unrelated])
+    assert not any(r["kind"] == "custom_event_source" for r in graph["tasks"])
+    planned = {"source_descriptor": "(Lnet/minecraft/server/level/ServerPlayer;)V",
+               "files": {"src/main/java/example/Trigger.java": "source"},
+               "callback": {**_event(), "event_id": "example.Trigger#EVENT"}}
+    amended = bind_planned_custom_occurrence(
+        graph, "b-transition", planned, "inspected:original-join")
+    source = next(r for r in amended["tasks"] if r["kind"] == "custom_event_source")
+    hook = next(r for r in amended["tasks"] if r["kind"] == "occurrence_hook")
+    assert source["task_id"] in hook["depends_on"]
+    assert source["status"] == "planned"
+    assert source["evidence"]["runtime_verified"] is False
+    bound = bind_selected_hooks(amended, {"b-transition": planned["callback"]})
+    assert any(r["kind"] == "occurrence_hook" and r["status"] == "source_selected"
+               for r in bound["tasks"])
+    assert bound["completion_verified"] is False
+
+
+def test_host_graph_flags_missing_semantic_occurrence_even_if_some_events_exist(monkeypatch):
+    from minecraft_mod_ai.host_source_strategy import prepare_source_owned_strategy
+    from minecraft_mod_ai import host_fabric_callback_abi
+    monkeypatch.setattr(host_fabric_callback_abi, "callback_interfaces",
+                        lambda *args, **kwargs: [_event()])
+    behavior = {"behavior_id": "b-transition",
+                "trigger": "player enters a new dimension",
+                "intent": "handle transition"}
+    graph = prepare_source_owned_strategy({"symbols": {}}, [behavior],
+                                          side="COMMON")["source_owned_work_graph"]
+    source = next(r for r in graph["tasks"] if r["kind"] == "custom_event_source")
+    hook = next(r for r in graph["tasks"] if r["kind"] == "occurrence_hook")
+    assert source["task_id"] in hook["depends_on"]
