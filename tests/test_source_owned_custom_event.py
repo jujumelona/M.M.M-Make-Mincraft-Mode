@@ -306,3 +306,49 @@ def test_materialized_custom_event_requires_real_byte_verified_registration(tmp_
             project_root=tmp_path, symbols=SYMBOLS,
             behavior_ids=["buy_module"], package="example.generated",
         )
+
+
+def test_source_publication_conflicting_receipt_has_no_side_effects(tmp_path):
+    import hashlib
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    original = json.dumps({"schemaVersion": 1, "id": "custommod", "mixins": []})
+    manifest.write_text(original)
+    digest = hashlib.sha256(b"buy_module\0opaqueMethod\0HEAD").hexdigest()[:16]
+    receipt = tmp_path / ".mmm/source-producers" / (digest + ".json")
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("conflict")
+    with pytest.raises(ValueError, match="SOURCE_SITE_RECEIPT_CONFLICT"):
+        materialize_verified_custom_event(
+            project_root=tmp_path, symbols=SYMBOLS, source_site_ref="opaqueMethod",
+            behavior_id="buy_module", package="example.generated")
+    assert manifest.read_text() == original
+    assert receipt.read_text() == "conflict"
+    assert all(not (tmp_path / name).exists() for name in _plan()["files"])
+
+
+@pytest.mark.parametrize("fail_path", ["manifest", "receipt"])
+def test_source_publication_rolls_back_post_replace_failure(tmp_path, monkeypatch, fail_path):
+    import minecraft_mod_ai.source_owned_custom_event as publisher
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    original = json.dumps({"schemaVersion": 1, "id": "custommod", "mixins": []})
+    manifest.write_text(original)
+    write = publisher._atomic_write
+    failed = []
+    def interrupted(path, contents):
+        write(path, contents)
+        category = ("manifest" if path == manifest else
+                    "receipt" if "source-producers" in str(path) else "source")
+        if category == fail_path and not failed:
+            failed.append(category)
+            raise RuntimeError("post-replace publication failure")
+    monkeypatch.setattr(publisher, "_atomic_write", interrupted)
+    with pytest.raises(RuntimeError, match="post-replace publication failure"):
+        materialize_verified_custom_event(
+            project_root=tmp_path, symbols=SYMBOLS, source_site_ref="opaqueMethod",
+            behavior_id="buy_module", package="example.generated")
+    assert failed == [fail_path]
+    assert manifest.read_text() == original
+    assert all(not (tmp_path / name).exists() for name in _plan()["files"])
+    assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
