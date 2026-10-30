@@ -269,7 +269,13 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # failure. Resume the whole candidate, then author only its failing
             # member against the latest compiler diagnostic.
             repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
-            for attempt in compile_attempts(direct_feature, budget):
+            # The source-owned fallback is a different compiler protocol,
+            # not an incremental AST. Never send its Java compilation errors
+            # to repair_incremental_program (there is no saved program), and
+            # never give it the incremental route's unlimited per-cell loop.
+            incremental_protocol = (direct_feature and
+                                    incremental_state.get("strategy") != "host_source_owned")
+            for attempt in compile_attempts(incremental_protocol, budget):
                 try:
                     _verify_full_source(source, spec, context, package=package,
                                         name=name, source_context=source_context)
@@ -284,11 +290,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         ) from compiler_error
                     _save_checkpoint(candidate, identifier, candidate_data(
                         source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
-                    if exhausted(direct_feature, attempt, budget):
+                    if exhausted(incremental_protocol, attempt, budget):
                         raise
                     repair_context = _repair_context(spec, context, name, owner, prompt,
                         state_access, behavior_rows, mutation_receipts, attempt)
-                    if direct_feature:
+                    if incremental_protocol:
                         from .incremental_java_pipeline import repair_member
                         source = repair_member(
                             repair_router, source, str(compiler_error),
