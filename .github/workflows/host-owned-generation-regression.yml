@@ -38,3 +38,4 @@ jobs:
           tests/test_source_owned_ui_event.py
           tests/test_source_owned_site_choice.py
           tests/test_construction_host_source.py
+          tests/test_host_source_publication.py
