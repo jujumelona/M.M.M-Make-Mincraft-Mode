@@ -310,8 +310,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # not an incremental AST. Never send its Java compilation errors
             # to repair_incremental_program (there is no saved program), and
             # never give it the incremental route's unlimited per-cell loop.
-            incremental_protocol = (direct_feature and
-                                    incremental_state.get("strategy") == "incremental_java")
+            from .incremental_java_pipeline import has_incremental_ast
+            incremental_protocol = has_incremental_ast(direct_feature, incremental_state)
             for attempt in compile_attempts(incremental_protocol, budget):
                 try:
                     verifier_context = (
