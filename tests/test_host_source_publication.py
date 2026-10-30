@@ -174,9 +174,10 @@ def test_actual_host_construction_rollback_boundary(tmp_path, monkeypatch, compi
             raise ValueError("mock javac error after event files were materialized")
     monkeypatch.setattr(host, "_verification_boundary", lambda: check)
     from minecraft_mod_ai.construction_host_source import compose_host_java_source
-    call = lambda: compose_host_java_source(
-        object(), spec, context, package="example", name="Bridge",
-        owner="example.Bridge", behaviors=[behavior])
+    def call():
+        return compose_host_java_source(
+            object(), spec, context, package="example", name="Bridge",
+            owner="example.Bridge", behaviors=[behavior])
     if not compiler_accepts:
         with pytest.raises(ValueError, match="mock javac error"):
             call()
