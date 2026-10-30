@@ -133,6 +133,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     saved_strategy = _read_checkpoint(strategy_path, identifier)
     if saved_strategy and saved_strategy.get("author_strategy") not in {
         "incremental_java", "host_source_owned", "host_member_author",
+        "host_verified_source", "host_rule_template",
     }:
         raise HostJavaConstructionError("JAVA_HOST_SAVED_STRATEGY_INVALID")
     source_owned_saved = saved_strategy.get("author_strategy") == "host_source_owned"
@@ -233,6 +234,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     effective_spec, contract, prompt["inspected_target_api"],
                     package=package, name=name, behaviors=behavior_rows,
                 )
+                if source is not None:
+                    incremental_state["strategy"] = "host_verified_source"
                 if source is None:
                     from .host_verified_entity_registry import (
                         verified_entity_registry_source,
@@ -242,6 +245,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         context.get("symbols") or {},
                         package=package, name=name, behaviors=behavior_rows,
                     )
+                if source is not None:
+                    incremental_state["strategy"] = "host_verified_source"
                 # Use a host-rendered semantic rule before opening the
                 # per-Java-operand model loop, but only for exact, inspected
                 # event bindings with no overlapping state/UI ownership.
@@ -264,6 +269,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             prerequisite_apis=prompt["materialized_prerequisite_api"],
                         )
                         rule_template_used = True
+                        incremental_state["strategy"] = "host_rule_template"
                         print("FEATURE_SOURCE_AUTHOR: " + json.dumps({
                             "owner": owner, "mode": "checked_host_rule_template",
                             "assigned_behaviors": len(behavior_rows),
@@ -305,7 +311,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # to repair_incremental_program (there is no saved program), and
             # never give it the incremental route's unlimited per-cell loop.
             incremental_protocol = (direct_feature and
-                                    incremental_state.get("strategy") != "host_source_owned")
+                                    incremental_state.get("strategy") == "incremental_java")
             for attempt in compile_attempts(incremental_protocol, budget):
                 try:
                     verifier_context = (
@@ -368,7 +374,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     mutation_receipts, ensure_ascii=False, sort_keys=True),
             })
         _save_checkpoint(strategy_path, identifier, {"author_strategy": (
-            (incremental_state.get("strategy") or "incremental_java")
+            (incremental_state.get("strategy") or "host_verified_source")
             if direct_feature else "host_member_author")})
         _save_checkpoint(checkpoint, identifier, {"source": source})
         candidate.unlink(missing_ok=True)
