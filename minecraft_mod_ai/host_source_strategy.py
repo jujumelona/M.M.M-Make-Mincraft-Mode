@@ -54,6 +54,7 @@ def prepare_source_owned_strategy(
 ) -> dict[str, Any]:
     from .feature_source_work_graph import build_source_work_graph
     from .host_fabric_callback_abi import callback_interfaces
+    from .source_owned_hook import _event_candidates_for_occurrence
 
     if isinstance(context.get("source_owned_work_graph"), dict):
         graph = context["source_owned_work_graph"]
@@ -70,7 +71,8 @@ def prepare_source_owned_strategy(
             # Without a single inspected callback, original occurrence
             # production must precede its listener. An empty ABI catalogue
             # cannot be solved by returning 'register' to the small AI.
-            if not inspected and not behavior.get("event_binding"):
+            matching_occurrence = _event_candidates_for_occurrence(behavior, inspected)
+            if not matching_occurrence and not behavior.get("event_binding"):
                 obligations.append({
                     "behavior_id": owner,
                     "reason": "no_inspected_callback",
