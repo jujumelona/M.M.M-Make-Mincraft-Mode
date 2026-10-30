@@ -270,6 +270,8 @@ def materialize_verified_custom_event(
         }
         receipt_path = root / ".mmm/source-producers" / (digest + ".json")
         expected_receipt = json.dumps(receipt, sort_keys=True, ensure_ascii=False) + "\n"
+        if receipt_path.is_symlink():
+            raise ValueError("SOURCE_SITE_RECEIPT_SYMLINK")
         if (receipt_path.exists() and
                 receipt_path.read_text(encoding="utf-8") != expected_receipt):
             raise ValueError("SOURCE_SITE_RECEIPT_CONFLICT")
