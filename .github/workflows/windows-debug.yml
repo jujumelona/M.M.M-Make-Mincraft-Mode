@@ -40,7 +40,10 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          # The full Windows 3.11 suite exercises JDK 21 compilation and
+          # the JVM owner/JDT bootstraps that require Java 25.
+          # Java 25 can compile earlier targets with --release 17/21.
+          java-version: "25"
 
       - name: Install debug dependencies
         run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
