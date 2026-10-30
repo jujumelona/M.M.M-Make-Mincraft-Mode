@@ -48,7 +48,7 @@ def _callable_generated_method(member):
 
 
 def _generated_methods(builder, owner, method):
-    return [{"kind": "METHOD", "owner": row["owner"], "name": row["name"], **row["metadata"]}
+    return [{"id": row["id"], "kind": "METHOD", "owner": row["owner"], "name": row["name"], **row["metadata"]}
             for row in builder.program.get("members", ())
             if row["kind"] == "method" and row["name"] == method and _owner_matches(row["owner"], owner)
             and _callable_generated_method(row)]
@@ -156,6 +156,8 @@ def author_call_arguments(builder, node) -> None:
     contract = _call_contract(builder, node)
     if contract is not None:
         node["call_contract"] = _signature(contract)
+        if contract.get("id"):
+            node["generated_member_id"] = contract["id"]
     types = _argument_types(builder, contract)
     node["arguments"] = []
     for index, expected in enumerate(types):
