@@ -245,3 +245,18 @@ def test_whole_feature_failure_restores_retired_custom_event_and_receipt(tmp_pat
         path.name: path.read_bytes()
         for path in (tmp_path / ".mmm/source-producers").glob("*.json")
     }
+
+
+def test_unrelated_compiler_failure_restores_checkpoint_without_event_plans(tmp_path):
+    # A normal Java compilation can be interrupted after its authorship or
+    # checkpoint is written, even when it did not create a new Fabric hook.
+    receipt = tmp_path / ".mmm/construction_host_files/owner.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("last accepted owner")
+    with pytest.raises(ValueError, match="persist failed"):
+        with source_publication_transaction(
+            project_root=tmp_path, symbols={}, records=[],
+            tracked_paths=(receipt,)):
+            receipt.write_text("unverified owner")
+            raise ValueError("persist failed")
+    assert receipt.read_text() == "last accepted owner"
