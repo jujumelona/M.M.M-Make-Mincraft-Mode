@@ -358,6 +358,7 @@ def materialize_verified_custom_event(
 def read_verified_custom_event_receipts(
     *, project_root: str | Path, symbols: Mapping, behavior_ids,
     package: str, side: str = "COMMON",
+    include_producer_paths: bool = False,
 ) -> list[dict]:
     """Reproduce each generated producer from its inspected origin and bytes.
 
@@ -407,5 +408,9 @@ def read_verified_custom_event_receipts(
                 raise ValueError("SOURCE_SITE_MATERIALIZED_FILE_MISSING")
             if path.read_text(encoding="utf-8") != contents:
                 raise ValueError("SOURCE_SITE_MATERIALIZED_FILE_MISMATCH")
-        checked[behavior_id] = expected["callback"]
+        callback = dict(expected["callback"])
+        if include_producer_paths:
+            callback["producer_source_paths"] = sorted(
+                path for path in expected["files"] if path.endswith(".java"))
+        checked[behavior_id] = callback
     return list(checked.values())
