@@ -94,12 +94,17 @@ def _inspected_call(node, symbols):
     if method.startswith(_READ_ONLY) or method in _OBSERVERS:
         return False
     params = tuple(parameter_types(contract))
+    # IncrementalJavaContext already caches a checked owner-specific ABI
+    # page. Avoid scanning the entire Minecraft symbol inventory for every
+    # generated statement (which can contain hundreds of thousands of rows).
+    rows = (row for _, row in symbols._member_options(owner)) if hasattr(
+        symbols, "_member_options") else symbols.values()
     return any(
         isinstance(row, Mapping) and row.get("kind") == "METHOD"
         and _owner_matches(row.get("owner"), owner) and row.get("name") == method
         and tuple(parameter_types(row)) == params
         and row.get("provenance") != "construction_plan"
-        for row in symbols.values()
+        for row in rows
     )
 
 
