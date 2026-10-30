@@ -83,7 +83,8 @@ def _bind_generated(row, declaration, java_type):
 def _declared_members(builder, declaration, kind):
     rows = []
     for member in builder.program.get("members", ()):
-        if member["kind"].upper() != kind or not _generated_matches(builder, declaration, member["owner"]):
+        if (member["kind"].upper() != kind or not _generated_matches(builder, declaration, member["owner"])
+                or kind == "METHOD" and member.get("implementation_status") in {"pending", "authoring"}):
             continue
         row = {"id": member["id"], "kind": kind, "owner": member["owner"],
                "name": member["name"], "purpose": member.get("purpose", ""), **member["metadata"]}
