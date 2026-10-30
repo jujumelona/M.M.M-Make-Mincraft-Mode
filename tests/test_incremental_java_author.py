@@ -180,8 +180,9 @@ def test_operand_requests_include_selected_call_prior_effects_and_enclosing_bran
     from minecraft_mod_ai.incremental_java_model import initial_scope
     builder.scope = initial_scope(builder.member)
     from minecraft_mod_ai.incremental_java_model import method_metadata
-    builder.new_method(owner="Feature", purpose="Apply both inputs", behavior=behavior, name="newHelper",
-                       metadata=method_metadata(parameters=[{"type": "int", "name": "arg0"}, {"type": "int", "name": "arg1"}]))
+    helper = builder.new_method(owner="Feature", purpose="Apply both inputs", behavior=behavior, name="newHelper",
+                                metadata=method_metadata(parameters=[{"type": "int", "name": "arg0"}, {"type": "int", "name": "arg1"}]))
+    helper["implementation_status"] = "complete"
     builder.drafts = [{"id": "guard", "op": "if", "condition": "ready", "body": []}]
     builder.block = [{"id": "prior", "op": "assign", "target": "this.stock", "operator": "+=", "value": "7"}]
     result = author_operation(builder, "call")
