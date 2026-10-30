@@ -135,11 +135,17 @@ def _assert_live_behavior_entrypoints(program):
 
 
 def _reject_current_self_call(member, node):
-    """Do not accept direct recursion while the member body is under construction."""
-    if (node is not None and node.get("op") == "call"
-            and node.get("method") == member.get("name")
-            and node.get("receiver") in {"", "this"}):
-        raise RuntimeError("JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"])
+    """Reject only the active overload, not every same-named Java method."""
+    if node is None or node.get("op") != "call":
+        return
+    if node.get("method") != member.get("name") or node.get("receiver") not in {"", "this"}:
+        return
+    from .java_operation_ir import parameter_types
+    contract = node.get("call_contract")
+    if contract and tuple(parameter_types(contract)) != tuple(
+            parameter_types(member.get("metadata") or {})):
+        return
+    raise RuntimeError("JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"])
 
 
 class IncrementalJavaBuilder:
