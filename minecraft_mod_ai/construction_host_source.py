@@ -319,6 +319,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             # never give it the incremental route's unlimited per-cell loop.
             from .incremental_java_pipeline import has_incremental_ast
             incremental_protocol = has_incremental_ast(direct_feature, incremental_state)
+            rejected_compiler_fingerprints = set()
             for attempt in compile_attempts(incremental_protocol, budget):
                 try:
                     verifier_context = (
@@ -329,6 +330,16 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     _verify_full_source(source, spec, verifier_context, package=package,
                                         name=name, source_context=source_context)
                 except (RuntimeError, ValueError, OSError) as compiler_error:
+                    # Stop A -> B -> A compiler oscillations even when every
+                    # immediate edit changed bytes. A SHA is an exact identity;
+                    # the token-level no-progress gate separately handles
+                    # formatting-only changes.
+                    rejected_sha = hashlib.sha256(source.encode()).hexdigest()
+                    if rejected_sha in rejected_compiler_fingerprints:
+                        raise HostJavaConstructionError(
+                            "JAVA_HOST_COMPILER_SOURCE_CYCLE: " + rejected_sha
+                        ) from compiler_error
+                    rejected_compiler_fingerprints.add(rejected_sha)
                     # A host-rendered rule is not an incremental Java program.
                     # Never send its diagnostic to the unrelated member repair
                     # loop or silently replace it with a different trigger.
