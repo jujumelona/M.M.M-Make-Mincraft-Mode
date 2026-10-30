@@ -239,6 +239,50 @@ def bind_planned_ui_occurrence(graph, behavior_id, produced):
     return amended
 
 
+def bind_planned_custom_occurrence(graph, behavior_id, produced, source_site_ref):
+    """Create the original source prerequisite even after a failed hook choice.
+
+    A nonempty Fabric inventory is not proof that any callback observes the
+    user request. Planning a custom Mixin after checking available events
+    must add the missing source-owner task and link it BEFORE the occurrence.
+    This remains a plan, not evidence that the files or mixin executed.
+    """
+    from copy import deepcopy
+    amended = deepcopy(dict(graph))
+    rows = amended["tasks"]
+    hook = next((r for r in rows if r.get("kind") == "occurrence_hook"
+                 and r.get("behavior_id") == behavior_id), None)
+    if hook is None:
+        raise ValueError("FEATURE_WORK_CUSTOM_OCCURRENCE_HOOK_MISSING")
+    source = next((r for r in rows if r.get("kind") == "custom_event_source"
+                   and r.get("behavior_id") == behavior_id), None)
+    if source is None:
+        identity = _id("custom_event_source", behavior_id)
+        if any(r["task_id"] == identity for r in rows):
+            raise ValueError("FEATURE_WORK_CUSTOM_SOURCE_COLLISION")
+        source = {"task_id": identity, "kind": "custom_event_source",
+                  "behavior_id": behavior_id, "name": "",
+                  "depends_on": [], "status": "planned", "evidence": {}}
+        rows.insert(rows.index(hook), source)
+    else:
+        source["status"] = "planned"
+    hook["depends_on"] = list(dict.fromkeys(
+        [source["task_id"], *hook.get("depends_on", ())]))
+    source["evidence"].update({
+        "source_kind": "inspected_custom_mixin",
+        "source_site_ref": str(source_site_ref),
+        "source_descriptor": produced["source_descriptor"],
+        "planned_paths": sorted(produced["files"]),
+        "runtime_verified": False,
+    })
+    hook["evidence"].setdefault("materialized_custom_event_ids", []).append(
+        produced["callback"]["event_id"])
+    hook["evidence"]["source_site_ref"] = str(source_site_ref)
+    amended["unverified_obligations"] = sum(
+        r.get("status") != "verified" for r in rows)
+    amended["completion_verified"] = False
+    return amended
+
 def member_source_work(graph: Mapping[str, Any], behavior_id: str, *, member_role: str) -> dict[str, Any]:
     """Provide just this member's hook/producer/effect ownership chain."""
     rows = [dict(row) for row in graph.get("tasks", ())
