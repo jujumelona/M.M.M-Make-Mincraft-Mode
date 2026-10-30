@@ -260,3 +260,15 @@ def test_late_guard_does_not_discard_other_valid_overloads(monkeypatch):
             "method": "otherHelper", "call_contract": {"parameters": []}}
     monkeypatch.setattr(operations, "author_operation", lambda *_: node)
     assert _safe_author_operation(builder, member, "call") == node
+
+
+def test_each_model_page_preserves_host_state_work_order():
+    """Gameplay obligations must survive the host-to-small-coder projection."""
+    builder = _builder(None)
+    scope = {"required_state_transition": "a verified gameplay state mutation",
+             "missing_producer": "author the state producer before the dependent effect"}
+    builder.api.context["host_state_work_order_scope"] = scope
+    viewed = builder.api.view(builder.member, builder.scope, builder.program)
+    assert viewed["host_state_work_order_scope"] == scope
+    assert "assigned_behavior" in viewed
+    assert "runtime_state_bindings" in viewed
