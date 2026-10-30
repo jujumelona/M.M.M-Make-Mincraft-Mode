@@ -43,12 +43,27 @@ def work_view(builder):
         "complete this method. Nested rejection returns remain available.")}
 
 
+def _initial_behavior_owner(builder, member):
+    """Recognize original work owners even if a resumed draft lost its registrar flag.
+
+    Initial behavior members have stable m1..mN identities. Helpers inherit
+    behavior context but receive new member identities and do not acquire the
+    original effect obligation merely by sharing that context.
+    """
+    identity = (member.get("id"), (member.get("behavior") or {}).get("behavior_id"))
+    return identity in {
+        ("m" + str(index), row.get("behavior_id"))
+        for index, row in enumerate(builder.api.behaviors, 1)
+    }
+
+
 def _owns_runtime_effect_obligation(builder, member, path):
-    """Only original occurrence owners must prove an effect in this method."""
+    """An original behavior owner or its actual listener must prove an effect."""
     return (not path and member.get("kind") == "method"
             and member.get("work_role") != "supporting_abi"
             and _world_bound(builder, member)
-            and bool(member.get("registrar") or member.get("event")))
+            and (bool(member.get("registrar") or member.get("event"))
+                 or _initial_behavior_owner(builder, member)))
 
 
 def work_options(builder, member, scope, path, body, options):
