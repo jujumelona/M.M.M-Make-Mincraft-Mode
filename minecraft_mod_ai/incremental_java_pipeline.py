@@ -71,7 +71,7 @@ def _verify_observable_program(context):
             behaviors = api.behaviors
             callbacks = api.callbacks()
             bindings = api.bindings
-            symbols = api.symbols
+            symbols = api
         else:
             behaviors = context.get("behaviors") or ()
             callbacks = context.get("verified_fabric_callbacks") or ()
