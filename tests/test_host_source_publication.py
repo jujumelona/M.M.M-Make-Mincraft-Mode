@@ -188,3 +188,24 @@ def test_actual_host_construction_rollback_boundary(tmp_path, monkeypatch, compi
         assert manifest.read_text() != original
         assert all((tmp_path / name).is_file() for name in plan["files"])
     assert len(observed) == 1
+
+
+def test_transaction_rolls_back_acceptance_receipts_and_previous_authorship(tmp_path):
+    manifest, initial = _workspace(tmp_path)
+    old_authorship = tmp_path / ".mmm/construction_authorship/example.json"
+    old_authorship.parent.mkdir(parents=True)
+    old_authorship.write_text("old verified source")
+    new_checkpoint = tmp_path / ".mmm/construction_host_files/generated.json"
+    records = [{"kind": "custom", "args": dict(_ARGS)}]
+    with pytest.raises(OSError, match="checkpoint failure"):
+        with source_publication_transaction(
+            project_root=tmp_path, symbols=_SYMBOLS, records=records,
+            tracked_paths=(old_authorship, new_checkpoint)):
+            old_authorship.write_text("new uncommitted source")
+            new_checkpoint.parent.mkdir(parents=True)
+            new_checkpoint.write_text("not durable")
+            raise OSError("checkpoint failure")
+    assert old_authorship.read_text() == "old verified source"
+    assert not new_checkpoint.exists()
+    assert manifest.read_text() == initial
+    assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
