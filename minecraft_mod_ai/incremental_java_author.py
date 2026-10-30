@@ -148,6 +148,25 @@ def _reject_current_self_call(member, node):
     raise RuntimeError("JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"])
 
 
+def _safe_author_operation(builder, member, operation):
+    """Convert an invalid self-delegation into another bounded model choice."""
+    from .incremental_java_operations import author_operation
+
+    node = author_operation(builder, operation)
+    try:
+        _reject_current_self_call(member, node)
+    except RuntimeError as exc:
+        if str(exc) != "JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"]:
+            raise
+        builder.rejection = {
+            "operand_diagnostic": str(exc),
+            "next_step": "Implement this method with a different call, assignment, "
+                         "or verified API. Calling the active method cannot implement it.",
+        }
+        return None
+    return node
+
+
 class IncrementalJavaBuilder:
     def __init__(self, router, spec, messages, context, behaviors, program=None):
         self.router, self.spec, self.context = router, spec, context
@@ -303,7 +322,6 @@ class IncrementalJavaBuilder:
         self._record_progress(member)
 
     def author_block(self, member, scope, path, body=None):
-        from .incremental_java_operations import author_operation
         from .incremental_java_declarations import author_declaration
         from .incremental_java_progress import finish_new_members
         previous = self.member, self.scope, self.path, self.block, self.current_operation
@@ -360,8 +378,7 @@ class IncrementalJavaBuilder:
                     continue
                 pending_before = len(self.pending)
                 progress_before = self._progress_epoch.get(member_id, 0)
-                node = author_operation(self, operation)
-                _reject_current_self_call(member, node)
+                node = _safe_author_operation(self, member, operation)
                 if node is None:
                     self._record_nonprogress(member)
                     continue

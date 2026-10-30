@@ -209,3 +209,66 @@ def test_active_helper_self_call_is_rejected_before_accepting_node():
         "op": "call", "receiver": "this", "method": "mmmHelper3",
         "call_contract": {"kind": "METHOD", "owner": "Feature",
                           "name": "mmmHelper3", "parameters": ["int"]}})
+
+
+def test_active_method_is_absent_from_actual_generated_value_call_page():
+    """Reproduce the exact model page that exposed m3 in production log 11."""
+    from minecraft_mod_ai.incremental_java_values_members import _generated_page
+    from minecraft_mod_ai.incremental_java_values_model import JavaReceiver
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    active = builder.new_method(owner=builder.program["class_name"],
+                                purpose="Work", behavior={},
+                                metadata=method_metadata(), name="mmmHelper3")
+    builder.member = active
+    active["implementation_status"] = "authoring"
+    other = builder.new_method(owner=active["owner"], purpose="Other work",
+                               behavior={}, metadata=method_metadata(), name="otherHelper")
+    receiver = JavaReceiver("this", active["owner"])
+    rows, total = _generated_page(builder, receiver, "METHOD", "", 0,
+                                  {"nonvoid": False, "writable": False})
+    assert active["id"] not in rows
+    assert other["id"] in rows
+    assert total == len(rows)
+
+
+def test_late_self_call_is_rejected_as_a_recoverable_choice(monkeypatch):
+    from minecraft_mod_ai.incremental_java_author import _safe_author_operation
+    from minecraft_mod_ai import incremental_java_operations as operations
+
+    builder = _builder(None)
+    member = builder.member
+    member["name"] = "mmmHelper3"
+    monkeypatch.setattr(operations, "author_operation", lambda *_: {
+        "id": "n90", "op": "call", "receiver": "this",
+        "method": "mmmHelper3", "call_contract": {"parameters": []}})
+    result = _safe_author_operation(builder, member, "call")
+    assert result is None
+    assert builder.rejection["operand_diagnostic"] == (
+        "JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"])
+
+
+def test_late_guard_does_not_discard_other_valid_overloads(monkeypatch):
+    from minecraft_mod_ai.incremental_java_author import _safe_author_operation
+    from minecraft_mod_ai import incremental_java_operations as operations
+
+    builder = _builder(None)
+    member = builder.member
+    member["name"] = "mmmHelper3"
+    node = {"id": "n91", "op": "call", "receiver": "this",
+            "method": "otherHelper", "call_contract": {"parameters": []}}
+    monkeypatch.setattr(operations, "author_operation", lambda *_: node)
+    assert _safe_author_operation(builder, member, "call") == node
+
+
+def test_each_model_page_preserves_host_state_work_order():
+    """Gameplay obligations must survive the host-to-small-coder projection."""
+    builder = _builder(None)
+    scope = {"required_state_transition": "a verified gameplay state mutation",
+             "missing_producer": "author the state producer before the dependent effect"}
+    builder.api.context["host_state_work_order_scope"] = scope
+    viewed = builder.api.view(builder.member, builder.scope, builder.program)
+    assert viewed["host_state_work_order_scope"] == scope
+    assert "assigned_behavior" in viewed
+    assert "runtime_state_bindings" in viewed
