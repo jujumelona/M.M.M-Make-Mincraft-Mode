@@ -76,10 +76,11 @@ def source_publication_transaction(*, project_root, symbols, records, tracked_pa
     Rejected javac repairs, omitted source evidence, cancelled model calls,
     and failed checkpoint persistence all roll back every producer file.
     """
-    if not records:
+    if not records and not tracked_paths:
         yield
         return
 
+    from contextlib import nullcontext
     from .project_write_lock import project_write_lock
     from .source_owned_custom_event import (
         _atomic_write, _producer_cross_process_lock, materialize_verified_custom_event,
@@ -87,11 +88,13 @@ def source_publication_transaction(*, project_root, symbols, records, tracked_pa
     from .source_owned_ui_event import materialize_typed_ui_occurrence
 
     root = Path(project_root).resolve()
-    with project_write_lock(root), _producer_cross_process_lock(
-        root / ".mmm/source-producer.lock"
-    ):
-        paths = sorted(set(_publication_paths(root, symbols, records)) | {
-            _safe_path(root, path) for path in tracked_paths})
+    producer_lock = (_producer_cross_process_lock(root / ".mmm/source-producer.lock")
+                     if records else nullcontext())
+    with project_write_lock(root), producer_lock:
+        paths = sorted(
+            (set(_publication_paths(root, symbols, records)) if records else set())
+            | {_safe_path(root, path) for path in tracked_paths}
+        )
         before = {path: path.read_bytes() if path.exists() else None for path in paths}
         try:
             for record in records:
