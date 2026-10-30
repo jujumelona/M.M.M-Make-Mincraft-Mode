@@ -155,6 +155,8 @@ def create_helper(builder, node):
     from .incremental_java_declarations import author_declaration
     from .incremental_java_calls import _signature
     method = author_declaration(builder, "method")
+    if method["id"] == builder.member["id"]:
+        raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + method["id"])
     node["method"] = method["name"]
     node["generated_member_id"] = method["id"]
     node["receiver"] = "" if method["metadata"].get("static") else "this"
