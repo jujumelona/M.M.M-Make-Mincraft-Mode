@@ -665,3 +665,17 @@ def test_generated_member_id_is_preserved_and_stale_ids_fail_closed():
         _assert_live_behavior_entrypoints({"members": [caller, generated]})
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
         _assert_live_behavior_entrypoints({"members": [caller]})
+
+
+def test_event_result_decision_is_not_confused_with_pure_helper_return():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    event = {"id": "m1", "kind": "method", "owner": "Feature", "name": "decide",
+             "metadata": method_metadata("boolean"),
+             "event": {"event_id": "demo.Events#ACTION"},
+             "body": [{"id": "n1", "op": "return", "value": "false"}]}
+    _assert_live_behavior_entrypoints({"members": [event]})
+    ordinary = {**event, "event": None, "registrar": True}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [ordinary]})
