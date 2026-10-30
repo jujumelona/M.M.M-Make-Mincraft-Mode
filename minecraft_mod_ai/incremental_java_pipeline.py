@@ -59,10 +59,25 @@ def repair_member(router, source, diagnostic, *, context):
 
 
 def _verify_observable_program(context):
-    program = (context.get("incremental_state") or {}).get("program")
+    state = context.get("incremental_state") or {}
+    program = state.get("program")
     if program:
         from .incremental_java_author import _assert_live_behavior_entrypoints
+        from .incremental_java_execution_proof import verify_incremental_feature_execution
+
         _assert_live_behavior_entrypoints(program)
+        api = state.get("api")
+        if api is not None:
+            behaviors = api.behaviors
+            callbacks = api.callbacks()
+            bindings = api.bindings
+            symbols = api.symbols
+        else:
+            behaviors = context.get("behaviors") or ()
+            callbacks = context.get("verified_fabric_callbacks") or ()
+            bindings = context.get("runtime_state_bindings") or {}
+            symbols = context.get("symbols") or {}
+        verify_incremental_feature_execution(program, behaviors, callbacks, bindings, symbols)
 
 
 def verify_full_source(source, spec, context, *, package, name, source_context=(), verifier, state_validators):
