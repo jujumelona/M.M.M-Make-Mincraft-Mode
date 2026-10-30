@@ -352,3 +352,27 @@ def test_source_publication_rolls_back_post_replace_failure(tmp_path, monkeypatc
     assert manifest.read_text() == original
     assert all(not (tmp_path / name).exists() for name in _plan()["files"])
     assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
+
+
+def test_target_compile_includes_verified_injection_class_not_just_event_owner(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    built = materialize_verified_custom_event(
+        project_root=tmp_path, symbols=SYMBOLS,
+        source_site_ref="opaqueMethod", behavior_id="buy_module",
+        package="example.generated")
+    verified = read_verified_custom_event_receipts(
+        project_root=tmp_path, symbols=SYMBOLS,
+        behavior_ids=["buy_module"], package="example.generated",
+        include_producer_paths=True)
+    assert len(verified) == 1
+    expected = sorted(path for path in built["files"] if path.endswith(".java"))
+    assert verified[0]["producer_source_paths"] == expected
+    assert len(expected) == 2
+    assert any("/mixin/" in path for path in expected)
+    original = read_verified_custom_event_receipts(
+        project_root=tmp_path, symbols=SYMBOLS,
+        behavior_ids=["buy_module"], package="example.generated")
+    assert original == [built["callback"]]
