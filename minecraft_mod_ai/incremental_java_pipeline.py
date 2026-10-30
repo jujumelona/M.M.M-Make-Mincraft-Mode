@@ -16,8 +16,25 @@ def _compose_source_owned(router, spec, messages, *,
         construction_context, behaviors,
         side=str(spec.get("side") or "COMMON").upper(),
     )
+    # Original prompt was assembled for the direct incremental route. Do not
+    # tell the fallback coder that its source is still an incremental AST.
+    # Rewrite only transport-mode metadata; preserve every original behavior,
+    # API witness, and implementation requirement byte-for-byte.
+    scoped_messages = []
+    for message in messages:
+        item = dict(message)
+        if item.get("role") == "user":
+            try:
+                parsed = json.loads(item.get("content") or "")
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("host_java_authoring") is True:
+                parsed["host_java_authoring"] = False
+                parsed["host_source_owned"] = True
+                item["content"] = json.dumps(parsed, ensure_ascii=False, default=str)
+        scoped_messages.append(item)
     return legacy_author(
-        router, spec, messages, source_context=source_context,
+        router, spec, scoped_messages, source_context=source_context,
         construction_context=host_context, behaviors=behaviors,
     )
 
