@@ -90,6 +90,33 @@ def select_event(builder):
             query, offset = page["query"], page["offset"]
 
 
+
+def select_original_occurrence(builder):
+    """Bind the original runtime occurrence in one checked host decision.
+
+    A registrar owns *wiring*, not event-index navigation. Asking the small
+    coder to page through all callbacks left production-logs (13) cycling
+    around an unrelated state cursor for 96 actions. An explicit ABI binding
+    needs zero inference; otherwise a single semantic planner selection
+    either supplies an inspected event or reports the missing source producer.
+    Never silently replace the requested occurrence with an arbitrary hook.
+    """
+    from .source_occurrence_error import SourceHookUnavailable
+    from .source_owned_hook import choose_source_hook
+
+    behavior = (builder.member or {}).get("behavior") or {}
+    behavior_id = str(behavior.get("behavior_id") or "")
+    if not behavior_id:
+        raise ValueError("SOURCE_HOOK_BEHAVIOR_REQUIRED")
+    inspected = builder.api.callbacks()
+    if not inspected:
+        raise SourceHookUnavailable(
+            behavior_id, reason="no_inspected_callback_requires_source_producer",
+            inspected=0,
+        )
+    return choose_source_hook(builder.router, behavior, inspected)
+
+
 def _matching(events, query):
     terms = re.findall(r"[a-z0-9_]+", str(query).lower())
     if not terms:
