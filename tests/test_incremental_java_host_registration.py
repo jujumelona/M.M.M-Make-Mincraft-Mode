@@ -399,3 +399,39 @@ def test_live_llama_adapter_defaults_to_source_owned_graph_behind_router_proxy()
     runtime = [{"behavior_id": "b1", "runtime_state_reads": ["world.location"]}]
     assert prefer_source_owned_strategy(proxy, {}, runtime) is True
     assert host_registration_enabled(SimpleNamespace(router=proxy, context={})) is True
+
+
+def test_host_source_without_checked_fabric_index_is_never_marked_compiled():
+    from minecraft_mod_ai.construction_file_author import (
+        _verify_full_source, ConstructionFileError,
+    )
+
+    source = "package example; public class Feature { void implementation() {} }"
+    spec = {"target_path": "src/main/java/example/Feature.java",
+            "bindings": {"request_feature_entrypoint": True}}
+    context = {"java_classpath": ["/fake"], "symbols": {},
+               "host_source_owned": True,
+               "host_direct_feature_source": False}
+    with pytest.raises(ConstructionFileError, match="SOURCE_OWNED_INSPECTED_ABI_REQUIRED"):
+        _verify_full_source(source, spec, context, package="example", name="Feature")
+
+
+@pytest.mark.parametrize("strategy,valid", [
+    ("host_source_owned", False),
+    ("host_verified_source", False),
+    ("host_rule_template", False),
+    (None, False),
+    ("incremental_java", True),
+])
+def test_only_real_ast_strategy_can_use_unbounded_incremental_repairs(strategy, valid):
+    from minecraft_mod_ai.incremental_java_pipeline import has_incremental_ast
+    state = {"strategy": strategy}
+    if valid:
+        state["program"] = {"schema": "mmm/incremental-java-v1", "members": []}
+    assert has_incremental_ast(True, state) is valid
+
+
+def test_ast_strategy_requires_a_saved_program_not_just_a_route_label():
+    from minecraft_mod_ai.incremental_java_pipeline import has_incremental_ast
+    with pytest.raises(ValueError, match="JAVA_HOST_INCREMENTAL_AST_MISSING"):
+        has_incremental_ast(True, {"strategy": "incremental_java"})
