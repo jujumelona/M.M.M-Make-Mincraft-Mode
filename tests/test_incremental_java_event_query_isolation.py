@@ -143,3 +143,16 @@ def test_missing_runtime_callback_is_not_permission_for_a_noop_registrar():
     result = work_options(builder, builder.member, builder.scope, [], [],
                           ["register", "lookup", "call", "complete"])
     assert result == ["register"]
+
+
+def test_native_runtime_write_remains_a_world_obligation_without_a_binding():
+    from minecraft_mod_ai.incremental_java_work import _world_bound, work_options
+    from test_incremental_java_work_ownership import _world_builder
+
+    builder = _world_builder()
+    builder.member["behavior"] = {
+        "behavior_id": "b1", "runtime_state_writes": ["Unbound new mechanic"]}
+    builder.api.bindings.clear()
+    assert _world_bound(builder, builder.member)
+    assert work_options(builder, builder.member, builder.scope, [], [],
+                        ["lookup", "register", "complete", "local"]) == ["register"]
