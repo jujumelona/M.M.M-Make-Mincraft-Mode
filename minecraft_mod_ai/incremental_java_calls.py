@@ -156,13 +156,17 @@ def _argument_types(builder, contract):
     return [*fixed, *([component] * (count - len(fixed)))]
 
 
+def _bind_generated_call_provenance(node, contract):
+    if contract.get("id"):
+        node["generated_member_id"] = contract["id"]
+
+
 def author_call_arguments(builder, node) -> None:
     """Use an exact selected signature when known; unknown calls remain authorable."""
     contract = _call_contract(builder, node)
     if contract is not None:
         node["call_contract"] = _signature(contract)
-        if contract.get("id"):
-            node["generated_member_id"] = contract["id"]
+        _bind_generated_call_provenance(node, contract)
     types = _argument_types(builder, contract)
     node["arguments"] = []
     for index, expected in enumerate(types):
