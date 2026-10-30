@@ -40,7 +40,10 @@ def work_options(builder, member, scope, path, body, options):
             or not _world_bound(builder, member)):
         return options
     if _needs_observation(builder, member, body):
-        return [op for op in options if op in {"register", "lookup"}]
+        # The indexed callback selector owns event search/pagination. Generic
+        # Java lookup cannot install an occurrence hook and was selected 32
+        # times before the production model tried the actual event selector.
+        return [op for op in options if op == "register"]
     if _member_has_potential_effect({**member, "body": body}):
         return options
     blocked = {"complete"}
