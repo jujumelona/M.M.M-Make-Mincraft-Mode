@@ -172,10 +172,13 @@ def _resolve_declined_registration(builder, event):
 
 
 def _register(builder, node):
-    from .incremental_java_events import select_event
-    event = _resolve_declined_registration(builder, select_event(builder))
-    if event is None:
-        return False
+    from .incremental_java_events import select_original_occurrence
+    # The host resolves an original observation from inspected Fabric APIs.
+    # The small coder must not spend gameplay-operation turns browsing event
+    # menus, cancelling a source requirement, or choosing a convenient but
+    # semantically unrelated listener. A missing hook becomes an explicit
+    # producer obligation instead of a 96-turn no-progress loop.
+    event = select_original_occurrence(builder)
     from .incremental_java_model import method_metadata
     from .first_pass_java_declarations import callback_parameter_metadata
     metadata = method_metadata(event["return_type"], callback_parameter_metadata(event))
