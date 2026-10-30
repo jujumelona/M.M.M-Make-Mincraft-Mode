@@ -29,6 +29,30 @@ def _repair_runtime_bindings(spec, receipts):
         "runtime_state_bindings_json") or "{}"), receipts)
 
 
+def _prime_direct_source_proof(context, spec, root, package, behaviors):
+    """Rebuild checked occurrence evidence on authoring and cached replay."""
+    from .host_fabric_callback_abi import callback_interfaces
+    from .source_owned_custom_event import read_verified_custom_event_receipts
+    from .source_owned_ui_event import read_verified_typed_ui_events
+
+    side = str(spec.get("side") or "COMMON").upper()
+    context["behaviors"] = [dict(row) for row in behaviors]
+    context["runtime_state_bindings"] = json.loads(
+        (spec.get("bindings") or {}).get("runtime_state_bindings_json") or "{}")
+    if "verified_fabric_callbacks" not in context:
+        context["verified_fabric_callbacks"] = callback_interfaces(
+            context.get("symbols") or {}, side=side)
+    context["verified_source_events"] = [
+        *read_verified_custom_event_receipts(
+            project_root=root, symbols=context.get("symbols") or {},
+            behavior_ids=[row["behavior_id"] for row in behaviors],
+            package=package, side=side),
+        *read_verified_typed_ui_events(
+            project_root=root, symbols=context.get("symbols") or {},
+            behaviors=behaviors, package=package, side=side),
+    ]
+
+
 def _build_host_java_prompt(router, spec: dict, context: dict, *,
                             package: str, name: str, owner: str,
                             behaviors, source_context):
@@ -134,9 +158,18 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     with _claim_checkpoint(checkpoint):
         saved = _read_checkpoint(checkpoint, identifier)
         if saved:
-            if set(saved) != {"source"} or not isinstance(saved["source"], str):
-                raise HostJavaConstructionError("JAVA_HOST_CHECKPOINT_INVALID")
+            allowed = {"source", "program_json"} if direct_feature else {"source"}
+            if (set(saved) != allowed or not isinstance(saved.get("source"), str)
+                    or direct_feature and not isinstance(saved.get("program_json"), str)):
+                saved = {}
+        if saved:
             try:
+                if direct_feature:
+                    program = json.loads(saved["program_json"])
+                    if not isinstance(program, dict) or program.get("schema") != "mmm/incremental-java-v1":
+                        raise ValueError("JAVA_HOST_SAVED_PROGRAM_INVALID")
+                    incremental_state["program"] = program
+                    _prime_direct_source_proof(context, spec, root, package, behaviors)
                 _verify_full_source(saved["source"], spec, context,
                     package=package, name=name, source_context=source_context)
                 if required_native:
@@ -161,19 +194,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         )
         context["host_state_access"] = state_access
         if direct_feature:
-            from .source_owned_custom_event import read_verified_custom_event_receipts
-            from .source_owned_ui_event import read_verified_typed_ui_events
-
-            side = str(spec.get("side") or "COMMON").upper()
-            context["verified_source_events"] = [
-                *read_verified_custom_event_receipts(
-                    project_root=root, symbols=context.get("symbols") or {},
-                    behavior_ids=[row["behavior_id"] for row in behavior_rows],
-                    package=package, side=side),
-                *read_verified_typed_ui_events(
-                    project_root=root, symbols=context.get("symbols") or {},
-                    behaviors=behavior_rows, package=package, side=side),
-            ]
+            _prime_direct_source_proof(context, spec, root, package, behavior_rows)
             from .host_fabric_callback_abi import callback_interfaces
 
             bindings = spec.get("bindings", {})
@@ -341,7 +362,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "receipts_json": json.dumps(
                     mutation_receipts, ensure_ascii=False, sort_keys=True),
             })
-        _save_checkpoint(checkpoint, identifier, {"source": source})
+        persisted = {"source": source}
+        if direct_feature and incremental_state.get("program"):
+            persisted["program_json"] = json.dumps(
+                incremental_state["program"], ensure_ascii=False, separators=(",", ":"))
+        _save_checkpoint(checkpoint, identifier, persisted)
         candidate.unlink(missing_ok=True)
         print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
             "target_path": spec["target_path"], "owner": owner,
