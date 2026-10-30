@@ -506,3 +506,66 @@ def test_literal_array_count_is_bounded_before_generating_elements(monkeypatch):
 
     monkeypatch.setattr(forms, "count", bounded_count)
     assert ValueForms(Author())._array_elements("int[]") == "new int[] {}"
+
+
+
+def test_active_and_pending_generated_methods_are_hidden_from_call_catalogs():
+    from minecraft_mod_ai.incremental_java_calls import _generated_methods
+    from minecraft_mod_ai.incremental_java_values_catalog import generated_members
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    builder.member["implementation_status"] = "authoring"
+    owner = builder.program["class_name"]
+    for member_id, status in (("m3", "pending"), ("m4", "authoring"), ("m5", "complete")):
+        builder.program["members"].append({
+            "id": member_id, "owner": owner, "kind": "method",
+            "name": "helper" + member_id, "body": [],
+            "metadata": method_metadata(), "purpose": "Reusable operation",
+            "implementation_status": status,
+        })
+    names = {row["name"] for row in generated_members(builder, owner, "METHOD")}
+    # Incomplete members remain in the program but may not be called.
+    assert {"helperm3", "helperm4", "helperm5"} <= names
+    from minecraft_mod_ai.incremental_java_values_members import _generated_page
+    from minecraft_mod_ai.incremental_java_values_model import JavaReceiver
+    receiver = JavaReceiver("this", owner)
+    visible, total = _generated_page(builder, receiver, "METHOD", "", 0, {})
+    assert total >= 1
+    assert {row["name"] for row in visible.values()}.isdisjoint({"helperm3", "helperm4"})
+    assert any(row["name"] == "helperm5" for row in visible.values())
+    assert _generated_methods(builder, owner, "helperm3") == []
+    assert _generated_methods(builder, owner, "helperm4") == []
+    assert len(_generated_methods(builder, owner, "helperm5")) == 1
+
+
+def test_generated_helper_cycle_is_not_observable_behavior():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    call = lambda name: {"id": "n1", "op": "call", "receiver": "this",
+                         "method": name, "arguments": []}
+    callback = {"id": "m1", "owner": "Feature", "kind": "method", "name": "eventCallback",
+                "metadata": method_metadata(), "registrar": True,
+                "body": [call("helperOne")]}
+    helper_one = {"id": "m2", "owner": "Feature", "kind": "method", "name": "helperOne",
+                  "metadata": method_metadata(), "body": [call("helperTwo")]}
+    helper_two = {"id": "m3", "owner": "Feature", "kind": "method", "name": "helperTwo",
+                  "metadata": method_metadata(), "body": [call("helperOne")]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback, helper_one, helper_two]})
+    helper_two["body"] = [{"id": "n2", "op": "assign",
+                           "target": "this.worldState", "value": "1"}]
+    _assert_live_behavior_entrypoints({"members": [callback, helper_one, helper_two]})
+
+
+def test_externally_effectful_call_does_not_require_generated_helper():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    callback = {"id": "m1", "owner": "Feature", "kind": "method", "name": "eventCallback",
+                "metadata": method_metadata(), "event": {"event_id": "ACTION"},
+                "body": [{"id": "n1", "op": "call", "receiver": "world",
+                          "receiver_type": "net.minecraft.world.World",
+                          "method": "setBlockState", "arguments": ["position", "state"]}]}
+    _assert_live_behavior_entrypoints({"members": [callback]})
