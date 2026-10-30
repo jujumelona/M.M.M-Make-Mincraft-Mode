@@ -722,3 +722,19 @@ def test_incremental_registrar_policy_distinguishes_source_acquisition_from_prer
     builder.member["behavior"] = {
         "behavior_id": "untriggered-state", "runtime_state_writes": ["world mutation"]}
     assert work_options(builder, builder.member, builder.scope, [], [], baseline) == ["register"]
+
+
+def test_same_behavior_id_with_changed_trigger_or_effect_fails_closed():
+    import json
+    from minecraft_mod_ai.construction_host_source import (
+        _exact_behavior_verification_spec, HostJavaConstructionError)
+    original = [{"behavior_id": "same-id", "trigger": "old event",
+                 "effects": "old state write"}]
+    spec = {"bindings": {
+        "request_feature_entrypoint": True,
+        "construction_behaviors_json": json.dumps(original)}}
+    modified = [{"behavior_id": "same-id", "trigger": "new event",
+                 "effects": "different state write"}]
+    with pytest.raises(HostJavaConstructionError, match="CONTRACT_MISMATCH"):
+        _exact_behavior_verification_spec(spec, modified)
+    assert _exact_behavior_verification_spec(spec, original) is spec
