@@ -256,26 +256,9 @@ def materialize_verified_custom_event(
             behavior_id=behavior_id, package=package, mod_id=metadata["id"],
             at=at, side=side, java_version=java_version,
         )
-        for relative, contents in result["files"].items():
-            path = (root / relative).resolve()
-            if not path.is_relative_to(root) or path.is_symlink():
-                raise ValueError("SOURCE_SITE_PATH_UNSAFE")
-            if path.exists() and path.read_text(encoding="utf-8") != contents:
-                raise ValueError("SOURCE_SITE_EXISTING_FILE_CONFLICT: " + relative)
-        for relative, contents in result["files"].items():
-            path = root / relative
-            if not path.exists():
-                _atomic_write(path, contents)
-        manifest_entry = ({"config": result["mixin_config"], "environment": "client"}
-                          if side == "CLIENT" else result["mixin_config"])
-        if not any((x if isinstance(x, str) else x.get("config"))
-                   == result["mixin_config"] for x in mixins):
-            metadata["mixins"] = [*mixins, manifest_entry]
-            _atomic_write(
-                manifest, json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
-            )
-        # Proof receipt is written last: it may be trusted only after a
-        # fresh re-render and byte-for-byte check of source + mixin manifest.
+        # Validate the COMPLETE publication contract before writing the first
+        # source file. A pre-existing incompatible receipt must never leave a
+        # new Mixin in fabric.mod.json without matching provenance.
         digest = hashlib.sha256(
             (behavior_id + "\0" + source_site_ref + "\0" + at).encode()
         ).hexdigest()[:16]
@@ -287,10 +270,66 @@ def materialize_verified_custom_event(
         }
         receipt_path = root / ".mmm/source-producers" / (digest + ".json")
         expected_receipt = json.dumps(receipt, sort_keys=True, ensure_ascii=False) + "\n"
-        if receipt_path.exists() and receipt_path.read_text(encoding="utf-8") != expected_receipt:
+        if (receipt_path.exists() and
+                receipt_path.read_text(encoding="utf-8") != expected_receipt):
             raise ValueError("SOURCE_SITE_RECEIPT_CONFLICT")
-        if not receipt_path.exists():
-            _atomic_write(receipt_path, expected_receipt)
+        for relative, contents in result["files"].items():
+            path = (root / relative).resolve()
+            if not path.is_relative_to(root) or path.is_symlink():
+                raise ValueError("SOURCE_SITE_PATH_UNSAFE")
+            if path.exists() and path.read_text(encoding="utf-8") != contents:
+                raise ValueError("SOURCE_SITE_EXISTING_FILE_CONFLICT: " + relative)
+        original_manifest = manifest.read_text(encoding="utf-8")
+        manifest_entry = ({"config": result["mixin_config"], "environment": "client"}
+                          if side == "CLIENT" else result["mixin_config"])
+        should_register = not any(
+            (item if isinstance(item, str) else item.get("config"))
+            == result["mixin_config"] for item in mixins
+        )
+        if should_register:
+            metadata["mixins"] = [*mixins, manifest_entry]
+        new_manifest = (json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
+                        if should_register else original_manifest)
+        created_files = []
+        receipt_created = False
+        try:
+            for relative, contents in result["files"].items():
+                path = root / relative
+                if not path.exists():
+                    _atomic_write(path, contents)
+                    created_files.append((path, contents))
+            if should_register:
+                _atomic_write(manifest, new_manifest)
+            if not receipt_path.exists():
+                _atomic_write(receipt_path, expected_receipt)
+                receipt_created = True
+        except Exception:
+            # One failed write cannot publish a partially registered Mixin.
+            # The two locks exclude concurrent publishers while rolling back.
+            # Restore only exact bytes we just wrote; do not erase a
+            # conflicting update performed outside this transaction.
+            incomplete = []
+            if receipt_created and receipt_path.is_file():
+                if receipt_path.read_text(encoding="utf-8") == expected_receipt:
+                    receipt_path.unlink()
+                else:
+                    incomplete.append(str(receipt_path))
+            if should_register and manifest.is_file():
+                current = manifest.read_text(encoding="utf-8")
+                if current == new_manifest:
+                    _atomic_write(manifest, original_manifest)
+                elif current != original_manifest:
+                    incomplete.append(str(manifest))
+            for path, contents in reversed(created_files):
+                if path.is_file() and path.read_text(encoding="utf-8") == contents:
+                    path.unlink()
+                elif path.exists():
+                    incomplete.append(str(path))
+            if incomplete:
+                raise RuntimeError(
+                    "SOURCE_SITE_PUBLICATION_ROLLBACK_INCOMPLETE: "
+                    + ", ".join(incomplete))
+            raise
     return result
 
 
