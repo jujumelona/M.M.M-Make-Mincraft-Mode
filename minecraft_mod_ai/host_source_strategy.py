@@ -68,3 +68,32 @@ def prepare_source_owned_strategy(
         "host_source_owned": True,
         "source_owned_work_graph": graph,
     }
+
+
+def prefer_source_owned_strategy(
+    router: Any,
+    context: Mapping[str, Any],
+    behaviors: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Select the constructive host graph *before* a fragile AI loop.
+
+    Only live constrained llama.cpp coders default to this route; mock and
+    non-local transport fixtures keep their historical Java-AST protocol.
+    This depends on the actual original state contract, not any game's
+    vocabulary or a prompt-specific list of mechanics. The caller can
+    explicitly override the strategy for reproducible integration tests.
+    """
+    preference = context.get("prefer_host_source_owned")
+    if preference is not None:
+        if type(preference) is not bool:
+            raise ValueError("HOST_SOURCE_PREFERENCE_INVALID")
+        return preference
+    from .fixed_template_generation import _adapter_name
+    return (
+        _adapter_name(router, "coder") == "llama_cpp"
+        and any(
+            behavior.get("runtime_state_reads")
+            or behavior.get("runtime_state_writes")
+            for behavior in behaviors
+        )
+    )
