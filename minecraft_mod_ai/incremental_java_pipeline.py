@@ -54,13 +54,17 @@ def candidate_data(source, diagnostic, state):
         result["strategy"] = strategy
     if strategy != "host_source_owned" and state.get("program"):
         result["program_json"] = json.dumps(state["program"], ensure_ascii=False, separators=(",", ":"))
+    if strategy == "host_source_owned":
+        receipts = state.get("native_mutation_receipts") or []
+        result["native_mutation_receipts_json"] = json.dumps(
+            receipts, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return result
 
 
 def load_candidate(pending, state, direct):
     if not pending:
         return pending
-    allowed = {"source", "diagnostic", "program_json", "strategy"}
+    allowed = {"source", "diagnostic", "program_json", "strategy", "native_mutation_receipts_json"}
     if set(pending) - allowed or not {"source", "diagnostic"} <= set(pending):
         raise ValueError("JAVA_HOST_CANDIDATE_INVALID")
     strategy = pending.get("strategy")
@@ -69,7 +73,14 @@ def load_candidate(pending, state, direct):
     if strategy == "host_source_owned":
         if not direct or "program_json" in pending:
             raise ValueError("JAVA_HOST_SOURCE_OWNERSHIP_CANDIDATE_INVALID")
+        raw = pending.get("native_mutation_receipts_json")
+        if not isinstance(raw, str):
+            raise ValueError("JAVA_HOST_SOURCE_NATIVE_PROOF_MISSING")
+        receipts = json.loads(raw)
+        if not isinstance(receipts, list) or not all(isinstance(x, dict) for x in receipts):
+            raise ValueError("JAVA_HOST_SOURCE_NATIVE_PROOF_INVALID")
         state.pop("program", None)
+        state["native_mutation_receipts"] = receipts
         state["strategy"] = strategy
         return pending
     if direct:
