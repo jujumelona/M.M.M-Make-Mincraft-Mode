@@ -506,3 +506,65 @@ def test_literal_array_count_is_bounded_before_generating_elements(monkeypatch):
 
     monkeypatch.setattr(forms, "count", bounded_count)
     assert ValueForms(Author())._array_elements("int[]") == "new int[] {}"
+
+
+
+def test_empty_generated_helper_call_cannot_certify_fabric_callback():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+
+    callback = {"id": "m2", "kind": "method", "owner": "Feature",
+                "name": "onUse", "metadata": {"parameters": []},
+                "event": {"event_id": "demo.Events#USE"},
+                "body": [{"id": "n1", "op": "call", "receiver": "this",
+                          "method": "mmmHelper3", "arguments": []}]}
+    helper = {"id": "m3", "kind": "method", "owner": "Feature",
+              "name": "mmmHelper3", "metadata": {"parameters": []},
+              "body": [{"id": "n2", "op": "local", "type": "int",
+                        "name": "mmmValue1", "value": "0"},
+                       {"id": "n3", "op": "assign", "operator": "=",
+                        "target": "mmmValue1", "value": "1"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback, helper]})
+    # A genuine generated state mutation is reachable from the callback.
+    helper["body"].append({"id": "n4", "op": "assign", "operator": "+=",
+                           "target": "this.counter", "value": "1"})
+    _assert_live_behavior_entrypoints({"members": [callback, helper]})
+
+
+def test_pure_helper_returns_and_mutual_recursion_are_not_gameplay_effects():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+
+    callback = {"id": "m2", "kind": "method", "owner": "Feature",
+                "name": "onUse", "metadata": {},
+                "event": {"event_id": "demo.Events#USE"},
+                "body": [{"id": "n1", "op": "call", "receiver": "this",
+                          "method": "mmmHelper3"}]}
+    first = {"id": "m3", "kind": "method", "owner": "Feature",
+             "name": "mmmHelper3", "metadata": {},
+             "body": [{"id": "n2", "op": "call", "receiver": "this",
+                       "method": "mmmHelper4"}]}
+    second = {"id": "m4", "kind": "method", "owner": "Feature",
+              "name": "mmmHelper4", "metadata": {},
+              "body": [{"id": "n3", "op": "call", "receiver": "this",
+                        "method": "mmmHelper3"},
+                       {"id": "n4", "op": "return", "value": "1"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback, first, second]})
+
+
+def test_unknown_external_api_call_remains_possible_effect():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+
+    callback = {"id": "m2", "kind": "method", "owner": "Feature",
+                "name": "onUse", "metadata": {},
+                "event": {"event_id": "demo.Events#USE"},
+                "body": [{"id": "n1", "op": "call", "receiver": "world",
+                          "method": "setBlock", "arguments": ["pos", "state"]}]}
+    _assert_live_behavior_entrypoints({"members": [callback]})
+
+
+def test_windows_debug_uses_java_capable_of_target_21_and_owner_25():
+    from pathlib import Path
+    config = (Path(__file__).resolve().parents[1] /
+              ".github/workflows/windows-debug.yml").read_text(encoding="utf-8")
+    assert 'java-version: "25"' in config
