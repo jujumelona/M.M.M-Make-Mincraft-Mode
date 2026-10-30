@@ -414,6 +414,26 @@ def read_verified_custom_event_receipts(
         )
         if expected["mixin_config"] not in names:
             raise ValueError("SOURCE_SITE_MIXIN_NOT_REGISTERED")
+        # Fabric can list a config on the wrong environment while its source
+        # and receipt bytes remain untouched. In that case the intended
+        # client/server event NEVER fires even though Java compilation passes.
+        registration = [
+            entry for entry in present
+            if (entry if isinstance(entry, str) else entry.get("config"))
+            == expected["mixin_config"]
+        ]
+        if side == "CLIENT":
+            admitted = any(isinstance(entry, dict)
+                           and entry.get("environment") == "client"
+                           for entry in registration)
+        else:
+            admitted = any(
+                isinstance(entry, str)
+                or (isinstance(entry, dict)
+                    and entry.get("environment") in {"server", "*"})
+                for entry in registration)
+        if not admitted:
+            raise ValueError("SOURCE_SITE_MIXIN_ENVIRONMENT_MISMATCH")
         for name, contents in expected["files"].items():
             path = _checked_source_target(root, name)
             if not path.is_file():
