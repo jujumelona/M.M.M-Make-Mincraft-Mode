@@ -704,3 +704,21 @@ def test_non_host_ast_fixture_can_author_state_before_original_event_registratio
     assert work_options(builder, registrar, {}, [], [], base) == base
     context["host_registration_enabled"] = True
     assert work_options(builder, registrar, {}, [], [], base) == ["register"]
+
+
+def test_incremental_registrar_policy_distinguishes_source_acquisition_from_prerequisites():
+    from minecraft_mod_ai.incremental_java_work import work_options
+    from test_incremental_java_recovery import _builder
+    builder = _builder(None)
+    baseline = ["register", "method", "field", "lookup", "complete"]
+    # A concrete trigger with no inspected world receiver may require
+    # storage declarations before a listener can use them.
+    assert work_options(builder, builder.member, builder.scope, [], [], baseline) == baseline
+    original = builder.member["behavior"]
+    original["runtime_state_reads"] = ["runtime-world-input"]
+    builder.api.bindings["runtime-world-input"] = {"binding": "world_state"}
+    assert work_options(builder, builder.member, builder.scope, [], [], baseline) == ["register"]
+    builder.api.bindings.clear()
+    builder.member["behavior"] = {
+        "behavior_id": "untriggered-state", "runtime_state_writes": ["world mutation"]}
+    assert work_options(builder, builder.member, builder.scope, [], [], baseline) == ["register"]
