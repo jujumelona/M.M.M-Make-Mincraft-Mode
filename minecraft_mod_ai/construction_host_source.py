@@ -181,8 +181,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         saved["source"], behaviors,
                         json.loads(saved_proof.get("receipts_json") or "null"))
             except (RuntimeError, ValueError, OSError):
-                # Do not certify an old source after a prerequisite change.
-                pass
+                # An invalid cached AST cannot remain attached to a fresh
+                # source attempt or prove an unrelated generated unit.
+                incremental_state.clear()
             else:
                 return saved["source"]
 
