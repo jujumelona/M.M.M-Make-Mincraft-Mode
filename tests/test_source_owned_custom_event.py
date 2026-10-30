@@ -376,3 +376,30 @@ def test_target_compile_includes_verified_injection_class_not_just_event_owner(t
         project_root=tmp_path, symbols=SYMBOLS,
         behavior_ids=["buy_module"], package="example.generated")
     assert original == [built["callback"]]
+
+
+def test_byte_identical_symlink_cannot_impersonate_verified_mixin_producer(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    options = {
+        "project_root": tmp_path, "symbols": SYMBOLS,
+        "source_site_ref": "opaqueMethod", "behavior_id": "buy_module",
+        "package": "example.generated",
+    }
+    result = materialize_verified_custom_event(**options)
+    java_path = tmp_path / next(path for path in result["files"] if "/mixin/" in path)
+    other = tmp_path / "same-byte-target.java"
+    other.write_bytes(java_path.read_bytes())
+    java_path.unlink()
+    try:
+        java_path.symlink_to(other)
+    except OSError:
+        pytest.skip("symlink creation is unavailable on this filesystem")
+    with pytest.raises(ValueError, match="SOURCE_SITE_PATH_UNSAFE"):
+        read_verified_custom_event_receipts(
+            project_root=tmp_path, symbols=SYMBOLS,
+            behavior_ids=["buy_module"], package="example.generated")
+    with pytest.raises(ValueError, match="SOURCE_SITE_PATH_UNSAFE"):
+        materialize_verified_custom_event(**options)
