@@ -71,6 +71,11 @@ def work_options(builder, member, scope, path, body, options):
                 or observed_world_input or mutation_without_occurrence):
             return [op for op in options if op == "register"]
         return options
+    # A helper inherits its parent behavior for context, but does not own
+    # the original occurrence or native-effect acceptance obligation. Only
+    # the registrar and its actual event listener must prove an effect here.
+    if not (member.get("registrar") or member.get("event")):
+        return options
     if _member_has_potential_effect({**member, "body": body}):
         return options
     blocked = {"complete"}

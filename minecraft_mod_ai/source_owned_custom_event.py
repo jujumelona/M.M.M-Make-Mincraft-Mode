@@ -255,6 +255,12 @@ def _checked_source_target(root: Path, relative: str) -> Path:
     return path
 
 
+def _previous_custom_receipts(folder, current_digest):
+    """Exclude the active receipt; the publisher checks its exact bytes."""
+    return sorted(path for path in folder.glob("*.json")
+                  if path.name != current_digest + ".json")
+
+
 def _obsolete_custom_sources(root, symbols, metadata, behavior_id, package,
                              current_digest):
     """Validate and identify older owned Mixins for the SAME behavior.
@@ -268,14 +274,9 @@ def _obsolete_custom_sources(root, symbols, metadata, behavior_id, package,
         return []
     mixins = metadata.get("mixins", [])
     result = []
-    for path in sorted(folder.glob("*.json")):
+    for path in _previous_custom_receipts(folder, current_digest):
         if path.is_symlink():
             raise ValueError("SOURCE_SITE_RECEIPT_SYMLINK")
-        if path.name == current_digest + ".json":
-            # The active receipt is checked byte-for-byte by the publisher.
-            # Do not parse it as a previous producer: a corrupted active
-            # receipt must report SOURCE_SITE_RECEIPT_CONFLICT before writes.
-            continue
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or data.get("schema") != (
                 "mmm/inspected-custom-source-receipt-v1"):

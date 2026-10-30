@@ -235,7 +235,7 @@ def test_repair_cannot_spin_when_event_registration_is_unavailable(monkeypatch):
     assert calls == ["register", "register"]
 
 
-def test_register_event_search_cycle_is_rejected():
+def test_register_event_search_cycle_is_rejected(monkeypatch):
     from minecraft_mod_ai.incremental_java_events import select_event
 
     class API:
@@ -251,8 +251,23 @@ def test_register_event_search_cycle_is_rejected():
             assert suffix == "register_lookup"
             return {"query": "*", "offset": 0}
 
-    with pytest.raises(RuntimeError, match="JAVA_EVENT_SELECTION_NAVIGATION_CYCLE"):
-        select_event(Builder())
+    builder = Builder()
+    # A navigation cycle is a rejected menu attempt, not a fatal compiler
+    # error. The caller can then escalate to a checked original-source hook.
+    assert select_event(builder) is None
+    assert builder.rejection["operand_diagnostic"].startswith(
+        "JAVA_EVENT_SELECTION_NAVIGATION_CYCLE:")
+
+    from minecraft_mod_ai.incremental_java_operations import _resolve_declined_registration
+    from minecraft_mod_ai import source_owned_hook
+    builder.member = {"id": "m1", "registrar": True,
+                      "behavior": {"behavior_id": "demo"}}
+    builder.router = object()
+    chosen = {"event_id": "demo.Events#CLICK"}
+    monkeypatch.setattr(source_owned_hook, "choose_source_hook",
+                        lambda router, behavior, callbacks: chosen)
+    assert _resolve_declined_registration(builder, None) is None
+    assert _resolve_declined_registration(builder, None) == chosen
 
 
 def test_constructor_reference_reselection_is_not_recursive(monkeypatch):
@@ -506,3 +521,27 @@ def test_literal_array_count_is_bounded_before_generating_elements(monkeypatch):
 
     monkeypatch.setattr(forms, "count", bounded_count)
     assert ValueForms(Author())._array_elements("int[]") == "new int[] {}"
+
+
+def test_inherited_behavior_does_not_force_empty_support_helper_to_mutate_world():
+    from minecraft_mod_ai.incremental_java_work import work_options
+
+    class API:
+        bindings = {}
+
+    class Builder:
+        api = API()
+
+    behavior = {"runtime_state_writes": ["owned_resource"],
+                "trigger": "inspected original occurrence"}
+    helper = {"kind": "method", "behavior": behavior}
+    listener = {**helper, "event": {"event_id": "example.Events#ORIGINAL"}}
+    options = ["complete", "call", "return"]
+    scope = {"return_type": "void"}
+    # A helper's empty body cannot itself satisfy a feature; its owner
+    # listener still needs a checked runtime effect before completion.
+    assert "complete" in work_options(Builder(), helper, scope, [], [], options)
+    guarded = work_options(Builder(), listener, scope, [], [], options)
+    assert "complete" not in guarded
+    assert "return" not in guarded
+    assert "call" in guarded
