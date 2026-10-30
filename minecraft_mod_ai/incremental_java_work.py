@@ -13,7 +13,9 @@ def _world_bound(builder, member):
 
 
 def _needs_observation(builder, member, body):
-    return (bool(member.get("registrar")) and bool(builder.api._callbacks)
+    # A missing callback is an unsatisfied producer obligation, not permission
+    # to author a lifecycle method that never observes a gameplay occurrence.
+    return (bool(member.get("registrar"))
             and not any(node.get("op") == "register" for node in walk_nodes(body)))
 
 
