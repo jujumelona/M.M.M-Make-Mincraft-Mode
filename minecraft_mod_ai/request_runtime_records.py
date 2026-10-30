@@ -131,6 +131,41 @@ def generated_owner_source_context(project_root, spec, *, required_paths=()):
     return result
 
 
+def verified_completed_work_java_paths(context, project_root, *, target_path=""):
+    """Use only proven transitive WorkNode outputs, never an arbitrary Java scan.
+
+    The orchestrator supplies hashes solely from completed dependency receipts.
+    Recheck source bytes, path containment and symlinks at handoff time: a
+    stale or replaced producer cannot silently become an input declaration.
+    """
+    hashes = context.get("_verified_prerequisite_source_hashes") or {}
+    if not isinstance(hashes, Mapping):
+        raise ValueError("WORK_SOURCE_RECEIPT_MAP_INVALID")
+    root = Path(project_root).resolve()
+    paths = []
+    for relative, digest in hashes.items():
+        if not isinstance(relative, str) or not relative.endswith(".java"):
+            continue
+        if not relative.startswith(("src/main/java/", "src/client/java/")) or relative == target_path:
+            continue
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("WORK_SOURCE_RECEIPT_HASH_INVALID: " + relative)
+        current = root
+        for segment in Path(relative).parts:
+            current = current / segment
+            if current.is_symlink():
+                raise ValueError("WORK_SOURCE_RECEIPT_SYMLINK: " + relative)
+        source = current.resolve()
+        if not source.is_relative_to(root) or not source.is_file():
+            raise ValueError("WORK_SOURCE_RECEIPT_MISSING: " + relative)
+        if source.stat().st_size > 512 * 1024:
+            raise ValueError("WORK_SOURCE_RECEIPT_TOO_LARGE: " + relative)
+        if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+            raise ValueError("WORK_SOURCE_RECEIPT_HASH_MISMATCH: " + relative)
+        paths.append(relative)
+    return tuple(dict.fromkeys(paths))
+
+
 def verified_graph_java_source_paths(job, *, context, port_registry, project_root):
     """Consume exact admitted producer ports instead of trusting model-supplied paths.
 
