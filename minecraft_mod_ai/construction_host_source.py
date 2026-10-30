@@ -201,6 +201,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # the checked calls and receipt together, not separately.
                 pending = {}
             pending = load_candidate(pending, incremental_state, direct_feature)
+            if incremental_state.get("strategy") == "host_source_owned":
+                required_native = bool(has_runtime_writes)
+                mutation_receipts.extend(
+                    incremental_state.get("native_mutation_receipts") or ())
             if pending:
                 # A candidate is work in progress, never a successful receipt.
                 # Recheck it with the real compiler before any repair or return.
@@ -262,11 +266,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         behaviors=behavior_rows, legacy_author=compose_first_pass_java,
                     )
             if incremental_state.get("strategy") == "host_source_owned":
-                # The source-owned author emits one checked native mutation
-                # receipt per original state write. Validate these receipts
-                # after compiler repairs, and bind the checkpoint to their
-                # exact statements rather than treating Java syntax as gameplay.
+                # A compiler candidate carries its host-verified mutation
+                # identities with it. Otherwise resume would keep Java code
+                # but lose the only proof of who changed the native world.
                 required_native = bool(has_runtime_writes)
+                incremental_state["native_mutation_receipts"] = mutation_receipts
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
             if type(budget) is not int or budget < 0:
