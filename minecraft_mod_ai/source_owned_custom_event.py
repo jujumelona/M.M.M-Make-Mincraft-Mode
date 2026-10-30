@@ -191,6 +191,39 @@ public abstract class {mixin_name} {{
     }
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _producer_cross_process_lock(path: Path):
+    """Serialize manifest/receipt publication on POSIX and Windows.
+
+    The project-level thread gate is process-local; a second Python process
+    can still update the same fabric.mod.json. Keep the on-disk lock in both
+    platforms and release it even on validation or filesystem failure.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
 def materialize_verified_custom_event(
     *, project_root: str | Path, symbols: Mapping, source_site_ref: str,
     behavior_id: str, package: str, at: str = "HEAD", side: str = "COMMON",
@@ -205,12 +238,9 @@ def materialize_verified_custom_event(
     manifest = root / "src/main/resources/fabric.mod.json"
     if not manifest.is_file() or manifest.is_symlink():
         raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_REQUIRED")
-    import fcntl
     from .project_write_lock import project_write_lock
     lock = root / ".mmm/source-producer.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with project_write_lock(root), lock.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    with project_write_lock(root), _producer_cross_process_lock(lock):
         metadata = json.loads(manifest.read_text(encoding="utf-8"))
         if not isinstance(metadata, dict) or not isinstance(metadata.get("id"), str):
             raise ValueError("SOURCE_SITE_FABRIC_MANIFEST_INVALID")
@@ -261,7 +291,6 @@ def materialize_verified_custom_event(
             raise ValueError("SOURCE_SITE_RECEIPT_CONFLICT")
         if not receipt_path.exists():
             _atomic_write(receipt_path, expected_receipt)
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     return result
 
 
