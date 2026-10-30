@@ -122,6 +122,10 @@ def repair_incremental_program(router, source, diagnostic, *, program, spec, mes
     _count_attempt(builder, member, node, slot)
     builder.drafts = [node] if node else []
     _perform_repair(builder, member, node, slot, diagnostic)
+    # Compiler repair must not bypass the same active-self-call gate as normal authoring.
+    if node is not None:
+        from .incremental_java_author import _reject_active_self_call
+        _reject_active_self_call(member, node)
     from .incremental_java_progress import finish_member
     while builder.pending:
         finish_member(builder, builder.pending.popleft())
