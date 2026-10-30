@@ -20,6 +20,20 @@ def _repair_entrypoint(program, diagnostic):
             return None, diagnostic
         behavior_id = (member.get("behavior") or {}).get("behavior_id") or member["id"]
         return member, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: " + str(behavior_id)
+    direct_missing = re.search(
+        r"INCREMENTAL_JAVA_(?:INSPECTED_OCCURRENCE_MISSING|NATIVE_MUTATION_UNPROVEN): ([^ ;]+)",
+        diagnostic,
+    )
+    if direct_missing:
+        identity = direct_missing[1]
+        candidates = [row for row in program["members"]
+                      if (row.get("behavior") or {}).get("behavior_id") == identity]
+        native = "NATIVE_MUTATION_UNPROVEN" in diagnostic
+        member = next((row for row in candidates if row.get("event") and native), None)
+        if member is None:
+            member = next((row for row in candidates if row.get("registrar")), None)
+        if member is not None:
+            return member, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: " + diagnostic
     match = re.search(
         r"CONSTRUCTION_FILE_BEHAVIOR_(?:METHOD_MISSING|NOOP): (.+)", diagnostic,
     )
