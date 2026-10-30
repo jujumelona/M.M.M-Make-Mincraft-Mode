@@ -49,26 +49,26 @@ def test_exact_event_hook_required_not_just_compiling_registrar():
 
 
 def test_native_world_state_requires_a_checked_live_mutator():
-    native = {**BEHAVIOR, "runtime_state_writes": ["player health"]}
-    bindings = {"player health": {"binding": "world_state",
+    native = {**BEHAVIOR, "runtime_state_writes": ["world block state"]}
+    bindings = {"world block state": {"binding": "world_state",
                                    "semantic_status": "host_native_runtime_owner"}}
     expected = {"world#setBlock": {"kind": "METHOD", "owner": OWNER, "name": "setBlockState",
                                    "parameters": ["BlockPos", "BlockState"]}}
-    assert native_write_targets(native, bindings) == ("player health",)
+    assert native_write_targets(native, bindings) == ("world block state",)
     with pytest.raises(ValueError, match="NATIVE_MUTATION_UNPROVEN"):
         verify_incremental_feature_execution(_program(), [native], [CALLBACK], bindings, expected)
-    program = _program(native_effect="player health")
+    program = _program(native_effect="world block state")
     with pytest.raises(ValueError, match="NATIVE_MUTATION_UNPROVEN"):
         verify_incremental_feature_execution(program, [native], [CALLBACK], bindings, {})
     verify_incremental_feature_execution(program, [native], [CALLBACK], bindings, expected)
 
 
 def test_invalid_or_unreachable_mutation_is_not_causal_evidence():
-    native = {**BEHAVIOR, "runtime_state_writes": ["player health"]}
-    bindings = {"player health": {"semantic_status": "host_native_runtime_owner"}}
+    native = {**BEHAVIOR, "runtime_state_writes": ["world block state"]}
+    bindings = {"world block state": {"semantic_status": "host_native_runtime_owner"}}
     symbols = {"s": {"kind": "METHOD", "owner": OWNER, "name": "setBlockState",
                      "parameters": ["BlockPos", "BlockState"]}}
-    program = _program(native_effect="player health")
+    program = _program(native_effect="world block state")
     body = program["members"][1]["body"]
     program["members"][1]["body"] = [{"id": "n3", "op": "if", "condition": "false",
                                        "body": body, "otherwise": []}]
