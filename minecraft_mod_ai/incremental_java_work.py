@@ -48,10 +48,16 @@ def work_options(builder, member, scope, path, body, options):
             or not _world_bound(builder, member)):
         return options
     if _needs_observation(builder, member, body):
-        # The indexed callback selector owns event search/pagination. Generic
-        # Java lookup cannot install an occurrence hook and was selected 32
-        # times before the production model tried the actual event selector.
-        return [op for op in options if op == "register"]
+        from .incremental_java_registration_policy import host_registration_enabled
+        # The live host route installs an original occurrence directly before
+        # requesting any operation; keep the restricted event-only fallback
+        # only for that route. Scripted/alternate AST coders can legitimately
+        # declare prerequisite state first (field/method), then register.
+        # Restricting their very first choice to register breaks the operation
+        # protocol and its executable javac regression fixtures.
+        if host_registration_enabled(builder):
+            return [op for op in options if op == "register"]
+        return options
     if _member_has_potential_effect({**member, "body": body}):
         return options
     blocked = {"complete"}
