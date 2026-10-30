@@ -125,12 +125,19 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     checkpoint = root / ".mmm" / "construction_host_files" / (identifier + ".json")
     candidate = root / ".mmm" / "construction_host_candidates" / (identifier + ".json")
     proof_path = root / ".mmm" / "construction_host_mutations" / (identifier + ".json")
+    strategy_path = root / ".mmm" / "construction_host_strategies" / (identifier + ".json")
     from .runtime_mutation_author import verify_native_runtime_mutation_coverage
     has_runtime_writes = any(row.get("runtime_state_writes") for row in behaviors)
     # A previous source-owned candidate must replay its immutable native-call
     # proof. Do not accept a checkpointed Java file after losing that proof.
+    saved_strategy = _read_checkpoint(strategy_path, identifier)
+    if saved_strategy and saved_strategy.get("author_strategy") not in {
+        "incremental_java", "host_source_owned",
+    }:
+        raise HostJavaConstructionError("JAVA_HOST_SAVED_STRATEGY_INVALID")
+    source_owned_saved = saved_strategy.get("author_strategy") == "host_source_owned"
     required_native = bool(has_runtime_writes and
-                           (not direct_feature or proof_path.is_file()))
+                           (not direct_feature or source_owned_saved or proof_path.is_file()))
     mutation_receipts = []
     incremental_state = {}
     context["incremental_state"] = incremental_state
@@ -140,7 +147,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             if set(saved) != {"source"} or not isinstance(saved["source"], str):
                 raise HostJavaConstructionError("JAVA_HOST_CHECKPOINT_INVALID")
             try:
-                _verify_full_source(saved["source"], spec, context,
+                saved_context = (
+                    {**context, "host_direct_feature_source": False, "host_source_owned": True}
+                    if source_owned_saved else context
+                )
+                _verify_full_source(saved["source"], spec, saved_context,
                     package=package, name=name, source_context=source_context)
                 if required_native:
                     saved_proof = _read_checkpoint(proof_path, identifier)
@@ -290,7 +301,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                                     incremental_state.get("strategy") != "host_source_owned")
             for attempt in compile_attempts(incremental_protocol, budget):
                 try:
-                    _verify_full_source(source, spec, context, package=package,
+                    verifier_context = (
+                        {**context, "host_direct_feature_source": False, "host_source_owned": True}
+                        if incremental_state.get("strategy") == "host_source_owned"
+                        else context
+                    )
+                    _verify_full_source(source, spec, verifier_context, package=package,
                                         name=name, source_context=source_context)
                 except (RuntimeError, ValueError, OSError) as compiler_error:
                     # A host-rendered rule is not an incremental Java program.
@@ -345,6 +361,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     mutation_receipts, ensure_ascii=False, sort_keys=True),
             })
         _save_checkpoint(checkpoint, identifier, {"source": source})
+        _save_checkpoint(strategy_path, identifier, {"author_strategy": (
+            incremental_state.get("strategy") or "incremental_java"
+            if direct_feature else "host_member_author")})
         candidate.unlink(missing_ok=True)
         print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
             "target_path": spec["target_path"], "owner": owner,
