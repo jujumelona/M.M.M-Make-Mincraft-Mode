@@ -6,6 +6,9 @@ on:
     paths:
       - "minecraft_mod_ai/incremental_java_*.py"
       - "minecraft_mod_ai/host_source_strategy.py"
+      - "minecraft_mod_ai/feature_source_work_graph.py"
+      - "minecraft_mod_ai/first_pass_java_source.py"
+      - "minecraft_mod_ai/construction_file_author.py"
       - "minecraft_mod_ai/construction_host_source.py"
       - "tests/test_incremental_java_host_registration.py"
       - "tests/test_incremental_java_event_query_isolation.py"
