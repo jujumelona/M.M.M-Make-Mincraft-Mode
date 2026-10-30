@@ -186,6 +186,15 @@ def require_compiler_repair_progress(before, after, diagnostic):
                          + str(diagnostic)[:240])
     return after
 
+def record_rejected_compiler_source(source, seen):
+    """Reject A->B->A compiler oscillation before another repair request."""
+    import hashlib
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    if digest in seen:
+        raise ValueError("JAVA_HOST_COMPILER_SOURCE_CYCLE: " + digest)
+    seen.add(digest)
+    return digest
+
 MAX_INCREMENTAL_COMPILER_ATTEMPTS = 64
 
 
