@@ -115,6 +115,11 @@ def _exact_behavior_verification_spec(spec: dict, behaviors) -> dict:
                     if isinstance(row, dict)]
         if expected != ids:
             raise HostJavaConstructionError("JAVA_HOST_BEHAVIOR_VERIFIER_SCOPE_MISMATCH")
+        if selected != list(behaviors):
+            # Identical IDs do not imply identical trigger, effect, condition
+            # or world-state responsibilities. Never compile an owner against
+            # an older behavior contract merely because names still match.
+            raise HostJavaConstructionError("JAVA_HOST_BEHAVIOR_VERIFIER_CONTRACT_MISMATCH")
         return spec
     return {**spec, "bindings": {**bindings, "construction_behaviors_json":
             json.dumps(list(behaviors), ensure_ascii=False, sort_keys=True)}}
@@ -127,6 +132,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     from .incremental_java_pipeline import (compose_source, candidate_data, load_candidate, compile_attempts, exhausted)
     from .first_pass_java_source import compose_first_pass_java
 
+    behaviors = tuple(behaviors)
     spec = _exact_behavior_verification_spec(spec, behaviors)
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
         raise HostJavaConstructionError("JAVA_HOST_FABRIC_REQUIRED")
