@@ -166,9 +166,26 @@ def _generated_call_signature_matches(node, target):
     )
 
 
+def _reachable_effect_nodes(nodes):
+    """Ignore branches proven unreachable by literal constant conditions."""
+    from .incremental_java_history import child_blocks
+
+    for node in nodes:
+        yield node
+        condition = str(node.get("condition") or "").strip()
+        for branch, children in child_blocks(node):
+            if node.get("op") == "if" and (
+                    (condition == "false" and branch == "body")
+                    or (condition == "true" and branch == "otherwise")):
+                continue
+            if node.get("op") in {"while", "for"} and condition == "false" and branch == "body":
+                continue
+            yield from _reachable_effect_nodes(children)
+
+
 def _member_effect_edges(member, generated):
-    """Return real effects and dependencies, not just syntactic operations."""
-    nodes = tuple(walk_nodes(member.get("body") or ()))
+    """Return reachable effects and dependencies, not just syntactic operations."""
+    nodes = tuple(_reachable_effect_nodes(member.get("body") or ()))
     local_names = _member_local_names(member, nodes)
     dependencies = set()
     effect = False
@@ -179,11 +196,11 @@ def _member_effect_edges(member, generated):
             if not targets:
                 effect = True
         elif node.get("op") == "return":
-            # Returning a decision to a registered event can be the action.
-            # A pure helper returning a computed value cannot satisfy the
-            # caller's observable-behavior obligation by itself.
+            # A registered event can make a decision by returning a value.
             effect |= bool(member.get("event") and node.get("value"))
-        elif node.get("op") != "constructor_call":
+        elif node.get("op") not in {"constructor_call", "throw"}:
+            # Throwing an exception aborts a callback. It does not implement
+            # the intended Minecraft state change by itself.
             effect |= _node_has_potential_effect(node, local_names)
     return effect, dependencies
 
