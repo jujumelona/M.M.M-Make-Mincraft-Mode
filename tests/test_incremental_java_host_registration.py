@@ -341,3 +341,23 @@ def test_nonlocal_fixture_uses_original_author_unless_explicitly_requested():
         object(), {"prefer_host_source_owned": False}, behavior) is False
     with pytest.raises(ValueError, match="HOST_SOURCE_PREFERENCE_INVALID"):
         prefer_source_owned_strategy(object(), {"prefer_host_source_owned": "true"}, behavior)
+
+
+def test_no_inspected_event_creates_original_source_before_listener(monkeypatch):
+    from minecraft_mod_ai.host_source_strategy import prepare_source_owned_strategy
+    from minecraft_mod_ai import host_fabric_callback_abi
+
+    monkeypatch.setattr(host_fabric_callback_abi, "callback_interfaces",
+                        lambda *args, **kwargs: [])
+    graph = prepare_source_owned_strategy(
+        {"symbols": {}}, [{
+            "behavior_id": "b-unimplemented",
+            "trigger": "original custom world occurrence",
+            "intent": "new mechanic", "effects": "change gameplay",
+        }], side="COMMON")["source_owned_work_graph"]
+    source = next(n for n in graph["tasks"] if n["kind"] == "custom_event_source")
+    hook = next(n for n in graph["tasks"] if n["kind"] == "occurrence_hook")
+    effect = next(n for n in graph["tasks"] if n["kind"] == "gameplay_effect")
+    assert source["task_id"] in hook["depends_on"]
+    assert hook["task_id"] in effect["depends_on"]
+    assert graph["completion_verified"] is False
