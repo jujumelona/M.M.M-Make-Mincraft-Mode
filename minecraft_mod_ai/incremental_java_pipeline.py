@@ -67,7 +67,8 @@ def compose_source(router, spec, messages, *, source_context, construction_conte
 def candidate_data(source, diagnostic, state):
     result = {"source": source, "diagnostic": diagnostic}
     strategy = state.get("strategy")
-    if strategy in {"incremental_java", "host_source_owned"}:
+    if strategy in {"incremental_java", "host_source_owned",
+                    "host_verified_source", "host_rule_template"}:
         result["strategy"] = strategy
     if strategy != "host_source_owned" and state.get("program"):
         result["program_json"] = json.dumps(state["program"], ensure_ascii=False, separators=(",", ":"))
@@ -85,7 +86,8 @@ def load_candidate(pending, state, direct):
     if set(pending) - allowed or not {"source", "diagnostic"} <= set(pending):
         raise ValueError("JAVA_HOST_CANDIDATE_INVALID")
     strategy = pending.get("strategy")
-    if strategy not in {None, "incremental_java", "host_source_owned"}:
+    if strategy not in {None, "incremental_java", "host_source_owned",
+                        "host_verified_source", "host_rule_template"}:
         raise ValueError("JAVA_HOST_CANDIDATE_STRATEGY_INVALID")
     if strategy == "host_source_owned":
         if not direct or "program_json" in pending:
@@ -98,6 +100,12 @@ def load_candidate(pending, state, direct):
             raise ValueError("JAVA_HOST_SOURCE_NATIVE_PROOF_INVALID")
         state.pop("program", None)
         state["native_mutation_receipts"] = receipts
+        state["strategy"] = strategy
+        return pending
+    if strategy in {"host_verified_source", "host_rule_template"}:
+        if not direct or "program_json" in pending or "native_mutation_receipts_json" in pending:
+            raise ValueError("JAVA_HOST_NON_AST_CANDIDATE_INVALID")
+        state.pop("program", None)
         state["strategy"] = strategy
         return pending
     if direct:
