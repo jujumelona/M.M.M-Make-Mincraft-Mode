@@ -343,6 +343,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         raise
                     repair_context = _repair_context(spec, context, name, owner, prompt,
                         state_access, behavior_rows, mutation_receipts, attempt)
+                    rejected_source = source
                     if incremental_protocol:
                         from .incremental_java_pipeline import repair_member
                         source = repair_member(
@@ -354,6 +355,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     else:
                         source = repair_compiler_member(
                             repair_router, source, str(compiler_error), **repair_context)
+                    from .incremental_java_pipeline import require_compiler_repair_progress
+                    require_compiler_repair_progress(rejected_source, source, compiler_error)
                 else:
                     # A compiler-valid edit may still delete a mandatory
                     # checked mutation. Re-prove final source after every
