@@ -623,3 +623,18 @@ def test_local_member_prompt_keeps_host_verified_canonical_reader_contract():
     parsed = json.loads(result[-1]["content"])
     assert parsed["verified_existing_runtime_reads"] == reader
     assert parsed["member_role"] == "test_callback_condition"
+
+
+def test_all_live_local_features_use_host_owned_engine_even_without_state_labels():
+    from minecraft_mod_ai.host_source_strategy import prefer_source_owned_strategy
+    class Registry:
+        def role(self, profile, role):
+            assert role == "coder"
+            return SimpleNamespace(adapter="llama_cpp")
+    router = SimpleNamespace(registry=Registry(), profile="local")
+    behavior = {"behavior_id": "stateless-feature", "intent": "real feature",
+                "trigger": "real callback", "effects": "real operation"}
+    assert prefer_source_owned_strategy(router, {}, [behavior]) is True
+    assert prefer_source_owned_strategy(router, {}, []) is False
+    assert prefer_source_owned_strategy(
+        router, {"prefer_host_source_owned": False}, [behavior]) is False
