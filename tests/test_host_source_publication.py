@@ -260,3 +260,17 @@ def test_unrelated_compiler_failure_restores_checkpoint_without_event_plans(tmp_
             receipt.write_text("unverified owner")
             raise ValueError("persist failed")
     assert receipt.read_text() == "last accepted owner"
+
+
+def test_duplicate_original_source_producers_for_one_behavior_are_rejected_prepublication(tmp_path):
+    manifest, original = _workspace(tmp_path)
+    duplicate = [
+        {"kind": "custom", "args": dict(_ARGS)},
+        {"kind": "custom", "args": dict(_ARGS)},
+    ]
+    with pytest.raises(ValueError, match="HOST_SOURCE_PUBLICATION_DUPLICATE_BEHAVIOR"):
+        with source_publication_transaction(
+            project_root=tmp_path, symbols=_SYMBOLS, records=duplicate):
+            pytest.fail("conflicting producers were published")
+    assert manifest.read_text() == original
+    assert not (tmp_path / ".mmm/source-producers").exists()
