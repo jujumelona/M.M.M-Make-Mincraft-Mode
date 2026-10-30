@@ -7,33 +7,39 @@ from .incremental_java_render import render_program, render_member_fragment
 from .java_region_parser import _parse, _text
 
 
-def _repair_entrypoint(program, diagnostic):
+def _incremental_noop_repair(program, diagnostic):
+    """Locate the concrete authoring work item for source-effect violations."""
     no_effect = re.search(
         r"INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: entrypoint=([A-Za-z0-9_]+)",
         diagnostic,
     )
     if no_effect:
-        member = next(
-            (row for row in program["members"] if row["id"] == no_effect[1]), None,
-        )
+        member = next((row for row in program["members"]
+                       if row["id"] == no_effect[1]), None)
         if member is None:
-            return None, diagnostic
+            return None
         behavior_id = (member.get("behavior") or {}).get("behavior_id") or member["id"]
         return member, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: " + str(behavior_id)
     direct_missing = re.search(
         r"INCREMENTAL_JAVA_(?:INSPECTED_OCCURRENCE_MISSING|NATIVE_MUTATION_UNPROVEN): ([^ ;]+)",
         diagnostic,
     )
-    if direct_missing:
-        identity = direct_missing[1]
-        candidates = [row for row in program["members"]
-                      if (row.get("behavior") or {}).get("behavior_id") == identity]
-        native = "NATIVE_MUTATION_UNPROVEN" in diagnostic
-        member = next((row for row in candidates if row.get("event") and native), None)
-        if member is None:
-            member = next((row for row in candidates if row.get("registrar")), None)
-        if member is not None:
-            return member, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: " + diagnostic
+    if not direct_missing:
+        return None
+    identity = direct_missing[1]
+    candidates = [row for row in program["members"]
+                  if (row.get("behavior") or {}).get("behavior_id") == identity]
+    native = "NATIVE_MUTATION_UNPROVEN" in diagnostic
+    member = next((row for row in candidates if row.get("event") and native), None)
+    if member is None:
+        member = next((row for row in candidates if row.get("registrar")), None)
+    return (member, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: " + diagnostic) if member else None
+
+
+def _repair_entrypoint(program, diagnostic):
+    mapped = _incremental_noop_repair(program, diagnostic)
+    if mapped is not None:
+        return mapped
     match = re.search(
         r"CONSTRUCTION_FILE_BEHAVIOR_(?:METHOD_MISSING|NOOP): (.+)", diagnostic,
     )
