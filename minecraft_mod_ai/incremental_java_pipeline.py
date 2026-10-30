@@ -109,6 +109,20 @@ def load_candidate(pending, state, direct):
     return pending
 
 
+def has_incremental_ast(direct_feature, state):
+    """Only a real incremental AST may enter the unbounded local repair loop.
+
+    Host-generated entities, registry holders, rule templates and source-owned
+    files are all non-AST products even when requested from the same Fabric
+    feature entrypoint. Their diagnostics belong to bounded source repair.
+    """
+    if not direct_feature or state.get("strategy") != "incremental_java":
+        return False
+    if not isinstance(state.get("program"), dict):
+        raise ValueError("JAVA_HOST_INCREMENTAL_AST_MISSING")
+    return True
+
+
 def compile_attempts(direct, legacy_budget):
     # Independent operation errors do not consume one shared whole-feature retry.
     # Cancellation/deadlines still bound model execution. Repeated failures of
