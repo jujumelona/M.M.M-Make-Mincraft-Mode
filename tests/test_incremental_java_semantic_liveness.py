@@ -772,3 +772,25 @@ def test_constant_false_branch_cannot_forge_observable_effect():
     branch["body"] = []
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
         _assert_live_behavior_entrypoints({"members": [callback]})
+
+
+def test_static_self_call_by_owner_and_same_named_overload_are_distinguished():
+    from minecraft_mod_ai.incremental_java_author import _reject_active_self_call
+
+    current = {"id": "m8", "kind": "method", "owner": "Feature",
+               "name": "process"}
+    with pytest.raises(RuntimeError, match="JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN"):
+        _reject_active_self_call(current, {
+            "op": "call", "receiver": "Feature", "method": "process",
+            "generated_member_id": "m8",
+        })
+    # Same method name but a different, explicitly selected overload.
+    _reject_active_self_call(current, {
+        "op": "call", "receiver": "this", "method": "process",
+        "generated_member_id": "m9",
+    })
+    # Legacy source has no identity: the conservative direct-self-call gate remains.
+    with pytest.raises(RuntimeError, match="JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN"):
+        _reject_active_self_call(current, {
+            "op": "call", "receiver": "this", "method": "process",
+        })
