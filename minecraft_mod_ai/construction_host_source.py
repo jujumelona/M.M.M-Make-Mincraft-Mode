@@ -220,6 +220,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # receipts before permitting compilation or repair.
                 pending = {}
             pending = load_candidate(pending, incremental_state, direct_feature)
+            rule_template_used = incremental_state.get("strategy") == "host_rule_template"
             if incremental_state.get("strategy") == "host_source_owned":
                 required_native = bool(has_runtime_writes)
                 mutation_receipts.extend(
@@ -289,6 +290,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         },
                         behaviors=behavior_rows, legacy_author=compose_first_pass_java,
                     )
+            if (has_runtime_writes and incremental_state.get("strategy")
+                    in {"host_verified_source", "host_rule_template"}):
+                # Host-rendered source is not exempt from native state proof.
+                # The legacy AST protocol has separate gates and is left
+                # unchanged for its existing fixtures.
+                required_native = True
             if incremental_state.get("strategy") == "host_source_owned":
                 # A compiler candidate carries its host-verified mutation
                 # identities with it. Otherwise resume would keep Java code
