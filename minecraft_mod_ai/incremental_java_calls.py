@@ -42,11 +42,16 @@ def _receiver_type(builder, receiver):
     return receiver if re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", receiver) else ""
 
 
+def _callable_generated_method(member):
+    """Only completed or externally provided methods may be called."""
+    return member.get("implementation_status") not in {"pending", "authoring"}
+
+
 def _generated_methods(builder, owner, method):
     return [{"kind": "METHOD", "owner": row["owner"], "name": row["name"], **row["metadata"]}
             for row in builder.program.get("members", ())
             if row["kind"] == "method" and row["name"] == method and _owner_matches(row["owner"], owner)
-            and row.get("implementation_status") not in {"pending", "authoring"}]
+            and _callable_generated_method(row)]
 
 
 def _lookup_pages(api, query):
