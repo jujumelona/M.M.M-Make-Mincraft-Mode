@@ -53,8 +53,14 @@ def _initial_behavior_owner(builder, member):
     identity = (member.get("id"), (member.get("behavior") or {}).get("behavior_id"))
     return identity in {
         ("m" + str(index), row.get("behavior_id"))
-        for index, row in enumerate(builder.api.behaviors, 1)
+        for index, row in enumerate(getattr(builder.api, "behaviors", ()), 1)
     }
+
+
+def _is_effect_owner(builder, member):
+    """A registered listener or original behavior member, never an inherited helper."""
+    return bool(member.get("registrar") or member.get("event")
+                or _initial_behavior_owner(builder, member))
 
 
 def _owns_runtime_effect_obligation(builder, member, path):
@@ -62,8 +68,7 @@ def _owns_runtime_effect_obligation(builder, member, path):
     return (not path and member.get("kind") == "method"
             and member.get("work_role") != "supporting_abi"
             and _world_bound(builder, member)
-            and (bool(member.get("registrar") or member.get("event"))
-                 or _initial_behavior_owner(builder, member)))
+            and _is_effect_owner(builder, member))
 
 
 def work_options(builder, member, scope, path, body, options):
