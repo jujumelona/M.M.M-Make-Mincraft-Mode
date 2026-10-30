@@ -296,13 +296,15 @@ def materialize_verified_custom_event(
             for relative, contents in result["files"].items():
                 path = root / relative
                 if not path.exists():
-                    _atomic_write(path, contents)
+                    # Register rollback ownership before the atomic replace:
+                    # a mocked/failed writer can raise just after os.replace.
                     created_files.append((path, contents))
+                    _atomic_write(path, contents)
             if should_register:
                 _atomic_write(manifest, new_manifest)
             if not receipt_path.exists():
-                _atomic_write(receipt_path, expected_receipt)
                 receipt_created = True
+                _atomic_write(receipt_path, expected_receipt)
         except Exception:
             # One failed write cannot publish a partially registered Mixin.
             # The two locks exclude concurrent publishers while rolling back.
