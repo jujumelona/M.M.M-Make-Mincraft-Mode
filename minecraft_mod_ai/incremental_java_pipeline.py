@@ -158,6 +158,33 @@ def require_compiler_repair_progress(before, after, diagnostic):
         raise ValueError("JAVA_HOST_COMPILER_REPAIR_EMPTY")
     if before == after:
         raise ValueError("JAVA_HOST_COMPILER_REPAIR_NO_PROGRESS: " + str(diagnostic)[:240])
+    # A model can change only formatting or comments while leaving every
+    # compiler-visible Java token identical. That is not a repair. String
+    # literal contents are preserved exactly and never whitespace-normalized.
+    from .java_region_parser import _parse, _text
+    def tokens(source):
+        raw, root = _parse(source)
+        pending = [root]
+        result = []
+        while pending:
+            node = pending.pop()
+            if node.type in {"line_comment", "block_comment"}:
+                continue
+            if node.children and node.type not in {
+                    "string_literal", "character_literal", "text_block"}:
+                pending.extend(reversed(node.children))
+            else:
+                result.append((node.type, _text(raw, node)))
+        return tuple(result)
+    try:
+        semantically_same = tokens(before) == tokens(after)
+    except (ValueError, RuntimeError):
+        # Java syntax errors may prevent parsing until repair succeeds.
+        # Such candidates still require the actual javac compiler to pass.
+        semantically_same = False
+    if semantically_same:
+        raise ValueError("JAVA_HOST_COMPILER_REPAIR_TOKEN_NO_PROGRESS: "
+                         + str(diagnostic)[:240])
     return after
 
 def compile_attempts(direct, legacy_budget):
