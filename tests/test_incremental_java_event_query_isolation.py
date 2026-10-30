@@ -71,3 +71,13 @@ def test_actual_register_page_recovers_state_access_cursor_from_production_log()
     assert chosen["event_id"] == events[0]["event_id"]
     assert len(builder.queries) == 1
     assert len(builder.register_pages) == 1
+
+
+def test_world_registrar_does_not_do_unrelated_java_api_lookup():
+    from minecraft_mod_ai.incremental_java_work import work_options
+    from test_incremental_java_work_ownership import _world_builder
+
+    builder = _world_builder()
+    actions = work_options(builder, builder.member, builder.scope, [], [],
+                           ["register", "lookup", "method", "call", "complete"])
+    assert actions == ["register"]
