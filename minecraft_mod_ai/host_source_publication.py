@@ -28,7 +28,7 @@ def _safe_path(root, relative):
 
 
 def _publication_paths(root, symbols, records):
-    from .source_owned_custom_event import plan_verified_custom_event
+    from .source_owned_custom_event import (plan_verified_custom_event, _obsolete_custom_sources)
     from .source_owned_ui_event import _obsolete_producers, _render_recipe
 
     manifest = _safe_path(root, "src/main/resources/fabric.mod.json")
@@ -49,6 +49,11 @@ def _publication_paths(root, symbols, records):
                 (args["behavior_id"] + "\0" + args["source_site_ref"] + "\0"
                  + args.get("at", "HEAD")).encode()).hexdigest()[:16]
             paths.add(_safe_path(root, ".mmm/source-producers/" + digest + ".json"))
+            for receipt_path, _, previous in _obsolete_custom_sources(
+                    root, symbols, metadata, args["behavior_id"],
+                    args["package"], digest):
+                paths.add(_safe_path(root, receipt_path.relative_to(root)))
+                paths.update(_safe_path(root, name) for name in previous["files"])
         elif kind == "ui":
             plan = record.get("plan")
             if not isinstance(plan, dict) or plan != _render_recipe(plan["recipe"], symbols):
