@@ -241,6 +241,20 @@ def _producer_cross_process_lock(path: Path):
             else:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+def _checked_source_target(root: Path, relative: str) -> Path:
+    path = root / relative
+    if not path.resolve().is_relative_to(root):
+        raise ValueError("SOURCE_SITE_PATH_UNSAFE")
+    # resolve() erases symlink provenance. An in-project symlink with matching
+    # bytes is not an independently materialized producer source file.
+    for item in (path, *path.parents):
+        if item == root:
+            break
+        if item.is_symlink():
+            raise ValueError("SOURCE_SITE_PATH_UNSAFE")
+    return path
+
+
 def materialize_verified_custom_event(
     *, project_root: str | Path, symbols: Mapping, source_site_ref: str,
     behavior_id: str, package: str, at: str = "HEAD", side: str = "COMMON",
@@ -293,9 +307,7 @@ def materialize_verified_custom_event(
                 receipt_path.read_text(encoding="utf-8") != expected_receipt):
             raise ValueError("SOURCE_SITE_RECEIPT_CONFLICT")
         for relative, contents in result["files"].items():
-            path = (root / relative).resolve()
-            if not path.is_relative_to(root) or path.is_symlink():
-                raise ValueError("SOURCE_SITE_PATH_UNSAFE")
+            path = _checked_source_target(root, relative)
             if path.exists() and path.read_text(encoding="utf-8") != contents:
                 raise ValueError("SOURCE_SITE_EXISTING_FILE_CONFLICT: " + relative)
         original_manifest = manifest.read_text(encoding="utf-8")
@@ -403,8 +415,8 @@ def read_verified_custom_event_receipts(
         if expected["mixin_config"] not in names:
             raise ValueError("SOURCE_SITE_MIXIN_NOT_REGISTERED")
         for name, contents in expected["files"].items():
-            path = (root / name).resolve()
-            if not path.is_relative_to(root) or not path.is_file():
+            path = _checked_source_target(root, name)
+            if not path.is_file():
                 raise ValueError("SOURCE_SITE_MATERIALIZED_FILE_MISSING")
             if path.read_text(encoding="utf-8") != contents:
                 raise ValueError("SOURCE_SITE_MATERIALIZED_FILE_MISMATCH")
