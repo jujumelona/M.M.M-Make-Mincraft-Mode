@@ -211,10 +211,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         effective_spec["requirement"] = requirement
         try:
             pending = _read_checkpoint(candidate, identifier)
-            if required_native:
-                # A compiler candidate saved before successful source proof is
-                # never trusted to own real mutations on resume. Reconstruct
-                # the checked calls and receipt together, not separately.
+            if required_native and pending.get("strategy") != "host_source_owned":
+                # Old Java-only candidates never carried native mutation
+                # identities. Preserve only a new source-owned candidate
+                # whose corresponding typed native proof is in the same
+                # checkpoint; load_candidate will reject absent/malformed
+                # receipts before permitting compilation or repair.
                 pending = {}
             pending = load_candidate(pending, incremental_state, direct_feature)
             if incremental_state.get("strategy") == "host_source_owned":
