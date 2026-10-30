@@ -25,10 +25,25 @@ def prepare_source_owned_strategy(
         graph = context["source_owned_work_graph"]
     else:
         obligations = []
+        inspected = callback_interfaces(
+            context.get("symbols") or {}, side=side)
         for behavior in behaviors:
             owner = str(behavior.get("behavior_id") or "")
             if not owner:
                 raise ValueError("HOST_SOURCE_BEHAVIOR_ID_REQUIRED")
+            # Without a single inspected callback, original occurrence
+            # production must precede its listener. An empty ABI catalogue
+            # cannot be solved by returning 'register' to the small AI.
+            if not inspected and not behavior.get("event_binding"):
+                obligations.append({
+                    "behavior_id": owner,
+                    "reason": "no_inspected_callback",
+                    "required_action": (
+                        "Materialize an original occurrence source owner "
+                        "or an explicitly requested typed player action; "
+                        "do not substitute a fabricated Fabric callback."
+                    ),
+                })
             for name in dict.fromkeys(behavior.get("runtime_state_reads") or ()):
                 if not isinstance(name, str) or not name.strip():
                     raise ValueError("HOST_SOURCE_OBSERVATION_NAME_INVALID")
@@ -55,8 +70,6 @@ def prepare_source_owned_strategy(
                         "the corresponding exact native invocation must be proved."
                     ),
                 })
-        inspected = callback_interfaces(
-            context.get("symbols") or {}, side=side)
         graph = build_source_work_graph(
             behaviors,
             producer_obligations=obligations,
