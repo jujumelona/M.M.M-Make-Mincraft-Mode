@@ -49,13 +49,26 @@ def work_options(builder, member, scope, path, body, options):
         return options
     if _needs_observation(builder, member, body):
         from .incremental_java_registration_policy import host_registration_enabled
-        # The live host route installs an original occurrence directly before
-        # requesting any operation; keep the restricted event-only fallback
-        # only for that route. Scripted/alternate AST coders can legitimately
-        # declare prerequisite state first (field/method), then register.
-        # Restricting their very first choice to register breaks the operation
-        # protocol and its executable javac regression fixtures.
-        if host_registration_enabled(builder):
+        behavior = member.get("behavior") or {}
+        bindings = getattr(builder.api, "bindings", {}) or {}
+        observed_world_input = any(
+            isinstance(bindings.get(name), dict)
+            and bindings[name].get("binding") == "world_state"
+            for name in behavior.get("runtime_state_reads") or ()
+        )
+        # An actual world-bound observer must be acquired before authoring
+        # calls, helpers, or local copies. A runtime mutation with no declared
+        # trigger likewise cannot be treated as a free-standing Java method.
+        # Scripted AST features with a concrete trigger and no bound world
+        # receiver may legitimately declare prerequisite fields before their
+        # event registration. The live llama route bypasses this model-choice
+        # path entirely using host-owned registration.
+        mutation_without_occurrence = (
+            bool(behavior.get("runtime_state_writes"))
+            and not str(behavior.get("trigger") or "").strip()
+        )
+        if (host_registration_enabled(builder)
+                or observed_world_input or mutation_without_occurrence):
             return [op for op in options if op == "register"]
         return options
     if _member_has_potential_effect({**member, "body": body}):
