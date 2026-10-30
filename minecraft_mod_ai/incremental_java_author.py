@@ -61,6 +61,21 @@ _EXECUTABLE_OPERATIONS = frozenset({
 })
 
 
+def _semantic_progress_key(builder, member, node, scope):
+    """An unused pure helper call is not progress for a behavior writer."""
+    signature = _semantic_operation_key(node, scope)
+    if signature is None or node.get("op") != "call":
+        return signature
+    generated = {}
+    for candidate in builder.program["members"]:
+        if candidate.get("kind") == "method":
+            generated.setdefault(candidate["name"], []).append(candidate)
+    targets = _generated_call_targets(member, node, generated)
+    if targets and not targets.intersection(_observable_member_ids(builder.program)):
+        return None
+    return signature
+
+
 def _semantic_operation_key(node, scope):
     """Identify a distinct observable operation, not just a syntactically valid AST node.
 
@@ -130,7 +145,20 @@ def _generated_call_targets(member, node, generated):
     if not owner and str(node.get("receiver") or "") in {"", "this"}:
         owner = member["owner"]
     return {target["id"] for target in generated.get(node.get("method"), ())
-            if owner and _owner_matches(target["owner"], owner)}
+            if owner and _owner_matches(target["owner"], owner)
+            and _generated_call_signature_matches(node, target)}
+
+
+def _generated_call_signature_matches(node, target):
+    """Different overloads cannot borrow each other's effect evidence."""
+    from .java_operation_ir import parameter_types
+
+    contract = node.get("call_contract") or {}
+    if "parameters" not in contract and "generic_parameters" not in contract:
+        return True
+    return tuple(parameter_types(contract)) == tuple(
+        parameter_types(target.get("metadata") or {})
+    )
 
 
 def _member_effect_edges(member, generated):
@@ -335,7 +363,7 @@ class IncrementalJavaBuilder:
         self._nonprogress_choices[member_id] = 0
 
     def _record_operation_progress(self, member, node, scope):
-        signature = _semantic_operation_key(node, scope)
+        signature = _semantic_progress_key(self, member, node, scope)
         if signature is None:
             self._record_nonprogress(member)
             return
