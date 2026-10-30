@@ -140,6 +140,11 @@ def _generated_call_targets(member, node, generated):
     """Resolve generated callee identity without guessing from the call name."""
     from .incremental_java_calls import _owner_matches
 
+    identity = node.get("generated_member_id")
+    if identity:
+        # A selected member ID is authoritative, even if the declaration
+        # later disappears: never reclassify a stale helper as external effect.
+        return {identity}
     contract = node.get("call_contract") or {}
     owner = contract.get("owner") or node.get("receiver_type")
     if not owner and str(node.get("receiver") or "") in {"", "this"}:
