@@ -626,3 +626,19 @@ def test_overloads_do_not_inherit_effect_from_unrelated_generated_method():
               "body": [{"id": "n3", "op": "assign", "target": "this.count", "value": "1"}]}
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
         _assert_live_behavior_entrypoints({"members": [callback, pure, effect]})
+
+
+def test_small_coder_receives_host_state_work_order_scope():
+    builder = _builder(None)
+    binding = {
+        "declared_readable": ["known"],
+        "declared_writable": ["known"],
+        "undeclared_plan_reads": ["native_world_presence"],
+        "undeclared_plan_writes": ["native_combat_damage"],
+        "contract": "Use verified world APIs for native runtime ownership.",
+    }
+    builder.context["host_state_work_order_scope"] = binding
+    payload = builder.payload()
+    assert payload["host_state_work_order_scope"] == binding
+    payload["host_state_work_order_scope"]["undeclared_plan_writes"].append("tampered")
+    assert builder.context["host_state_work_order_scope"] == binding
