@@ -5,8 +5,32 @@ from itertools import count
 import json
 
 
+def _compose_source_owned(router, spec, messages, *,
+                          source_context, construction_context, behaviors, legacy_author):
+    from .host_source_strategy import prepare_source_owned_strategy
+
+    state = construction_context["incremental_state"]
+    state.pop("program", None)
+    state["strategy"] = "host_source_owned"
+    host_context = prepare_source_owned_strategy(
+        construction_context, behaviors,
+        side=str(spec.get("side") or "COMMON").upper(),
+    )
+    return legacy_author(
+        router, spec, messages, source_context=source_context,
+        construction_context=host_context, behaviors=behaviors,
+    )
+
+
 def compose_source(router, spec, messages, *, source_context, construction_context, behaviors, legacy_author):
     if construction_context.get("host_direct_feature_source"):
+        from .host_source_strategy import prefer_source_owned_strategy
+        if prefer_source_owned_strategy(router, construction_context, behaviors):
+            return _compose_source_owned(
+                router, spec, messages, source_context=source_context,
+                construction_context=construction_context, behaviors=behaviors,
+                legacy_author=legacy_author,
+            )
         from .incremental_java_author import compose_incremental_feature
         from .source_occurrence_error import SourceHookUnavailable
         try:
@@ -28,17 +52,10 @@ def compose_source(router, spec, messages, *, source_context, construction_conte
             # project-owned player action or a checked source-site Mixin and
             # binds the resulting exact callback ABI before authoring effects.
             # It still rejects missing source sites and unverified gameplay.
-            state = construction_context["incremental_state"]
-            state.pop("program", None)
-            state["strategy"] = "host_source_owned"
-            from .host_source_strategy import prepare_source_owned_strategy
-            host_context = prepare_source_owned_strategy(
-                construction_context, behaviors,
-                side=str(spec.get("side") or "COMMON").upper(),
-            )
-            return legacy_author(
+            return _compose_source_owned(
                 router, spec, messages, source_context=source_context,
-                construction_context=host_context, behaviors=behaviors,
+                construction_context=construction_context, behaviors=behaviors,
+                legacy_author=legacy_author,
             )
         construction_context["incremental_state"]["program"] = program
         construction_context["incremental_state"]["strategy"] = "incremental_java"
