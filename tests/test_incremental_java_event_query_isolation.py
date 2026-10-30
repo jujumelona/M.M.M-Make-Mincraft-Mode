@@ -81,3 +81,54 @@ def test_world_registrar_does_not_do_unrelated_java_api_lookup():
     actions = work_options(builder, builder.member, builder.scope, [], [],
                            ["register", "lookup", "method", "call", "complete"])
     assert actions == ["register"]
+
+
+def test_repeated_event_declines_switch_to_original_occurrence_planner(monkeypatch):
+    from minecraft_mod_ai.incremental_java_operations import _resolve_declined_registration
+    from minecraft_mod_ai import source_owned_hook
+
+    event = _events(1)[0]
+    observed = []
+
+    def plan(router, behavior, callbacks):
+        observed.append((behavior, callbacks))
+        return event
+
+    monkeypatch.setattr(source_owned_hook, "choose_source_hook", plan)
+
+    class Api:
+        def callbacks(self):
+            return [event]
+
+    class Builder:
+        api = Api()
+        router = object()
+        member = {"id": "m1", "registrar": True, "behavior": {
+            "behavior_id": "b1", "trigger": "runtime occurrence"}}
+
+    builder = Builder()
+    assert _resolve_declined_registration(builder, None) is None
+    assert _resolve_declined_registration(builder, None) == event
+    assert observed == [(builder.member["behavior"], [event])]
+    assert _resolve_declined_registration(builder, event) is event
+    assert len(observed) == 1
+
+
+def test_when_no_verified_original_occurrence_exists_do_not_fabricate_one():
+    from minecraft_mod_ai.incremental_java_operations import _resolve_declined_registration
+    from minecraft_mod_ai.source_occurrence_error import SourceHookUnavailable
+
+    class Api:
+        def callbacks(self):
+            return []
+
+    class Builder:
+        api = Api()
+        router = object()
+        member = {"id": "m1", "registrar": True, "behavior": {
+            "behavior_id": "b1", "trigger": "unobserved world event"}}
+
+    builder = Builder()
+    assert _resolve_declined_registration(builder, None) is None
+    with pytest.raises(SourceHookUnavailable, match="SOURCE_HOOK_PRODUCER_REQUIRED"):
+        _resolve_declined_registration(builder, None)
