@@ -325,3 +325,31 @@ def test_occurrence_install_waits_for_project_entrypoint_reconciliation(tmp_path
                 future.result(timeout=0.5)
             assert json.loads(manifest.read_text()) == {"id": "allocation"}
         future.result(timeout=5)
+
+
+@pytest.mark.parametrize("fail_path", ["manifest", "receipt"])
+def test_typed_ui_publication_rolls_back_post_replace_errors(tmp_path, monkeypatch, fail_path):
+    import minecraft_mod_ai.source_owned_ui_event as ui
+    import minecraft_mod_ai.source_owned_custom_event as publisher
+    planned = _plan()
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    original = json.dumps({"id": "allocation", "entrypoints": {
+        "main": ["example.Existing"], "client": []}})
+    manifest.write_text(original)
+    atomic = publisher._atomic_write
+    failed = []
+    def interrupted(path, content):
+        atomic(path, content)
+        category = ("manifest" if path == manifest else
+                    "receipt" if "typed-ui-producers" in str(path) else "file")
+        if category == fail_path and not failed:
+            failed.append(category)
+            raise RuntimeError("typed UI publication interrupted")
+    monkeypatch.setattr(publisher, "_atomic_write", interrupted)
+    with pytest.raises(RuntimeError, match="typed UI publication interrupted"):
+        ui.materialize_typed_ui_occurrence(planned, project_root=tmp_path, symbols=SYMBOLS)
+    assert failed == [fail_path]
+    assert manifest.read_text() == original
+    assert all(not (tmp_path / name).exists() for name in planned["files"])
+    assert not list((tmp_path / ".mmm/typed-ui-producers").glob("*.json"))
