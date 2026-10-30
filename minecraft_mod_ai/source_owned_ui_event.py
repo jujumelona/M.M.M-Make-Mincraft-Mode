@@ -340,14 +340,22 @@ def materialize_typed_ui_occurrence(planned, *, project_root, symbols):
         if metadata["id"] != planned["recipe"]["mod_id"]:
             raise ValueError("UI_OCCURRENCE_MOD_ID_MISMATCH")
         obsolete = _obsolete_producers(root, planned, symbols)
+        receipt = _path(root, ".mmm/typed-ui-producers/" + planned["digest"] + ".json")
+        expected_receipt = _canonical(planned["recipe"]) + "\n"
+        if receipt.is_file() and receipt.read_text(encoding="utf-8") != expected_receipt:
+            raise ValueError("UI_OCCURRENCE_RECEIPT_CONFLICT")
         for relative, contents in planned["files"].items():
             path = _path(root, relative)
             if path.exists() and path.read_text(encoding="utf-8") != contents:
                 raise ValueError("UI_OCCURRENCE_EXISTING_FILE_CONFLICT: " + relative)
-        for relative, contents in planned["files"].items():
-            path = _path(root, relative)
-            if not path.exists():
-                _atomic_write(path, contents)
+
+        before_manifest = manifest.read_text(encoding="utf-8")
+        removed_files = []
+        for old_receipt, previous in obsolete:
+            for relative, contents in previous["files"].items():
+                removed_files.append((_path(root, relative), contents))
+            removed_files.append((old_receipt, old_receipt.read_text(encoding="utf-8")))
+
         for side, owner in planned["entrypoints"].items():
             entries = metadata["entrypoints"][side]
             superseded = {previous["entrypoints"][side] for _, previous in obsolete}
@@ -358,13 +366,56 @@ def materialize_typed_ui_occurrence(planned, *, project_root, symbols):
                         for entry in entries if isinstance(entry, (str, dict))}
             if owner not in existing:
                 entries.append(owner)
-        _atomic_write(manifest, json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
-        for old_receipt, previous in obsolete:
-            for relative in previous["files"]:
-                _path(root, relative).unlink()
-            old_receipt.unlink()
-        receipt = _path(root, ".mmm/typed-ui-producers/" + planned["digest"] + ".json")
-        _atomic_write(receipt, _canonical(planned["recipe"]) + "\n")
+        new_manifest = json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
+
+        created_files = []
+        receipt_created = not receipt.exists()
+        try:
+            for relative, contents in planned["files"].items():
+                path = _path(root, relative)
+                if not path.exists():
+                    created_files.append((path, contents))
+                    _atomic_write(path, contents)
+            _atomic_write(manifest, new_manifest)
+            for old_path, old_contents in removed_files:
+                # Obsolete output was byte-checked above, before publication.
+                if old_path.exists() and old_path.read_text(encoding="utf-8") == old_contents:
+                    old_path.unlink()
+                elif old_path.exists():
+                    raise ValueError("UI_OCCURRENCE_OBSOLETE_CHANGED: " + str(old_path))
+            if receipt_created:
+                _atomic_write(receipt, expected_receipt)
+        except Exception:
+            # Restore exactly this transaction, without touching independent
+            # producers or pre-existing entries. Both project and process
+            # locks remain held throughout rollback.
+            incomplete = []
+            if receipt_created and receipt.is_file():
+                if receipt.read_text(encoding="utf-8") == expected_receipt:
+                    receipt.unlink()
+                else:
+                    incomplete.append(str(receipt))
+            for old_path, old_contents in removed_files:
+                if not old_path.exists():
+                    _atomic_write(old_path, old_contents)
+                elif old_path.read_text(encoding="utf-8") != old_contents:
+                    incomplete.append(str(old_path))
+            if manifest.is_file():
+                current = manifest.read_text(encoding="utf-8")
+                if current == new_manifest:
+                    _atomic_write(manifest, before_manifest)
+                elif current != before_manifest:
+                    incomplete.append(str(manifest))
+            for path, contents in reversed(created_files):
+                if path.is_file() and path.read_text(encoding="utf-8") == contents:
+                    path.unlink()
+                elif path.exists():
+                    incomplete.append(str(path))
+            if incomplete:
+                raise RuntimeError(
+                    "UI_OCCURRENCE_PUBLICATION_ROLLBACK_INCOMPLETE: "
+                    + ", ".join(incomplete))
+            raise
     return planned
 
 
