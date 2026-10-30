@@ -507,3 +507,35 @@ def test_identical_compiler_repair_is_rejected_before_another_model_turn():
     with pytest.raises(ValueError, match="JAVA_HOST_COMPILER_REPAIR_EMPTY"):
         require_compiler_repair_progress("class A {}", "", "cannot resolve symbol")
     assert require_compiler_repair_progress("class A {}", "class A { int n; }", "error")
+
+
+def test_source_owned_strategy_does_not_replay_conflicting_direct_author_prompt(monkeypatch):
+    import json
+    from minecraft_mod_ai.incremental_java_pipeline import compose_source
+    from minecraft_mod_ai import host_fabric_callback_abi
+    monkeypatch.setattr(host_fabric_callback_abi, "callback_interfaces",
+                        lambda *a, **k: [_event()])
+    behavior = {"behavior_id": "b1", "intent": "check original condition",
+                "runtime_state_reads": ["world.condition"]}
+    original = {"host_java_authoring": True,
+                "assigned_behaviors": [behavior],
+                "inspected_target_api": {"target_api": [{"signature": "verified"}]},
+                "implementation_requirements": "preserve world state"}
+    payload = [{"role": "user", "content": json.dumps(original)}]
+    def capture(_router, _spec, messages, **kwargs):
+        actual = json.loads(messages[0]["content"])
+        assert actual["host_java_authoring"] is False
+        assert actual["host_source_owned"] is True
+        assert actual["assigned_behaviors"] == original["assigned_behaviors"]
+        assert actual["inspected_target_api"] == original["inspected_target_api"]
+        assert actual["implementation_requirements"] == original["implementation_requirements"]
+        assert kwargs["construction_context"]["host_source_owned"] is True
+        return "checked"
+    assert compose_source(
+        object(), {"side": "COMMON"}, payload, source_context=[],
+        construction_context={"host_direct_feature_source": True,
+                              "prefer_host_source_owned": True,
+                              "incremental_state": {}, "symbols": {}},
+        behaviors=[behavior], legacy_author=capture,
+    ) == "checked"
+    assert json.loads(payload[0]["content"]) == original
