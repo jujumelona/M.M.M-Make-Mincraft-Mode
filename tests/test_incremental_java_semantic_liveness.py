@@ -726,3 +726,16 @@ def test_unimplemented_initial_registrar_is_not_callable_until_finished():
     assert _generated_methods(builder, owner, registrar["name"]) == []
     registrar["implementation_status"] = "complete"
     assert len(_generated_methods(builder, owner, registrar["name"])) == 1
+
+
+def test_repair_self_delegation_guard_rejects_reintroduced_recursive_call():
+    from minecraft_mod_ai.incremental_java_author import _reject_active_self_call
+
+    member = {"id": "m3", "kind": "method", "name": "mmmHelper3"}
+    for receiver in ("this", ""):
+        with pytest.raises(RuntimeError, match="JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN"):
+            _reject_active_self_call(member, {
+                "op": "call", "method": "mmmHelper3", "receiver": receiver,
+            })
+    _reject_active_self_call(member, {"op": "call", "method": "otherMethod",
+                                      "receiver": "this"})
