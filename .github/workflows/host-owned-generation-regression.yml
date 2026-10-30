@@ -30,4 +30,12 @@ jobs:
       - name: Verify generation modules compile
         run: python -m compileall -q minecraft_mod_ai
       - name: Run small-AI source-generation regressions
-        run: python -m pytest -q tests/test_incremental_java_host_registration.py tests/test_incremental_java_event_query_isolation.py tests/test_incremental_java_work_ownership.py
+        run: >-
+          python -m pytest -q
+          tests/test_incremental_java_host_registration.py
+          tests/test_incremental_java_event_query_isolation.py
+          tests/test_incremental_java_work_ownership.py
+          tests/test_incremental_java_author.py
+          tests/test_incremental_java_pipeline.py
+          tests/test_feature_source_owned_dispatch.py
+          tests/test_direct_feature_source.py
