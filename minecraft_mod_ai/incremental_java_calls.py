@@ -45,7 +45,8 @@ def _receiver_type(builder, receiver):
 def _generated_methods(builder, owner, method):
     return [{"kind": "METHOD", "owner": row["owner"], "name": row["name"], **row["metadata"]}
             for row in builder.program.get("members", ())
-            if row["kind"] == "method" and row["name"] == method and _owner_matches(row["owner"], owner)]
+            if row["kind"] == "method" and row["name"] == method and _owner_matches(row["owner"], owner)
+            and row.get("implementation_status") not in {"pending", "authoring"}]
 
 
 def _lookup_pages(api, query):
