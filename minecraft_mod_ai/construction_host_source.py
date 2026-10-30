@@ -126,8 +126,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     candidate = root / ".mmm" / "construction_host_candidates" / (identifier + ".json")
     proof_path = root / ".mmm" / "construction_host_mutations" / (identifier + ".json")
     from .runtime_mutation_author import verify_native_runtime_mutation_coverage
-    required_native = not direct_feature and any(
-        row.get("runtime_state_writes") for row in behaviors)
+    has_runtime_writes = any(row.get("runtime_state_writes") for row in behaviors)
+    # A previous source-owned candidate must replay its immutable native-call
+    # proof. Do not accept a checkpointed Java file after losing that proof.
+    required_native = bool(has_runtime_writes and
+                           (not direct_feature or proof_path.is_file()))
     mutation_receipts = []
     incremental_state = {}
     context["incremental_state"] = incremental_state
@@ -258,6 +261,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         },
                         behaviors=behavior_rows, legacy_author=compose_first_pass_java,
                     )
+            if incremental_state.get("strategy") == "host_source_owned":
+                # The source-owned author emits one checked native mutation
+                # receipt per original state write. Validate these receipts
+                # after compiler repairs, and bind the checkpoint to their
+                # exact statements rather than treating Java syntax as gameplay.
+                required_native = bool(has_runtime_writes)
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
             if type(budget) is not int or budget < 0:
