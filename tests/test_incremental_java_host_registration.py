@@ -435,3 +435,26 @@ def test_ast_strategy_requires_a_saved_program_not_just_a_route_label():
     from minecraft_mod_ai.incremental_java_pipeline import has_incremental_ast
     with pytest.raises(ValueError, match="JAVA_HOST_INCREMENTAL_AST_MISSING"):
         has_incremental_ast(True, {"strategy": "incremental_java"})
+
+
+@pytest.mark.parametrize("strategy", ["host_verified_source", "host_rule_template"])
+def test_compiler_resume_preserves_host_source_strategy_without_ast(strategy):
+    from minecraft_mod_ai.incremental_java_pipeline import candidate_data, load_candidate
+    record = candidate_data(
+        "package example; class Feature {}", "javac: expected symbol",
+        {"strategy": strategy},
+    )
+    restored = {}
+    assert load_candidate(record, restored, True) == record
+    assert restored == {"strategy": strategy}
+    assert "program_json" not in record
+
+
+def test_compiler_resume_rejects_native_proof_on_non_ast_host_strategy():
+    from minecraft_mod_ai.incremental_java_pipeline import load_candidate
+    with pytest.raises(ValueError, match="JAVA_HOST_NON_AST_CANDIDATE_INVALID"):
+        load_candidate({
+            "source": "code", "diagnostic": "error",
+            "strategy": "host_verified_source",
+            "native_mutation_receipts_json": "[]",
+        }, {}, True)
