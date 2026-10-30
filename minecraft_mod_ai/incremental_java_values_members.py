@@ -162,7 +162,14 @@ def _select_call_contract(author, node, *, nonvoid, reference):
         return receiver, selected
 
 
+def _generated_method_identity(builder, selected):
+    identity = selected.get("id")
+    return identity if any(row.get("id") == identity and row.get("kind") == "method"
+                           for row in builder.program.get("members", ())) else ""
+
+
 def select_call(author, node, *, nonvoid=False, reference=False):
     receiver, selected = _select_call_contract(author, node, nonvoid=nonvoid, reference=reference)
-    node.update(method=selected["name"], call_contract=_signature(selected))
+    node.update(method=selected["name"], call_contract=_signature(selected),
+                generated_member_id=_generated_method_identity(author.builder, selected))
     return receiver
