@@ -64,7 +64,7 @@ def _publication_paths(root, symbols, records):
 
 
 @contextmanager
-def source_publication_transaction(*, project_root, symbols, records):
+def source_publication_transaction(*, project_root, symbols, records, tracked_paths=()):
     """Publish planned producers, then require the caller's COMPLETE verification.
 
     The transaction completes only if its with-block returns successfully.
@@ -85,7 +85,8 @@ def source_publication_transaction(*, project_root, symbols, records):
     with project_write_lock(root), _producer_cross_process_lock(
         root / ".mmm/source-producer.lock"
     ):
-        paths = _publication_paths(root, symbols, records)
+        paths = sorted(set(_publication_paths(root, symbols, records)) | {
+            _safe_path(root, path) for path in tracked_paths})
         before = {path: path.read_bytes() if path.exists() else None for path in paths}
         try:
             for record in records:
