@@ -121,12 +121,56 @@ def _member_has_potential_effect(member):
     return any(_node_has_potential_effect(node, local_names) for node in nodes)
 
 
+def _observable_member_ids(program):
+    """Resolve generated-helper effects transitively instead of counting self-calls.
+
+    A completed helper is useful only if it reaches a non-generated call,
+    registration, field write, or terminal failure. A cycle of generated calls
+    without such an effect is not implementation progress.
+    """
+    from .incremental_java_calls import _owner_matches
+
+    members = {row["id"]: row for row in program["members"] if row.get("kind") == "method"}
+    generated = {}
+    for member in members.values():
+        generated.setdefault(member["name"], []).append(member)
+
+    directly_effectful, dependencies = set(), {}
+    for member in members.values():
+        names = _member_local_names(member, tuple(walk_nodes(member.get("body") or ())))
+        dependencies[member["id"]] = set()
+        for node in walk_nodes(member.get("body") or ()):
+            if node.get("op") == "call":
+                contract = node.get("call_contract") or {}
+                owner = contract.get("owner") or node.get("receiver_type")
+                receiver = str(node.get("receiver") or "")
+                if not owner and receiver in {"", "this"}:
+                    owner = member["owner"]
+                matches = [target for target in generated.get(node.get("method"), ())
+                           if owner and _owner_matches(target["owner"], owner)]
+                if matches:
+                    dependencies[member["id"]].update(row["id"] for row in matches)
+                else:
+                    directly_effectful.add(member["id"])
+            elif _node_has_potential_effect(node, names):
+                directly_effectful.add(member["id"])
+
+    observable = set(directly_effectful)
+    while True:
+        newly_observable = {source for source, targets in dependencies.items()
+                            if targets & observable}
+        if newly_observable <= observable:
+            return observable
+        observable.update(newly_observable)
+
+
 def _assert_live_behavior_entrypoints(program):
-    """Reject empty callback/registration bodies after compiler validation."""
+    """A helper call alone cannot satisfy an observable behavior obligation."""
+    observable = _observable_member_ids(program)
     for member in program["members"]:
         if not (member.get("registrar") or member.get("event")):
             continue
-        if not _member_has_potential_effect(member):
+        if member["id"] not in observable:
             raise RuntimeError(
                 "INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION: "
                 f"entrypoint={member['id']}; implementation contains only "
@@ -347,6 +391,10 @@ class IncrementalJavaBuilder:
                 pending_before = len(self.pending)
                 progress_before = self._progress_epoch.get(member_id, 0)
                 node = author_operation(self, operation)
+                if (node is not None and operation == "call"
+                        and node.get("method") == member.get("name")
+                        and node.get("receiver") in {"", "this"}):
+                    raise RuntimeError("JAVA_ACTIVE_MEMBER_RECURSION_FORBIDDEN: " + member_id)
                 if node is None:
                     self._record_nonprogress(member)
                     continue
