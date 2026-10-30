@@ -642,3 +642,26 @@ def test_small_coder_receives_host_state_work_order_scope():
     assert payload["host_state_work_order_scope"] == binding
     payload["host_state_work_order_scope"]["undeclared_plan_writes"].append("tampered")
     assert builder.context["host_state_work_order_scope"] == binding
+
+
+def test_generated_member_id_is_preserved_and_stale_ids_fail_closed():
+    from minecraft_mod_ai.incremental_java_values_members import _generated_method_identity
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    owner = builder.program["class_name"]
+    generated = {"id": "m20", "kind": "method", "owner": owner, "name": "link",
+                 "metadata": method_metadata(), "body": []}
+    builder.program["members"].append(generated)
+    assert _generated_method_identity(builder, {"id": "m20"}) == "m20"
+    assert _generated_method_identity(builder, {"id": "api:0"}) == ""
+
+    caller = {"id": "m1", "owner": owner, "kind": "method",
+              "metadata": method_metadata(), "registrar": True,
+              "body": [{"id": "n1", "op": "call", "receiver": "this",
+                        "method": "link", "generated_member_id": "m20"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [caller, generated]})
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [caller]})
