@@ -36,7 +36,7 @@ def _record_checked_native_effect(builder, node):
     from .incremental_java_execution_proof import native_write_targets, _inspected_call
     from .incremental_java_schema import choice
 
-    if not builder.member.get("event") or not _inspected_call(node, builder.api.symbols):
+    if not builder.member.get("behavior") or not _inspected_call(node, builder.api.symbols):
         return
     targets = native_write_targets(builder.member.get("behavior") or {}, builder.api.bindings)
     if not targets:
