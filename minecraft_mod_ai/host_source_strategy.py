@@ -151,11 +151,8 @@ def prefer_source_owned_strategy(
             raise ValueError("HOST_SOURCE_PREFERENCE_INVALID")
         return preference
     from .fixed_template_generation import _adapter_name
-    return (
-        _adapter_name(router, "coder") == "llama_cpp"
-        and any(
-            behavior.get("runtime_state_reads")
-            or behavior.get("runtime_state_writes")
-            for behavior in behaviors
-        )
-    )
+    # All live 9B gameplay features need host-owned occurrence, lifecycle,
+    # data and effect decomposition. A feature without an explicit world-state
+    # annotation can still require a real callback and executable effect;
+    # routing it back to the 96-choice AST planner recreates the original bug.
+    return _adapter_name(router, "coder") == "llama_cpp" and bool(behaviors)
