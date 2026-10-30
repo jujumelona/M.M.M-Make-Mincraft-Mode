@@ -361,3 +361,23 @@ def test_no_inspected_event_creates_original_source_before_listener(monkeypatch)
     assert source["task_id"] in hook["depends_on"]
     assert hook["task_id"] in effect["depends_on"]
     assert graph["completion_verified"] is False
+
+
+def test_host_registration_applies_to_stateless_features_too(monkeypatch):
+    from minecraft_mod_ai import incremental_java_author as author
+    from minecraft_mod_ai import incremental_java_progress as progress
+
+    builder = _builder_without_model()
+    member = {"id": "m-stateless", "kind": "method", "registrar": True,
+              "behavior": {"behavior_id": "basic-event"}, "body": []}
+    calls = []
+    def emit(builder_arg, member_arg, operation):
+        calls.append(operation)
+        return {"id": "node", "op": "register", "event_owner": "real.Event",
+                "event_field": "EVENT", "handler": "handle"}
+    monkeypatch.setattr(author, "_safe_author_operation", emit)
+    monkeypatch.setattr(progress, "finish_new_members", lambda *a, **k: None)
+    builder.ask = lambda *a, **k: pytest.fail("no model action for a lifecycle registrar")
+    builder.author_block(member, {}, [], body=member["body"])
+    assert calls == ["register"]
+    assert [n["op"] for n in member["body"]] == ["register"]
