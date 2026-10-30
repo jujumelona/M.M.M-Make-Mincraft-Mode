@@ -739,3 +739,35 @@ def test_repair_self_delegation_guard_rejects_reintroduced_recursive_call():
             })
     _reject_active_self_call(member, {"op": "call", "method": "otherMethod",
                                       "receiver": "this"})
+
+
+def test_throw_only_callback_does_not_count_as_gameplay_implementation():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    callback = {"id": "m1", "owner": "Feature", "kind": "method", "name": "onEvent",
+                "metadata": method_metadata(), "registrar": True,
+                "body": [{"id": "n1", "op": "throw", "value": "new RuntimeException()"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback]})
+
+
+def test_constant_false_branch_cannot_forge_observable_effect():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    update = {"id": "n2", "op": "call", "receiver": "world",
+              "receiver_type": "net.minecraft.world.World",
+              "method": "setBlockState", "arguments": ["pos", "state"]}
+    branch = {"id": "n1", "op": "if", "condition": "false",
+              "body": [update], "otherwise": []}
+    callback = {"id": "m1", "owner": "Feature", "kind": "method",
+                "name": "onEvent", "registrar": True,
+                "metadata": method_metadata(), "body": [branch]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback]})
+    branch["otherwise"] = [dict(update, id="n3")]
+    _assert_live_behavior_entrypoints({"members": [callback]})
+    branch["condition"] = "true"
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback]})
