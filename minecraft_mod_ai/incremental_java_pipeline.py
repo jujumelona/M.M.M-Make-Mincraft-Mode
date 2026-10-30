@@ -58,6 +58,17 @@ def repair_member(router, source, diagnostic, *, context):
     return source
 
 
+def _direct_execution_proof_inputs(context, state):
+    """Use the same verified ABI on first pass and durable AST replay."""
+    api = state.get("api")
+    if api is not None:
+        return api.behaviors, api.callbacks(), api.bindings, api
+    return (context.get("behaviors") or (),
+            context.get("verified_fabric_callbacks") or (),
+            context.get("runtime_state_bindings") or {},
+            context.get("symbols") or {})
+
+
 def _verify_observable_program(context):
     state = context.get("incremental_state") or {}
     program = state.get("program")
@@ -66,17 +77,7 @@ def _verify_observable_program(context):
         from .incremental_java_execution_proof import verify_incremental_feature_execution
 
         _assert_live_behavior_entrypoints(program)
-        api = state.get("api")
-        if api is not None:
-            behaviors = api.behaviors
-            callbacks = api.callbacks()
-            bindings = api.bindings
-            symbols = api
-        else:
-            behaviors = context.get("behaviors") or ()
-            callbacks = context.get("verified_fabric_callbacks") or ()
-            bindings = context.get("runtime_state_bindings") or {}
-            symbols = context.get("symbols") or {}
+        behaviors, callbacks, bindings, symbols = _direct_execution_proof_inputs(context, state)
         checked_source = context.get("verified_source_events") or ()
         verify_incremental_feature_execution(
             program, behaviors, [*callbacks, *checked_source], bindings, symbols)
