@@ -690,3 +690,17 @@ def test_stale_feature_verifier_scope_cannot_be_silently_reused():
         _exact_behavior_verification_spec(
             {"bindings": {"request_feature_entrypoint": True}},
             [{"behavior_id": "repeat"}, {"behavior_id": "repeat"}])
+
+
+def test_non_host_ast_fixture_can_author_state_before_original_event_registration():
+    from minecraft_mod_ai.incremental_java_work import work_options
+    from minecraft_mod_ai.incremental_java_author import IncrementalJavaBuilder
+    from test_incremental_java_author import _inputs, OperationCoder
+    behavior, spec, context, messages = _inputs()
+    builder = IncrementalJavaBuilder(
+        OperationCoder(), spec, messages, context, [behavior])
+    registrar = next(m for m in builder.program["members"] if m.get("registrar"))
+    base = ["field", "register", "complete", "lookup"]
+    assert work_options(builder, registrar, {}, [], [], base) == base
+    context["host_registration_enabled"] = True
+    assert work_options(builder, registrar, {}, [], [], base) == ["register"]
