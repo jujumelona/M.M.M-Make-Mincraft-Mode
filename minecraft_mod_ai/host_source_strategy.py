@@ -85,8 +85,10 @@ def prepare_source_owned_strategy(
             for name in dict.fromkeys(behavior.get("runtime_state_reads") or ()):
                 if not isinstance(name, str) or not name.strip():
                     raise ValueError("HOST_SOURCE_OBSERVATION_NAME_INVALID")
-                if (name in existing_reads
-                        and name in (behavior.get("state_reads") or ())):
+                declared_reads = behavior.get("state_reads") or ()
+                if (isinstance(declared_reads, (list, tuple, set))
+                        and name in existing_reads
+                        and name in declared_reads):
                     reused_reads.setdefault(owner, {})[name] = existing_reads[name]
                     continue
                 obligations.append({
