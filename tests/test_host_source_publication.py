@@ -102,3 +102,15 @@ def test_ui_producer_rollback_restores_original_manifest_and_all_files(tmp_path)
     assert manifest.read_text() == original
     assert all(not (tmp_path / name).exists() for name in planned["files"])
     assert not list((tmp_path / ".mmm/typed-ui-producers").glob("*.json"))
+
+
+def test_source_owned_compiler_loads_qualified_external_producer_closure():
+    from minecraft_mod_ai.java_source_snapshot import direct_source_dependencies
+    assert direct_source_dependencies({"host_source_owned": True}) == {
+        "include_qualified_sources": True}
+    assert direct_source_dependencies({
+        "host_direct_feature_source": False, "host_source_owned": True}) == {
+        "include_qualified_sources": True}
+    assert direct_source_dependencies({"host_direct_feature_source": True}) == {
+        "include_qualified_sources": True}
+    assert direct_source_dependencies({}) == {}
