@@ -33,8 +33,12 @@ SCHEMAS = {
     "constructor_call": choice("target", ["super", "this"]),
 }
 BLOCK_OPS = frozenset({"if", "while", "do", "foreach", "for", "block", "synchronized"})
+# An unqualified Java block contributes no gameplay action. In a production
+# failure, the model repeatedly emitted local -> block across nested scopes.
+# The renderer continues to support existing block ASTs, but the model must
+# select meaningful control flow or operations instead of opening bare scopes.
 SIMPLE_OPS = ("call", "local", "assign", "if", "while", "do", "foreach", "for", "return",
-              "throw", "block", "synchronized", "switch", "try", "lambda", "register")
+              "throw", "synchronized", "switch", "try", "lambda", "register")
 DECLARATION_OPS = ("field", "method", "type")
 
 # This bounds the authoring *structure*, not the size of a requested feature.
