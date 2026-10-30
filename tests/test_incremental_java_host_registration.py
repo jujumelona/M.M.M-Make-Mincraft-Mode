@@ -582,3 +582,15 @@ def test_host_graph_flags_missing_semantic_occurrence_even_if_some_events_exist(
     source = next(r for r in graph["tasks"] if r["kind"] == "custom_event_source")
     hook = next(r for r in graph["tasks"] if r["kind"] == "occurrence_hook")
     assert source["task_id"] in hook["depends_on"]
+
+
+def test_state_reader_with_unbound_context_parameter_is_not_reused():
+    from minecraft_mod_ai.host_source_strategy import _materialized_read_bindings
+    context = {
+        "host_state_work_order_scope": {"declared_readable": ["credits"]},
+        "host_state_access": [{"owner": "example.AuthoredStateModel", "methods": [
+            {"name": "readState_credits",
+             "signature": "public static int readState_credits(String player) { return 1; }"},
+        ]}],
+    }
+    assert _materialized_read_bindings(context) == {}
