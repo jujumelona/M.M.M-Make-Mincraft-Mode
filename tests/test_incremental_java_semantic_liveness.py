@@ -712,3 +712,19 @@ def test_finished_helper_value_contract_retains_declared_identity():
     author = ValueAuthor(builder)
     contract = author._finish_helper(helper, len(builder.pending))
     assert contract["id"] == "m98"
+
+
+def test_unimplemented_initial_registrar_is_not_callable_until_finished():
+    from minecraft_mod_ai.incremental_java_model import initial_program
+    from minecraft_mod_ai.incremental_java_calls import _generated_methods
+
+    builder = _builder(None)
+    program = builder.program
+    registrar = program["members"][0]
+    assert registrar["implementation_status"] == "pending"
+    owner = program["class_name"]
+    assert _generated_methods(builder, owner, registrar["name"]) == []
+    registrar["implementation_status"] = "authoring"
+    assert _generated_methods(builder, owner, registrar["name"]) == []
+    registrar["implementation_status"] = "complete"
+    assert len(_generated_methods(builder, owner, registrar["name"])) == 1
