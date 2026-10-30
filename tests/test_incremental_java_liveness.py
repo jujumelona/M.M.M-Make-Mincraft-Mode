@@ -202,3 +202,10 @@ def test_active_helper_self_call_is_rejected_before_accepting_node():
     _reject_current_self_call(member, {
         "op": "call", "receiver": "this", "method": "otherHelper"})
     _reject_current_self_call(member, {"op": "local", "name": "temporary"})
+    # A distinct overload is legal Java: it must remain callable.
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+    method = {**member, "metadata": method_metadata()}
+    _reject_current_self_call(method, {
+        "op": "call", "receiver": "this", "method": "mmmHelper3",
+        "call_contract": {"kind": "METHOD", "owner": "Feature",
+                          "name": "mmmHelper3", "parameters": ["int"]}})
