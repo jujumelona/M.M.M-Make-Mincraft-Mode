@@ -132,3 +132,14 @@ def test_when_no_verified_original_occurrence_exists_do_not_fabricate_one():
     assert _resolve_declined_registration(builder, None) is None
     with pytest.raises(SourceHookUnavailable, match="SOURCE_HOOK_PRODUCER_REQUIRED"):
         _resolve_declined_registration(builder, None)
+
+
+def test_missing_runtime_callback_is_not_permission_for_a_noop_registrar():
+    from minecraft_mod_ai.incremental_java_work import work_options
+    from test_incremental_java_work_ownership import _world_builder
+
+    builder = _world_builder()
+    builder.api._callbacks = []
+    result = work_options(builder, builder.member, builder.scope, [], [],
+                          ["register", "lookup", "call", "complete"])
+    assert result == ["register"]
