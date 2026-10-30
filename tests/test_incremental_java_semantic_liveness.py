@@ -693,10 +693,9 @@ def test_generated_call_provenance_survives_helper_and_call_argument_paths():
     discovered = _generated_methods(builder, helper["owner"], helper["name"])
     assert len(discovered) == 1 and discovered[0]["id"] == "m99"
     from minecraft_mod_ai.incremental_java_calls import author_call_arguments
-    builder.arguments = lambda node: author_call_arguments(builder, node)
     node = {"id": "n4", "op": "call", "receiver": "this",
             "method": "helperEffect"}
-    builder.arguments(node)
+    author_call_arguments(builder, node)
     assert node["generated_member_id"] == "m99"
 
 
@@ -715,7 +714,6 @@ def test_finished_helper_value_contract_retains_declared_identity():
 
 
 def test_unimplemented_initial_registrar_is_not_callable_until_finished():
-    from minecraft_mod_ai.incremental_java_model import initial_program
     from minecraft_mod_ai.incremental_java_calls import _generated_methods
 
     builder = _builder(None)
