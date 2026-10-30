@@ -31,10 +31,32 @@ def _local(builder, node):
     builder.scope["locals"].append({"type": values["type"], "name": node["name"]})
 
 
+def _record_checked_native_effect(builder, node):
+    """Ask which obligation a verified direct mutator implements, if any."""
+    from .incremental_java_execution_proof import native_write_targets, _inspected_call
+    from .incremental_java_schema import choice
+
+    if not builder.member.get("event") or not _inspected_call(node, builder.api.symbols):
+        return
+    targets = native_write_targets(builder.member.get("behavior") or {}, builder.api.bindings)
+    if not targets:
+        return
+    selected = builder.ask(choice("native_state", ("none", *targets)),
+                           "native_mutation_state", {
+                               "verified_call_contract": node["call_contract"],
+                               "required_native_states": list(targets),
+                               "instruction": "Choose a state changed by this checked runtime invocation. "
+                                              "Select none for observers, getters, logs, or unrelated methods.",
+                           })["native_state"]
+    if selected != "none":
+        node["native_state_effect"] = selected
+
+
 def _call(builder, node):
     from .incremental_java_values import author_call_head
     author_call_head(builder, node)
     builder.arguments(node)
+    _record_checked_native_effect(builder, node)
     contract = node["call_contract"]
     returns = contract.get("generic_return_type", contract.get("return_type", "void"))
     node["result_type"] = ""
