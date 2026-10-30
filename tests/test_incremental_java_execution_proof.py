@@ -151,3 +151,16 @@ def test_mutation_choice_is_attached_only_to_checked_source_call():
     node.pop("native_state_effect")
     _record_checked_native_effect(Builder(), node)
     assert "native_state_effect" not in node
+
+
+def test_java_logging_and_event_registration_cannot_claim_native_world_mutation():
+    from minecraft_mod_ai.incremental_java_execution_proof import _inspected_call
+
+    for owner, method in (("java.io.PrintStream", "println"),
+                          ("net.fabricmc.fabric.api.event.Event", "register")):
+        node = {"op": "call", "method": method, "receiver": "arg0",
+                "call_contract": {"kind": "METHOD", "owner": owner,
+                                  "name": method, "parameters": ["String"]}}
+        symbols = {"method": {"kind": "METHOD", "owner": owner,
+                              "name": method, "parameters": ["String"]}}
+        assert not _inspected_call(node, symbols)
