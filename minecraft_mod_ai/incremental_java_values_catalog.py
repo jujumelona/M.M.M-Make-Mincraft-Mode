@@ -80,10 +80,22 @@ def _bind_generated(row, declaration, java_type):
     return answer
 
 
+def _catalog_member_callable(builder, declaration, kind, member):
+    if member["kind"].upper() != kind or not _generated_matches(
+            builder, declaration, member["owner"]):
+        return False
+    # The active helper still exists in the AST but cannot be a callee until
+    # its body is implemented. This applies to expression and statement calls.
+    if kind == "METHOD" and (member["id"] == (builder.member or {}).get("id")
+                             or member.get("implementation_status") == "authoring"):
+        return False
+    return True
+
+
 def _declared_members(builder, declaration, kind):
     rows = []
     for member in builder.program.get("members", ()):
-        if member["kind"].upper() != kind or not _generated_matches(builder, declaration, member["owner"]):
+        if not _catalog_member_callable(builder, declaration, kind, member):
             continue
         row = {"id": member["id"], "kind": kind, "owner": member["owner"],
                "name": member["name"], "purpose": member.get("purpose", ""), **member["metadata"]}
