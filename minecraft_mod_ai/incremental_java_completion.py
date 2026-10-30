@@ -29,12 +29,23 @@ def _repairable_behavior_body(body):
             and (node["op"] != "return" or node.get("value"))]
 
 
+def _continue_behavior_before_terminal(builder, member):
+    """Keep event result decisions after, not before, newly authored effects."""
+    body = member["body"]
+    body[:] = _repairable_behavior_body(body)
+    terminal = body.pop() if body and body[-1]["op"] == "return" else None
+    try:
+        builder.author_block(member, scope_at(member), [], body=body)
+    finally:
+        if terminal is not None and (not body or body[-1]["op"] not in {"return", "throw"}):
+            body.append(terminal)
+
+
 def _complete_member(builder, member, diagnostic, missing_return):
     if member["kind"] in {"class", "record", "enum"} and "does not override abstract method" in diagnostic:
         builder.author_block(member, initial_scope(member), [], body=member["body"])
     elif "CONSTRUCTION_FILE_BEHAVIOR_" in diagnostic and _is_behavior_entrypoint(member):
-        member["body"][:] = _repairable_behavior_body(member["body"])
-        builder.author_block(member, scope_at(member), [], body=member["body"])
+        _continue_behavior_before_terminal(builder, member)
     elif missing_return and member["metadata"].get("return_type", "void") != "void":
         builder.scope = scope_at(member)
         _append_return(builder, member["body"], member["metadata"]["return_type"])
