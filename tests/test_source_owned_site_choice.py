@@ -85,12 +85,15 @@ def test_short_java_occurrence_verbs_remain_searchable():
         "c": {"kind": "CLASS", "owner": "example.PlayerInteractions"},
         "use": {"kind": "METHOD", "owner": "example.PlayerInteractions",
                 "name": "useItem", "parameters": ["example.Item"], "return_type": "void",
+                "source_path": "src/main/java/example/PlayerInteractions.java",
                 "access": 1},
         "hit": {"kind": "METHOD", "owner": "example.PlayerInteractions",
                 "name": "hitTarget", "parameters": ["example.Target"], "return_type": "void",
+                "source_path": "src/main/java/example/PlayerInteractions.java",
                 "access": 1},
         "buy": {"kind": "METHOD", "owner": "example.PlayerInteractions",
                 "name": "buy", "parameters": ["int"], "return_type": "void",
+                "source_path": "src/main/java/example/PlayerInteractions.java",
                 "access": 1},
     }
     for verb, target in (("use", "use"), ("hit", "hit"), ("buy", "buy")):
@@ -141,3 +144,22 @@ def test_planet_colonization_does_not_offer_lwjgl_or_space_getters_as_event_site
         behavior, rows)] == ["gameplay_action"]
     assert shortlist_verified_sites(
         behavior, {k: v for k, v in rows.items() if k != "gameplay_action"}) == []
+
+
+def test_unproven_source_path_cannot_be_promoted_to_custom_mixin_injection_site():
+    # Classpath inventories can contain symbol names with no source provenance.
+    # A matching name is only a lookup hint, never an original occurrence owner.
+    behavior = {"behavior_id": "b", "trigger": "The player buys a module"}
+    unknown = {
+        "class": {"kind": "CLASS", "owner": "thirdparty.ItemShop"},
+        "method": {"kind": "METHOD", "owner": "thirdparty.ItemShop",
+                   "name": "buyModule", "parameters": [], "access": 1},
+    }
+    assert shortlist_verified_sites(behavior, unknown) == []
+    assert shortlist_verified_sites(
+        behavior, {**unknown, "method": {**unknown["method"],
+                   "source_path": "/gradle/caches/third-party.jar"}},
+    ) == []
+    owned = {**unknown, "method": {**unknown["method"],
+             "source_path": "src/main/java/thirdparty/ItemShop.java"}}
+    assert [item["ref"] for item in shortlist_verified_sites(behavior, owned)] == ["method"]
