@@ -823,3 +823,24 @@ def test_noop_repair_preserves_guarded_exception_checks():
     conditional = {"id": "n1", "op": "if", "condition": "badInput",
                    "body": [{"id": "n2", "op": "throw", "value": "exception"}]}
     assert _repairable_behavior_body([conditional]) == [conditional]
+
+
+def test_noop_callback_repair_inserts_real_effect_before_existing_result_return():
+    from minecraft_mod_ai.incremental_java_completion import complete_program_block
+
+    class Builder:
+        def author_block(self, member, scope, path, body):
+            assert body == []
+            body.append({"id": "n2", "op": "call", "receiver": "player",
+                         "method": "damage", "arguments": ["1"]})
+            return body
+
+    member = {"id": "m1", "owner": "Feature", "name": "onEvent",
+              "kind": "method", "event": {"event_id": "Game#HIT"},
+              "metadata": {"parameters": [], "return_type": "boolean"},
+              "body": [{"id": "n1", "op": "return", "value": "false"}]}
+    assert complete_program_block(
+        Builder(), member, None, "CONSTRUCTION_FILE_BEHAVIOR_NOOP: missing native effect"
+    )
+    assert [node["op"] for node in member["body"]] == ["call", "return"]
+    assert member["body"][-1]["value"] == "false"
