@@ -156,6 +156,7 @@ def create_helper(builder, node):
     from .incremental_java_calls import _signature
     method = author_declaration(builder, "method")
     node["method"] = method["name"]
+    node["generated_member_id"] = method["id"]
     node["receiver"] = "" if method["metadata"].get("static") else "this"
     node["call_contract"] = _signature({"kind": "METHOD", "owner": method["owner"],
                                         "name": method["name"], **method["metadata"]})
