@@ -31,8 +31,10 @@ def has_reachable_effect(start, members, local_names, predicate):
         for node in nodes:
             if node.get("op") == "call":
                 receiver = str(node.get("receiver") or "").strip()
-                owner = (node.get("call_contract") or {}).get("owner") or current.get("owner")
-                same_owner = generated.get((owner, node.get("method")), ())
+                # A 'this' invocation resolves in the caller's generated
+                # owner, even when an indexed contract spells that owner with
+                # a package prefix or identifies an inherited declaration.
+                same_owner = generated.get((current.get("owner"), node.get("method")), ())
                 if receiver in {"", "this"} and same_owner:
                     pending.extend(same_owner)
                     continue
