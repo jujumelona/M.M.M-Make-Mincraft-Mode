@@ -34,10 +34,22 @@ def _publication_paths(root, symbols, records):
     manifest = _safe_path(root, "src/main/resources/fabric.mod.json")
     metadata = json.loads(manifest.read_text(encoding="utf-8"))
     paths = {manifest}
+    seen_behaviors = set()
     for record in records:
         if not isinstance(record, dict):
             raise ValueError("HOST_SOURCE_PUBLICATION_RECORD_INVALID")
         kind = record.get("kind")
+        if kind == "custom":
+            owner = (record.get("args") or {}).get("behavior_id")
+        elif kind == "ui":
+            owner = (record.get("plan") or {}).get("behavior_id")
+        else:
+            raise ValueError("HOST_SOURCE_PUBLICATION_KIND_INVALID")
+        if not isinstance(owner, str) or not owner:
+            raise ValueError("HOST_SOURCE_PUBLICATION_BEHAVIOR_REQUIRED")
+        if owner in seen_behaviors:
+            raise ValueError("HOST_SOURCE_PUBLICATION_DUPLICATE_BEHAVIOR: " + owner)
+        seen_behaviors.add(owner)
         if kind == "custom":
             args = record.get("args")
             if not isinstance(args, dict) or "symbols" in args or "project_root" in args:
