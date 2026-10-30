@@ -85,3 +85,69 @@ def test_unbound_runtime_write_fails_closed_but_declared_custom_state_is_separat
     assert native_write_targets(obligation, {}) == ("claim_tracking",)
     declared = {"claim_tracking": {"semantic_status": "host_owned_state_model"}}
     assert native_write_targets(obligation, declared) == ()
+
+
+
+def test_compiled_path_rechecks_event_and_native_effect_on_every_verification():
+    from minecraft_mod_ai.incremental_java_pipeline import _verify_observable_program
+
+    native = {**BEHAVIOR, "runtime_state_writes": ["world block state"]}
+    binding = {"world block state": {"semantic_status": "host_native_runtime_owner"}}
+    symbols = {"s": {"kind": "METHOD", "owner": OWNER, "name": "setBlockState",
+                     "parameters": ["BlockPos", "BlockState"]}}
+    program = _program(native_effect="world block state")
+    program["members"][0]["behavior"] = native
+    program["members"][1]["behavior"] = native
+    context = {"incremental_state": {"program": program}, "behaviors": [native],
+               "verified_fabric_callbacks": [CALLBACK], "runtime_state_bindings": binding,
+               "symbols": symbols}
+    _verify_observable_program(context)
+
+    # A completed cached AST must be checked again, not just its compiled source.
+    context["verified_fabric_callbacks"] = []
+    with pytest.raises(ValueError, match="INSPECTED_OCCURRENCE_MISSING"):
+        _verify_observable_program(context)
+    context["verified_fabric_callbacks"] = [CALLBACK]
+    context["symbols"] = {}
+    with pytest.raises(ValueError, match="NATIVE_MUTATION_UNPROVEN"):
+        _verify_observable_program(context)
+
+
+def test_compiler_repair_maps_missing_native_effect_to_real_listener():
+    from minecraft_mod_ai.incremental_java_state import _repair_entrypoint
+
+    program = _program(native_effect=None)
+    member, diagnostic = _repair_entrypoint(
+        program, "INCREMENTAL_JAVA_NATIVE_MUTATION_UNPROVEN: resource states=['world block state']")
+    assert member["id"] == "m2"
+    assert diagnostic.startswith("CONSTRUCTION_FILE_BEHAVIOR_NOOP:")
+    member, diagnostic = _repair_entrypoint(
+        program, "INCREMENTAL_JAVA_INSPECTED_OCCURRENCE_MISSING: resource")
+    assert member["id"] == "m1"
+    assert diagnostic.startswith("CONSTRUCTION_FILE_BEHAVIOR_NOOP:")
+
+
+def test_mutation_choice_is_attached_only_to_checked_source_call():
+    from minecraft_mod_ai.incremental_java_operations import _record_checked_native_effect
+
+    class API:
+        bindings = {"world block state": {"semantic_status": "host_native_runtime_owner"}}
+        symbols = {"s": {"kind": "METHOD", "owner": OWNER, "name": "setBlockState",
+                         "parameters": ["BlockPos", "BlockState"]}}
+
+    class Builder:
+        api = API()
+        member = {"behavior": {**BEHAVIOR, "runtime_state_writes": ["world block state"]}}
+        def ask(self, schema, suffix, extra=None):
+            assert suffix == "native_mutation_state"
+            assert "world block state" in schema["properties"]["native_state"]["enum"]
+            return {"native_state": "world block state"}
+
+    node = _program(native_effect="world block state")["members"][1]["body"][0]
+    node.pop("native_state_effect")
+    _record_checked_native_effect(Builder(), node)
+    assert node["native_state_effect"] == "world block state"
+    node["call_contract"]["name"] = "getBlockState"
+    node.pop("native_state_effect")
+    _record_checked_native_effect(Builder(), node)
+    assert "native_state_effect" not in node
