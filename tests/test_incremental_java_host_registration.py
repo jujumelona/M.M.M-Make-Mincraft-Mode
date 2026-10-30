@@ -293,3 +293,51 @@ def test_source_owned_resume_refuses_missing_or_corrupted_native_receipts():
     ):
         with pytest.raises(ValueError, match="JAVA_HOST_SOURCE_NATIVE_PROOF"):
             load_candidate(record, {}, True)
+
+
+def test_constrained_runtime_feature_enters_host_engine_before_first_model_choice(monkeypatch):
+    from minecraft_mod_ai import incremental_java_author as author
+    from minecraft_mod_ai import host_fabric_callback_abi
+    from minecraft_mod_ai.incremental_java_pipeline import compose_source
+
+    monkeypatch.setattr(host_fabric_callback_abi, "callback_interfaces",
+                        lambda *a, **k: [_event()])
+    monkeypatch.setattr(
+        author, "compose_incremental_feature",
+        lambda *a, **k: pytest.fail("runtime feature must not enter 96-choice AI loop"),
+    )
+    behavior = {"behavior_id": "general-world-state",
+                "trigger": "original world occurrence", "effects": "mutate original state",
+                "runtime_state_reads": ["world.resource"],
+                "runtime_state_writes": ["world.stock"]}
+    observations = []
+    def render(router, spec, messages, *, source_context, construction_context, behaviors):
+        observations.append(construction_context["source_owned_work_graph"])
+        return "host-built-source"
+    state = {"host_direct_feature_source": True,
+             "prefer_host_source_owned": True,
+             "symbols": {}, "incremental_state": {}}
+    result = compose_source(
+        object(), {"side": "COMMON"}, [], source_context=[],
+        construction_context=state, behaviors=[behavior], legacy_author=render,
+    )
+    assert result == "host-built-source"
+    assert len(observations) == 1
+    assert state["incremental_state"]["strategy"] == "host_source_owned"
+    assert {n["kind"] for n in observations[0]["tasks"]} >= {
+        "occurrence_hook", "runtime_producer", "runtime_mutation",
+        "gameplay_effect", "event_registration", "target_compile",
+    }
+
+
+def test_nonlocal_fixture_uses_original_author_unless_explicitly_requested():
+    from minecraft_mod_ai.host_source_strategy import prefer_source_owned_strategy
+
+    behavior = [{"runtime_state_writes": ["world.money"]}]
+    assert prefer_source_owned_strategy(object(), {}, behavior) is False
+    assert prefer_source_owned_strategy(
+        object(), {"prefer_host_source_owned": True}, behavior) is True
+    assert prefer_source_owned_strategy(
+        object(), {"prefer_host_source_owned": False}, behavior) is False
+    with pytest.raises(ValueError, match="HOST_SOURCE_PREFERENCE_INVALID"):
+        prefer_source_owned_strategy(object(), {"prefer_host_source_owned": "true"}, behavior)
