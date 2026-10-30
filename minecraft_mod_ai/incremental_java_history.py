@@ -32,6 +32,11 @@ def walk_nodes(nodes):
 
 
 def lookup_work(builder, query, offset):
+    evidence = builder.api.work_lookup(query, offset)
+    return _lookup_ast_work(builder, query, offset) if evidence is None else evidence
+
+
+def _lookup_ast_work(builder, query, offset):
     if query == "@declarations" or query.startswith("@declarations:"):
         return builder.api.generated(builder.program, query.partition(":")[2], offset)
     if query == "@operations":

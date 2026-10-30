@@ -129,7 +129,7 @@ def _retained(value):
 
 def _generated(member):
     parts = member.get("metadata") or {}
-    answer = {key: deepcopy(member[key]) for key in ("id", "owner", "kind", "name", "purpose", "implementation_status")
+    answer = {key: deepcopy(member[key]) for key in ("id", "owner", "kind", "name", "purpose", "implementation_status", "work_role")
               if key in member}
     if member.get("kind") and member.get("name"):
         answer["signature"] = declaration_header(member["kind"], member["name"], parts)
@@ -137,6 +137,7 @@ def _generated(member):
                 "static", "final", "superclass", "interfaces", "components", "annotations"):
         if key in parts:
             answer[key] = deepcopy(parts[key])
+    answer["host_owned_lifecycle"] = bool(member.get("registrar"))
     return answer
 
 
@@ -380,14 +381,11 @@ class IncrementalJavaContext:
             return default
 
     def _load_semantics(self):
+        from .incremental_java_work_context import load_work_state
+        load_work_state(self)
         self.owned_records = self._bound("owned_runtime_records", "owned_runtime_records_json", [])
         self.retained = _retained(self._bound("retained_typed_behavior", "retained_typed_behavior_json", {}))
         self.bindings = self._bound("runtime_state_bindings", "runtime_state_bindings_json", {})
-        self.state_access = self.payload.get("host_state_access", self.context.get("host_state_access", [])) or []
-        self._state_methods = defaultdict(list)
-        for owner_index, owner in enumerate(self.state_access):
-            for method_index, method in enumerate(owner.get("methods") or ()):
-                self._state_methods[method.get("name")].append((owner_index, method_index, method))
 
     def _configure_target(self):
         bindings = self.spec.get("bindings") or {}
@@ -481,18 +479,8 @@ class IncrementalJavaContext:
         """Return the original exact registration/SAM records without selection."""
         return deepcopy(self._callbacks)
 
-    def _state_view(self, names):
-        state_methods = defaultdict(list)
-        for name in names:
-            for prefix in ("readState_", "writeState_"):
-                for owner_index, method_index, method in self._state_methods.get(prefix + name, ()):
-                    state_methods[owner_index].append((method_index, method))
-        state = [{"owner": self.state_access[owner_index]["owner"],
-                  "methods": [deepcopy(method) for _, method in sorted(methods)]}
-                 for owner_index, methods in sorted(state_methods.items())]
-        return state
-
     def view(self, member, scope, program, *, position=0):
+        from .incremental_java_work_context import work_context_view
         behavior = member.get("behavior") or {}
         names = _state_names(behavior)
         answer = {
@@ -507,7 +495,6 @@ class IncrementalJavaContext:
                 (self.spec.get("bindings") or {}).get("java_implementation_requirements", "")),
             "runtime_state_bindings": {key: deepcopy(value) for key, value in self.bindings.items()
                 if key in names or isinstance(value, Mapping) and value.get("binding") == "typed_input"},
-            "host_state_access": self._state_view(names),
             "host_state_work_order_scope": deepcopy(
                 self.context.get("host_state_work_order_scope")
                 or self.payload.get("host_state_work_order_scope") or {}),
@@ -517,11 +504,16 @@ class IncrementalJavaContext:
             "generated_declarations_offset": max(0, len(program.get("members") or ()) - self.page_size),
             "scope": deepcopy(scope), "position": position,
         }
+        answer.update(work_context_view(self, behavior, names))
         if self.selected:
             answer["selected_target_api"] = [prompt_symbol_record(row) for row in self.selected[:self.page_size]]
         if "event" in member:
             answer["current_member"]["event"] = deepcopy(member["event"])
         return answer
+
+    def work_lookup(self, query, offset=0):
+        from .incremental_java_work_context import lookup_work_evidence
+        return lookup_work_evidence(self, query, offset)
 
     def generated(self, program, query="", offset=0):
         terms = str(query).casefold().split()

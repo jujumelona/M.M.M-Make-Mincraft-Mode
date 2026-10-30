@@ -7,6 +7,7 @@ from .construction_type_contracts import canonical_type_name
 from .incremental_java_context import _bound_method, _erase, _formals, _substitute, _type_mapping
 from .incremental_java_values_model import current_owner
 from .java_operation_ir import parameter_types
+from .incremental_java_work import method_unavailable
 
 
 def _generated_identity(builder, declaration):
@@ -86,8 +87,7 @@ def _catalog_member_callable(builder, declaration, kind, member):
         return False
     # The active helper still exists in the AST but cannot be a callee until
     # its body is implemented. This applies to expression and statement calls.
-    if kind == "METHOD" and (member["id"] == (builder.member or {}).get("id")
-                             or member.get("implementation_status") == "authoring"):
+    if kind == "METHOD" and method_unavailable(builder, member):
         return False
     return True
 

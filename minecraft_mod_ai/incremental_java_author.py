@@ -12,6 +12,8 @@ from .incremental_java_context import IncrementalJavaContext
 from .incremental_java_schema import COUNT, DECLARATION_OPS, SCHEMAS, choice, obj, BOOL, operation_options
 from .incremental_java_render import render_program
 from .incremental_java_history import operation_view, walk_nodes, lookup_work, PAGE
+from .incremental_java_effects import _member_has_potential_effect, expression_effect_key
+from .incremental_java_work import reject_lifecycle_call, work_options, work_view
 
 _INSTRUCTION = (
     "Implement only the current operation of the current work item. The host owns all Java "
@@ -45,6 +47,12 @@ _INSTRUCTION = (
     "@declarations:words searches their names, owners and purposes. Recent declarations "
     "are already visible; an older declaration on another page still exists and is callable. "
     "Earlier work remains in the host AST; do not repeat it just because it is on another page."
+    " Follow current_work.phase. Host-owned lifecycle registrars run once from the lifecycle, "
+    "never by calling one from another implementation. feature_work_order contains the saved "
+    "plan, with additional pages at lookup @work_order:FIELD. Lookup @state_access pages actual "
+    "declared storage accessors when logical world-state names have no exact storage-name match. "
+    "state_access_permissions is the canonical behavior call allowlist; discovery headers do "
+    "not authorize calling unassigned state accessors."
 )
 
 
@@ -62,6 +70,11 @@ _EXECUTABLE_OPERATIONS = frozenset({
 
 
 def _semantic_operation_key(node, scope):
+    expression_key = expression_effect_key(node)
+    return expression_key if expression_key is not None else _statement_operation_key(node, scope)
+
+
+def _statement_operation_key(node, scope):
     """Identify a distinct observable operation, not just a syntactically valid AST node.
 
     Local declarations and writes to bare local variables only prepare an effect.
@@ -88,37 +101,6 @@ def _semantic_operation_key(node, scope):
         {key: value for key, value in node.items() if key not in ignored},
         ensure_ascii=False, sort_keys=True, default=str,
     )
-
-
-def _member_local_names(member, nodes):
-    """Collect method-local declarations and parameters, including nested scopes."""
-    names = {row.get("name") for row in member.get("metadata", {}).get("parameters", ())}
-    names.update(node.get("name") for node in nodes
-                 if node.get("op") in {"local", "lambda", "for", "foreach"})
-    names.update(node.get("name") for node in nodes
-                 if node.get("op") == "call" and node.get("result_type"))
-    return names
-
-
-def _node_has_potential_effect(node, local_names):
-    operation = node.get("op")
-    if operation == "assign":
-        target = str(node.get("target") or "").strip()
-        return bool(target) and target not in local_names
-    if operation in {"call", "register", "constructor_call", "throw"}:
-        return True
-    return operation == "return" and bool(node.get("value"))
-
-
-def _member_has_potential_effect(member):
-    """A necessary structural effect condition, not a gameplay semantics proof.
-
-    Local writes and declarations alone cannot satisfy a runtime callback.
-    Compiler and behavior acceptance remain separate requirements.
-    """
-    nodes = tuple(walk_nodes(member.get("body") or ()))
-    local_names = _member_local_names(member, nodes)
-    return any(_node_has_potential_effect(node, local_names) for node in nodes)
 
 
 def _assert_live_behavior_entrypoints(program):
@@ -155,13 +137,15 @@ def _safe_author_operation(builder, member, operation):
     node = author_operation(builder, operation)
     try:
         _reject_current_self_call(member, node)
+        reject_lifecycle_call(builder, node)
     except RuntimeError as exc:
-        if str(exc) != "JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"]:
+        if str(exc).partition(":")[0] not in {"JAVA_ACTIVE_MEMBER_SELF_CALL", "JAVA_HOST_LIFECYCLE_CALL"}:
             raise
         builder.rejection = {
             "operand_diagnostic": str(exc),
-            "next_step": "Implement this method with a different call, assignment, "
-                         "or verified API. Calling the active method cannot implement it.",
+            "next_step": "Implement the current behavior with its observation inputs and effects. "
+                         "The host already schedules lifecycle registrars. "
+                         "An active method cannot implement itself by calling itself.",
         }
         return None
     return node
@@ -210,6 +194,7 @@ class IncrementalJavaBuilder:
                      "accepted_operations_offset": max(0, len(self.block) - PAGE),
                      "requested_api_page": self.latest_api})
         task.update(value_stack=self.value_stack, type_stack=self.type_stack)
+        task["current_work"] = work_view(self)
         from .incremental_java_progress import declaration_feedback
         task["last_declaration"] = declaration_feedback(self)
         task.update(self.rejection)
@@ -350,6 +335,7 @@ class IncrementalJavaBuilder:
                     if body:
                         permitted.add("complete")
                     options = [option for option in options if option in permitted]
+                options = work_options(self, member, scope, path, body, options)
                 if not options:
                     raise RuntimeError(
                         f"INCREMENTAL_JAVA_NO_AVAILABLE_OPERATION: member={member_id}"

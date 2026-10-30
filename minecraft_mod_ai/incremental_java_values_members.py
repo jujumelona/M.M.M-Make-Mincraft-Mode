@@ -12,6 +12,7 @@ from .incremental_java_values_catalog import (
 )
 from .incremental_java_schema import choice, obj
 from .incremental_java_values_model import JavaReceiver, current_owner, receiver_source, request
+from .incremental_java_work import host_lifecycle_api
 
 _PAGE = 10
 
@@ -57,13 +58,18 @@ def _api_page(builder, receiver, kind, query, offset, options):
                "name": "length", "return_type": "int", "final": True}
         rows = {"array:length": row} if _eligible(row, receiver, kind, **options) and query in {"", "length"} else {}
         return rows, {"query": query, "offset": 0, "total": len(rows), "next_offset": None}
-    candidates = indexed_members(builder, receiver, kind)
-    candidates = [row for row in candidates if _eligible(row, receiver, kind, **options)
-                  and query.casefold() in row["name"].casefold()]
+    candidates = _callable_api_rows(builder, receiver, kind, query, options)
     rows = {"api:" + str(index): row for index, row in enumerate(candidates[offset:offset + _PAGE], offset)}
     total = len(candidates)
     return rows, {"query": query, "offset": offset, "total": total,
                   "next_offset": offset + _PAGE if offset + _PAGE < total else None}
+
+
+def _callable_api_rows(builder, receiver, kind, query, options):
+    return [row for row in indexed_members(builder, receiver, kind)
+            if _eligible(row, receiver, kind, **options)
+            and query.casefold() in row["name"].casefold()
+            and not host_lifecycle_api(builder, receiver, row)]
 
 
 def _member_page(builder, receiver, kind, query, location, options):

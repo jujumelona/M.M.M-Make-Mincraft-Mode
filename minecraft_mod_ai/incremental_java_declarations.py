@@ -96,8 +96,10 @@ def _override(builder):
     declaration.update(visibility="public", annotations=["Override"],
         type_parameters=", ".join(selected.get("type_parameters", ())),
         throws=selected.get("generic_throws", selected.get("throws", [])))
-    return builder.new_method(owner=_owner(builder), purpose="Implement " + selected["name"] + " for " + builder.member["purpose"],
+    method = builder.new_method(owner=_owner(builder), purpose="Implement " + selected["name"] + " for " + builder.member["purpose"],
         behavior=builder.member["behavior"], metadata=declaration, name=selected["name"])
+    method["work_role"] = "supporting_abi"
+    return method
 
 
 def _select_override(builder, rows):

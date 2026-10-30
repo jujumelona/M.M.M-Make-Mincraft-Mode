@@ -8,6 +8,7 @@ import re
 from .incremental_java_context import _erase, _ground_argument
 from .incremental_java_schema import COUNT, choice, obj
 from .java_operation_ir import parameter_types
+from .incremental_java_work import method_unavailable
 
 _PAGE = 10
 _SIGNATURE_FIELDS = ("kind", "owner", "name", "parameters", "generic_parameters", "return_type",
@@ -47,7 +48,7 @@ def _generated_call_candidate(builder, row, owner, method):
     # helpers remain valid forward declarations and are implemented later.
     return (row["kind"] == "method" and row["name"] == method
             and _owner_matches(row["owner"], owner)
-            and row.get("id", object()) != (builder.member or {}).get("id"))
+            and not method_unavailable(builder, row))
 
 
 def _generated_methods(builder, owner, method):
