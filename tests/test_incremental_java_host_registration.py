@@ -166,3 +166,72 @@ def test_incremental_registration_uses_host_binding_instead_of_menu(monkeypatch)
     assert requests == ["b-1"]
     assert node["event_owner"] == chosen["event_owner"]
     assert node["handler"] == "listener"
+
+
+def test_semantic_stall_switches_to_host_owned_compiler_once(monkeypatch):
+    from minecraft_mod_ai import incremental_java_author as author
+    from minecraft_mod_ai.incremental_java_pipeline import compose_source
+
+    calls = []
+    def stalled(*args, **kwargs):
+        calls.append("incremental")
+        raise RuntimeError(
+            "INCREMENTAL_JAVA_NO_SEMANTIC_PROGRESS: member=m1; 96 choices")
+    monkeypatch.setattr(author, "compose_incremental_feature", stalled)
+
+    def host_first(router, spec, messages, *, source_context, construction_context, behaviors):
+        calls.append("source_owned")
+        assert construction_context["host_source_owned"] is True
+        assert construction_context["host_direct_feature_source"] is False
+        assert construction_context["incremental_state"]["strategy"] == "host_source_owned"
+        return "package example; class HostComposed {}"
+
+    context = {"host_direct_feature_source": True, "incremental_state": {}}
+    result = compose_source(
+        object(), {}, [], source_context=[], construction_context=context,
+        behaviors=[{"behavior_id": "b1"}], legacy_author=host_first,
+    )
+    assert result == "package example; class HostComposed {}"
+    assert calls == ["incremental", "source_owned"]
+    assert "program" not in context["incremental_state"]
+
+
+def test_missing_source_producer_uses_host_owned_compiler_once(monkeypatch):
+    from minecraft_mod_ai import incremental_java_author as author
+    from minecraft_mod_ai.incremental_java_pipeline import compose_source
+
+    monkeypatch.setattr(author, "compose_incremental_feature", lambda *a, **k: (
+        (_ for _ in ()).throw(SourceHookUnavailable(
+            "b2", reason="no_matching_original_occurrence_callback",
+            inspected=14,
+        ))))
+    invocations = []
+    def source_owned(*args, **kwargs):
+        invocations.append(kwargs["construction_context"]["host_source_owned"])
+        return "host-output"
+    state = {"host_direct_feature_source": True, "incremental_state": {}}
+    assert compose_source(
+        object(), {}, [], source_context=[], construction_context=state,
+        behaviors=[], legacy_author=source_owned,
+    ) == "host-output"
+    assert invocations == [True]
+
+
+def test_nonsemantic_failures_do_not_trigger_fake_success_fallback(monkeypatch):
+    from minecraft_mod_ai import incremental_java_author as author
+    from minecraft_mod_ai.incremental_java_pipeline import compose_source
+
+    def failed(*args, **kwargs):
+        raise RuntimeError("CONSTRUCTION_TARGET_CLASSPATH_REQUIRED")
+    monkeypatch.setattr(author, "compose_incremental_feature", failed)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a missing compiler classpath is not a semantic stall")
+
+    with pytest.raises(RuntimeError, match="CONSTRUCTION_TARGET_CLASSPATH_REQUIRED"):
+        compose_source(
+            object(), {}, [], source_context=[],
+            construction_context={"host_direct_feature_source": True,
+                                  "incremental_state": {}},
+            behaviors=[], legacy_author=forbidden,
+        )
