@@ -568,3 +568,29 @@ def test_windows_debug_uses_java_capable_of_target_21_and_owner_25():
     config = (Path(__file__).resolve().parents[1] /
               ".github/workflows/windows-debug.yml").read_text(encoding="utf-8")
     assert 'java-version: "25"' in config
+
+
+
+def test_callback_effect_follows_selected_helper_overload_not_same_named_sibling():
+    from minecraft_mod_ai.incremental_java_author import _assert_live_behavior_entrypoints
+
+    callback = {"id": "m2", "kind": "method", "owner": "Feature", "name": "onUse",
+                "event": {"event_id": "demo.Events#USE"},
+                "metadata": {"parameters": []},
+                "body": [{"id": "n1", "op": "call", "receiver": "this",
+                          "method": "mmmHelper", "arguments": ["1"],
+                          "call_contract": {"parameters": ["int"]}}]}
+    empty = {"id": "m3", "kind": "method", "owner": "Feature",
+             "name": "mmmHelper", "metadata": {"parameters": [{"type": "int"}]},
+             "body": [{"id": "n2", "op": "local", "name": "mmmValue1",
+                       "type": "int", "value": "1"}]}
+    effectful = {"id": "m4", "kind": "method", "owner": "Feature",
+                 "name": "mmmHelper",
+                 "metadata": {"parameters": [{"type": "java.lang.String"}]},
+                 "body": [{"id": "n3", "op": "assign",
+                           "target": "this.counter", "operator": "+=",
+                           "value": "1"}]}
+    with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
+        _assert_live_behavior_entrypoints({"members": [callback, empty, effectful]})
+    callback["body"][0]["call_contract"]["parameters"] = ["java.lang.String"]
+    _assert_live_behavior_entrypoints({"members": [callback, empty, effectful]})
