@@ -663,3 +663,30 @@ def test_incremental_compiler_repair_cap_is_finite_with_separate_legacy_budget()
     assert list(compile_attempts(False, 2)) == [0, 1, 2]
     assert not exhausted(False, 1, 2)
     assert exhausted(False, 2, 2)
+
+
+def test_missing_verifier_behavior_list_is_rebound_from_real_assigned_work():
+    import json
+    from minecraft_mod_ai.construction_host_source import _exact_behavior_verification_spec
+    original = {"bindings": {"request_feature_entrypoint": True}, "requirement": "new"}
+    expected = [{"behavior_id": "b1", "intent": "feature", "trigger": "observation"}]
+    checked = _exact_behavior_verification_spec(original, expected)
+    assert json.loads(checked["bindings"]["construction_behaviors_json"]) == expected
+    assert "construction_behaviors_json" not in original["bindings"]
+
+
+def test_stale_feature_verifier_scope_cannot_be_silently_reused():
+    import json
+    from minecraft_mod_ai.construction_host_source import (
+        _exact_behavior_verification_spec, HostJavaConstructionError,
+    )
+    original = {"bindings": {
+        "request_feature_entrypoint": True,
+        "construction_behaviors_json": json.dumps([{"behavior_id": "old"}]),
+    }}
+    with pytest.raises(HostJavaConstructionError, match="SCOPE_MISMATCH"):
+        _exact_behavior_verification_spec(original, [{"behavior_id": "new"}])
+    with pytest.raises(HostJavaConstructionError, match="BEHAVIOR_ID_SET_INVALID"):
+        _exact_behavior_verification_spec(
+            {"bindings": {"request_feature_entrypoint": True}},
+            [{"behavior_id": "repeat"}, {"behavior_id": "repeat"}])
