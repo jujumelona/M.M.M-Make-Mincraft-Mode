@@ -49,7 +49,10 @@ def compose_source(router, spec, messages, *, source_context, construction_conte
 
 def candidate_data(source, diagnostic, state):
     result = {"source": source, "diagnostic": diagnostic}
-    if state.get("program"):
+    strategy = state.get("strategy")
+    if strategy in {"incremental_java", "host_source_owned"}:
+        result["strategy"] = strategy
+    if strategy != "host_source_owned" and state.get("program"):
         result["program_json"] = json.dumps(state["program"], ensure_ascii=False, separators=(",", ":"))
     return result
 
@@ -57,13 +60,24 @@ def candidate_data(source, diagnostic, state):
 def load_candidate(pending, state, direct):
     if not pending:
         return pending
-    if set(pending) - {"source", "diagnostic", "program_json"} or not {"source", "diagnostic"} <= set(pending):
+    allowed = {"source", "diagnostic", "program_json", "strategy"}
+    if set(pending) - allowed or not {"source", "diagnostic"} <= set(pending):
         raise ValueError("JAVA_HOST_CANDIDATE_INVALID")
+    strategy = pending.get("strategy")
+    if strategy not in {None, "incremental_java", "host_source_owned"}:
+        raise ValueError("JAVA_HOST_CANDIDATE_STRATEGY_INVALID")
+    if strategy == "host_source_owned":
+        if not direct or "program_json" in pending:
+            raise ValueError("JAVA_HOST_SOURCE_OWNERSHIP_CANDIDATE_INVALID")
+        state.pop("program", None)
+        state["strategy"] = strategy
+        return pending
     if direct:
         if not isinstance(pending.get("program_json"), str):
             # Legacy whole-body candidates are not a new protocol's accepted AST.
             return {}
         state["program"] = json.loads(pending["program_json"])
+        state["strategy"] = "incremental_java"
     return pending
 
 
