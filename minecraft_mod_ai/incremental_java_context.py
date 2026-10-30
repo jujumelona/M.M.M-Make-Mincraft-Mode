@@ -507,7 +507,10 @@ class IncrementalJavaContext:
                 (self.spec.get("bindings") or {}).get("java_implementation_requirements", "")),
             "runtime_state_bindings": {key: deepcopy(value) for key, value in self.bindings.items()
                 if key in names or isinstance(value, Mapping) and value.get("binding") == "typed_input"},
-            "host_state_access": self._state_view(names), "current_member": _generated(member),
+            "host_state_access": self._state_view(names),
+            "host_state_work_order_scope": deepcopy(self.payload.get(
+                "host_state_work_order_scope", self.context.get("host_state_work_order_scope", {}))),
+            "current_member": _generated(member),
             "generated_declarations": [_generated(row) for row in (program.get("members") or [])[-self.page_size:]],
             "generated_declarations_total": len(program.get("members") or ()),
             "generated_declarations_offset": max(0, len(program.get("members") or ()) - self.page_size),
