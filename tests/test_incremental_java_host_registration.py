@@ -235,3 +235,61 @@ def test_nonsemantic_failures_do_not_trigger_fake_success_fallback(monkeypatch):
                                   "incremental_state": {}},
             behaviors=[], legacy_author=forbidden,
         )
+
+
+def test_host_fallback_preserves_every_runtime_source_and_write_obligation(monkeypatch):
+    from minecraft_mod_ai.host_source_strategy import prepare_source_owned_strategy
+    from minecraft_mod_ai import host_fabric_callback_abi
+
+    monkeypatch.setattr(
+        host_fabric_callback_abi, "callback_interfaces", lambda *a, **k: [_event()])
+    behavior = {
+        "behavior_id": "b-independent",
+        "intent": "non-template gameplay",
+        "trigger": "original occurrence",
+        "effects": "original effect",
+        "runtime_state_reads": ["world.sensor", "world.sensor"],
+        "runtime_state_writes": ["world.currency", "world.inventory"],
+    }
+    result = prepare_source_owned_strategy(
+        {"symbols": {}}, [behavior], side="COMMON")
+    assert result["host_source_owned"] is True
+    assert result["host_direct_feature_source"] is False
+    graph = result["source_owned_work_graph"]
+    nodes = graph["tasks"]
+    reads = [n for n in nodes if n["kind"] == "runtime_producer"]
+    writes = [n for n in nodes if n["kind"] == "runtime_mutation"]
+    effects = [n for n in nodes if n["kind"] == "gameplay_effect"]
+    assert len(reads) == 1 and reads[0]["name"] == "world.sensor"
+    assert {n["name"] for n in writes} == {"world.currency", "world.inventory"}
+    assert len(effects) == 1
+    assert {n["task_id"] for n in (*reads, *writes)} <= set(effects[0]["depends_on"])
+    assert graph["completion_verified"] is False
+
+
+def test_source_owned_rejected_candidate_replays_its_native_write_proof():
+    from minecraft_mod_ai.incremental_java_pipeline import candidate_data, load_candidate
+
+    proof = [{"behavior_id": "b1", "state_name": "world.currency",
+              "verified_signature": "world.Owner#addCurrency(int)",
+              "statement": "owner.addCurrency(1);"}]
+    candidate = candidate_data("source", "compile error", {
+        "strategy": "host_source_owned", "native_mutation_receipts": proof,
+    })
+    restored = {}
+    assert load_candidate(candidate, restored, True) == candidate
+    assert restored["strategy"] == "host_source_owned"
+    assert restored["native_mutation_receipts"] == proof
+    assert "program" not in restored
+
+
+def test_source_owned_resume_refuses_missing_or_corrupted_native_receipts():
+    from minecraft_mod_ai.incremental_java_pipeline import load_candidate
+
+    for record in (
+        {"source": "code", "diagnostic": "compiler", "strategy": "host_source_owned"},
+        {"source": "code", "diagnostic": "compiler", "strategy": "host_source_owned",
+         "native_mutation_receipts_json": "{}"},
+    ):
+        with pytest.raises(ValueError, match="JAVA_HOST_SOURCE_NATIVE_PROOF"):
+            load_candidate(record, {}, True)
