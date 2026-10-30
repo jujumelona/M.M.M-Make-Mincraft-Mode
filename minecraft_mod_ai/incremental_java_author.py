@@ -322,26 +322,29 @@ class IncrementalJavaBuilder:
             # control flow, not a prompt or a retry limit.
             from .incremental_java_registration_policy import host_registration_enabled
             if not path and member.get("registrar") and host_registration_enabled(self):
-                from .incremental_java_work import _world_bound
                 from .incremental_java_progress import finish_new_members
-                if _world_bound(self, member):
-                    existing = [node for node in body if node.get("op") == "register"]
-                    if len(existing) > 1:
-                        raise RuntimeError(
-                            "JAVA_DUPLICATE_ORIGINAL_OCCURRENCE_REGISTRATION: " + member["id"])
-                    if existing:
-                        return body
-                    pending_before = len(self.pending)
-                    self.current_operation = "register"
-                    node = _safe_author_operation(self, member, "register")
-                    if node is None:
-                        raise RuntimeError(
-                            "JAVA_HOST_OBSERVATION_NOT_MATERIALIZED: " + member["id"])
-                    body.append(node)
-                    self.history[node["id"]] = node
-                    finish_new_members(self, pending_before)
-                    self._record_operation_progress(member, node, scope)
+                # Every feature registrar owns a real occurrence connection.
+                # That is true for UI actions and entity callbacks as well as
+                # mutable world state. Never ask a small coder to design the
+                # activation lifecycle merely because its behavior contract
+                # has no explicit runtime_state_writes.
+                existing = [node for node in body if node.get("op") == "register"]
+                if len(existing) > 1:
+                    raise RuntimeError(
+                        "JAVA_DUPLICATE_ORIGINAL_OCCURRENCE_REGISTRATION: " + member["id"])
+                if existing:
                     return body
+                pending_before = len(self.pending)
+                self.current_operation = "register"
+                node = _safe_author_operation(self, member, "register")
+                if node is None:
+                    raise RuntimeError(
+                        "JAVA_HOST_OBSERVATION_NOT_MATERIALIZED: " + member["id"])
+                body.append(node)
+                self.history[node["id"]] = node
+                finish_new_members(self, pending_before)
+                self._record_operation_progress(member, node, scope)
+                return body
             while True:
                 member_id = member["id"]
                 epoch = self._progress_epoch.get(member_id, 0)
