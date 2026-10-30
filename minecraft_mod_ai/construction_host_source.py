@@ -29,6 +29,26 @@ def _repair_runtime_bindings(spec, receipts):
         "runtime_state_bindings_json") or "{}"), receipts)
 
 
+def _valid_checkpoint_payload(saved, direct_feature):
+    if not saved:
+        return {}
+    allowed = {"source", "program_json"} if direct_feature else {"source"}
+    if (set(saved) != allowed or not isinstance(saved.get("source"), str)
+            or direct_feature and not isinstance(saved.get("program_json"), str)):
+        return {}
+    return saved
+
+
+def _prime_checkpoint_program(saved, direct_feature, state, context, spec, root, package, behaviors):
+    if not direct_feature:
+        return
+    program = json.loads(saved["program_json"])
+    if not isinstance(program, dict) or program.get("schema") != "mmm/incremental-java-v1":
+        raise ValueError("JAVA_HOST_SAVED_PROGRAM_INVALID")
+    state["program"] = program
+    _prime_direct_source_proof(context, spec, root, package, behaviors)
+
+
 def _prime_direct_source_proof(context, spec, root, package, behaviors):
     """Rebuild checked occurrence evidence on authoring and cached replay."""
     from .host_fabric_callback_abi import callback_interfaces
@@ -156,20 +176,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     incremental_state = {}
     context["incremental_state"] = incremental_state
     with _claim_checkpoint(checkpoint):
-        saved = _read_checkpoint(checkpoint, identifier)
-        if saved:
-            allowed = {"source", "program_json"} if direct_feature else {"source"}
-            if (set(saved) != allowed or not isinstance(saved.get("source"), str)
-                    or direct_feature and not isinstance(saved.get("program_json"), str)):
-                saved = {}
+        saved = _valid_checkpoint_payload(
+            _read_checkpoint(checkpoint, identifier), direct_feature)
         if saved:
             try:
-                if direct_feature:
-                    program = json.loads(saved["program_json"])
-                    if not isinstance(program, dict) or program.get("schema") != "mmm/incremental-java-v1":
-                        raise ValueError("JAVA_HOST_SAVED_PROGRAM_INVALID")
-                    incremental_state["program"] = program
-                    _prime_direct_source_proof(context, spec, root, package, behaviors)
+                _prime_checkpoint_program(saved, direct_feature, incremental_state,
+                                          context, spec, root, package, behaviors)
                 _verify_full_source(saved["source"], spec, context,
                     package=package, name=name, source_context=source_context)
                 if required_native:
