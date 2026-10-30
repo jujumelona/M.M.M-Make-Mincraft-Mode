@@ -178,3 +178,16 @@ def test_verified_source_ui_event_is_selectable_in_incremental_coder_context():
         "example.Events#ACTION", "example.OriginalOccurrence#EVENT"}
     with pytest.raises(ValueError, match="JAVA_CALLBACK_EVENT_ABI_CONFLICT"):
         _combine_checked_events(original, [{**CALLBACK, "return_type": "boolean"}])
+
+
+def test_real_fabric_event_must_observe_the_user_requested_occurrence():
+    arrival = {**BEHAVIOR, "trigger": "Player enters another dimension"}
+    program = _program()
+    program["members"][0]["behavior"] = arrival
+    program["members"][1]["behavior"] = arrival
+    with pytest.raises(ValueError, match="INSPECTED_OCCURRENCE_MISSING"):
+        verify_incremental_feature_execution(
+            program, [arrival], [CALLBACK], {}, {})
+    source_event = {**CALLBACK, "provenance": "verified_source_site_mixin",
+                    "behavior_id": arrival["behavior_id"]}
+    verify_incremental_feature_execution(program, [arrival], [source_event], {}, {})
