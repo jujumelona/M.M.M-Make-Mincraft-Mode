@@ -16,8 +16,12 @@ _READ_ONLY = ("get", "is", "has", "can", "should", "read", "peek")
 _OBSERVERS = frozenset({
     "equals", "hashCode", "toString", "compareTo", "contains",
     "containsKey", "containsValue", "size", "length", "iterator",
-    "stream", "spliterator", "clone", "copy", "matches",
+    "stream", "spliterator", "clone", "copy", "matches", "register",
 })
+_NON_GAME_OWNERS = (
+    "java.", "javax.", "jdk.", "sun.", "com.sun.", "org.slf4j.",
+    "org.apache.logging.", "net.fabricmc.fabric.api.event.",
+)
 
 
 def native_write_targets(behavior, bindings):
@@ -89,7 +93,7 @@ def _inspected_call(node, symbols):
         return False
     contract = node.get("call_contract") or {}
     owner, method = contract.get("owner"), contract.get("name")
-    if not owner or method != node.get("method"):
+    if not owner or method != node.get("method") or owner.startswith(_NON_GAME_OWNERS):
         return False
     if method.startswith(_READ_ONLY) or method in _OBSERVERS:
         return False
