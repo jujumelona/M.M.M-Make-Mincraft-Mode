@@ -134,6 +134,14 @@ def _assert_live_behavior_entrypoints(program):
             )
 
 
+def _reject_current_self_call(member, node):
+    """Do not accept direct recursion while the member body is under construction."""
+    if (node is not None and node.get("op") == "call"
+            and node.get("method") == member.get("name")
+            and node.get("receiver") in {"", "this"}):
+        raise RuntimeError("JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"])
+
+
 class IncrementalJavaBuilder:
     def __init__(self, router, spec, messages, context, behaviors, program=None):
         self.router, self.spec, self.context = router, spec, context
@@ -347,12 +355,7 @@ class IncrementalJavaBuilder:
                 pending_before = len(self.pending)
                 progress_before = self._progress_epoch.get(member_id, 0)
                 node = author_operation(self, operation)
-                if (node is not None and node.get("op") == "call"
-                        and node.get("method") == member.get("name")
-                        and node.get("receiver") in {"", "this"}):
-                    raise RuntimeError(
-                        "JAVA_ACTIVE_MEMBER_SELF_CALL: " + member["id"]
-                    )
+                _reject_current_self_call(member, node)
                 if node is None:
                     self._record_nonprogress(member)
                     continue
