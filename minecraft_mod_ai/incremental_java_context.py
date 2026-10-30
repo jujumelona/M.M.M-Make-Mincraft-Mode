@@ -342,6 +342,19 @@ def _source_symbols(pages):
     return symbols
 
 
+def _combine_checked_events(native_events, source_events):
+    """Expose verified original-source callbacks without inventing event ABIs."""
+    merged = {}
+    for event in (*native_events, *source_events):
+        key = str(event.get("event_id") or "")
+        if not key:
+            raise ValueError("JAVA_CALLBACK_EVENT_ID_REQUIRED")
+        if key in merged and merged[key] != event:
+            raise ValueError("JAVA_CALLBACK_EVENT_ABI_CONFLICT: " + key)
+        merged[key] = deepcopy(event)
+    return list(merged.values())
+
+
 class IncrementalJavaContext:
     """Authoritative host context shared by all incremental actions in one file."""
 
@@ -472,10 +485,11 @@ class IncrementalJavaContext:
         return selected
 
     def _load_callbacks(self):
+        source_events = self.context.get("verified_source_events") or ()
         if "available_fabric_callbacks" in self.payload:
-            return self.payload["available_fabric_callbacks"] or []
+            return _combine_checked_events(self.payload["available_fabric_callbacks"] or (), source_events)
         from .host_fabric_callback_abi import callback_interfaces
-        return callback_interfaces(self.symbols, side=self.side)
+        return _combine_checked_events(callback_interfaces(self.symbols, side=self.side), source_events)
 
     def callbacks(self):
         """Return the original exact registration/SAM records without selection."""
