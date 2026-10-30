@@ -23,7 +23,8 @@ def initial_program(spec, behaviors):
         program["members"].append({"id": "m" + str(index), "owner": class_name, "kind": "method",
             "name": behavior_registrar_name(behavior["behavior_id"]), "metadata": method_metadata(),
             "purpose": "Install the activation and connect the implementation for: " + str(behavior.get("trigger") or behavior["intent"]),
-            "behavior": dict(behavior), "registrar": True, "body": []})
+            "behavior": dict(behavior), "registrar": True, "body": [],
+            "implementation_status": "pending"})
     return program
 
 
