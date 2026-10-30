@@ -679,3 +679,36 @@ def test_event_result_decision_is_not_confused_with_pure_helper_return():
     ordinary = {**event, "event": None, "registrar": True}
     with pytest.raises(RuntimeError, match="INCREMENTAL_JAVA_NO_OBSERVABLE_ACTION"):
         _assert_live_behavior_entrypoints({"members": [ordinary]})
+
+
+def test_generated_call_provenance_survives_helper_and_call_argument_paths():
+    from minecraft_mod_ai.incremental_java_calls import _generated_methods
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    helper = {"id": "m99", "owner": builder.program["class_name"],
+              "name": "helperEffect", "kind": "method", "body": [],
+              "metadata": method_metadata(), "implementation_status": "complete"}
+    builder.program["members"].append(helper)
+    discovered = _generated_methods(builder, helper["owner"], helper["name"])
+    assert len(discovered) == 1 and discovered[0]["id"] == "m99"
+    from minecraft_mod_ai.incremental_java_calls import author_call_arguments
+    builder.arguments = lambda node: author_call_arguments(builder, node)
+    node = {"id": "n4", "op": "call", "receiver": "this",
+            "method": "helperEffect"}
+    builder.arguments(node)
+    assert node["generated_member_id"] == "m99"
+
+
+def test_finished_helper_value_contract_retains_declared_identity():
+    from minecraft_mod_ai.incremental_java_values import ValueAuthor
+    from minecraft_mod_ai.incremental_java_model import method_metadata
+
+    builder = _builder(None)
+    helper = {"id": "m98", "owner": builder.program["class_name"],
+              "name": "helperValue", "kind": "method", "body": [],
+              "metadata": method_metadata("int"), "implementation_status": "complete"}
+    builder.program["members"].append(helper)
+    author = ValueAuthor(builder)
+    contract = author._finish_helper(helper, len(builder.pending))
+    assert contract["id"] == "m98"
