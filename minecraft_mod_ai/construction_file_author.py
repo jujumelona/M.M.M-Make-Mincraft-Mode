@@ -362,17 +362,27 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         raise ConstructionFileError("SOURCE_OWNED_INSPECTED_ABI_REQUIRED")
     use_source_receipts = (spec.get("bindings", {}).get("request_feature_entrypoint")
                            and context.get("symbols") and not context.get("host_direct_feature_source"))
+    registered_custom = []
     if use_source_receipts:
         from .source_owned_ui_event import read_verified_typed_ui_events
+        from .source_owned_custom_event import read_verified_custom_event_receipts
+        checked_behaviors = json.loads(
+            spec.get("bindings", {}).get("construction_behaviors_json") or "[]")
         registered_ui = read_verified_typed_ui_events(
             project_root=context["project_root"], symbols=context["symbols"],
-            behaviors=json.loads(spec.get("bindings", {}).get("construction_behaviors_json") or "[]"),
-            package=package, side=str(spec.get("side") or "COMMON").upper())
-    # The event is in a separate generated namespace. Include every concrete
-    # server producer source in this compile, including its startup transport;
-    # discovery of same-package siblings cannot find these dependencies.
+            behaviors=checked_behaviors, package=package,
+            side=str(spec.get("side") or "COMMON").upper())
+        registered_custom = read_verified_custom_event_receipts(
+            project_root=context["project_root"], symbols=context["symbols"],
+            behavior_ids=[row["behavior_id"] for row in checked_behaviors],
+            package=package, side=str(spec.get("side") or "COMMON").upper(),
+            include_producer_paths=True)
+    # Explicitly compile every materialized Java producer, not just the
+    # referenced Event class. Fabric Mixin injectors are named in JSON,
+    # not referenced from the owner Java AST; source closure alone misses them.
     source_context = [*source_context, *(
-        {"path": path} for event in registered_ui for path in event["producer_source_paths"]
+        {"path": path} for event in (*registered_ui, *registered_custom)
+        for path in event["producer_source_paths"]
     )]
     # Compile the full owner and its materialized sibling sources, rather than
     # a detached method or an owner without its actual project prerequisites.
@@ -390,18 +400,9 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         from .feature_registration_proof import validate_registered_event_sources
         checked_events = callback_interfaces(
             context["symbols"], side=str(spec.get("side") or "COMMON"))
-        checked_behaviors = json.loads(
-            spec.get("bindings", {}).get("construction_behaviors_json") or "[]")
-        from .source_owned_custom_event import read_verified_custom_event_receipts
-        registered_custom = read_verified_custom_event_receipts(
-            project_root=context["project_root"], symbols=context["symbols"],
-            behavior_ids=[row["behavior_id"] for row in checked_behaviors],
-            package=package, side=str(spec.get("side") or "COMMON").upper(),
-        )
-        registered_custom.extend(registered_ui)
         validate_registered_event_sources(
             source, checked_behaviors, checked_events,
-            materialized_events=registered_custom)
+            materialized_events=[*registered_custom, *registered_ui])
     verify_source = context.get("verify_source")
     if verify_source:
         verify_source(source, spec["target_path"])
