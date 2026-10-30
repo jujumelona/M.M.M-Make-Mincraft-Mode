@@ -604,3 +604,22 @@ def test_compiler_no_progress_detects_comment_and_formatting_only_rewrites():
         require_compiler_repair_progress(before, after, "cannot find symbol")
     actual = "package example; public class A { void go() { int x = 2; } }"
     assert require_compiler_repair_progress(before, actual, "cannot find symbol") == actual
+
+
+def test_local_member_prompt_keeps_host_verified_canonical_reader_contract():
+    import json
+    from minecraft_mod_ai.construction_java_context import scoped_java_member_messages
+    frame = {"kind": "method", "prefix": "private boolean check(){", "suffix": "}"}
+    reader = {"credits": {"owner": "example.AuthoredStateModel",
+                         "method": "readState_credits",
+                         "signature": "public static int readState_credits() { return 1; }"}}
+    messages = [{"role": "user", "content": json.dumps({
+        "response_source_frame": frame, "host_java_authoring": False,
+        "member_role": "test_callback_condition",
+        "verified_existing_runtime_reads": reader,
+        "assigned_behavior": {"behavior_id": "claim"},
+    })}]
+    result = scoped_java_member_messages(messages, frame)
+    parsed = json.loads(result[-1]["content"])
+    assert parsed["verified_existing_runtime_reads"] == reader
+    assert parsed["member_role"] == "test_callback_condition"
