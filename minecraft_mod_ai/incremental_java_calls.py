@@ -47,8 +47,7 @@ def _generated_call_candidate(builder, row, owner, method):
     # helpers remain valid forward declarations and are implemented later.
     return (row["kind"] == "method" and row["name"] == method
             and _owner_matches(row["owner"], owner)
-            and not (row.get("id") is not None
-                     and row.get("id") == (builder.member or {}).get("id")))
+            and row.get("id", object()) != (builder.member or {}).get("id"))
 
 
 def _generated_methods(builder, owner, method):
