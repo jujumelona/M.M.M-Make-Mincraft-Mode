@@ -140,7 +140,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     # picker to prove that its state, event or original source method already
     # exists before allowing the source writer to create it.
     direct_feature = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
-    context = {**context, "host_direct_feature_source": direct_feature}
+    context = {**context, "host_direct_feature_source": direct_feature,
+               "defer_source_publication": True, "pending_source_publications": []}
 
     identifier = _digest({
         "schema": "mmm/host-java-compilation-unit-v1",
@@ -329,76 +330,105 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # but lose the only proof of who changed the native world.
                 required_native = bool(has_runtime_writes)
                 incremental_state["native_mutation_receipts"] = mutation_receipts
-            acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
-            budget = acceptance.get("max_compiler_repair_attempts", 2)
-            if type(budget) is not int or budget < 0:
-                raise HostJavaConstructionError("JAVA_HOST_REPAIR_BUDGET_INVALID")
-            from .construction_host_member_repair import repair_compiler_member
-            from .construction_journal import JournaledConstructionRouter
-            # Parsed declarations are not compiler-verified repairs. Replaying
-            # a rejected correction would freeze a fresh session at the same
-            # failure. Resume the whole candidate, then author only its failing
-            # member against the latest compiler diagnostic.
-            repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
-            # The source-owned fallback is a different compiler protocol,
-            # not an incremental AST. Never send its Java compilation errors
-            # to repair_incremental_program (there is no saved program), and
-            # never give it the incremental route's unlimited per-cell loop.
-            from .incremental_java_pipeline import has_incremental_ast
-            incremental_protocol = has_incremental_ast(direct_feature, incremental_state)
-            rejected_compiler_fingerprints = set()
-            for attempt in compile_attempts(incremental_protocol, budget):
-                try:
-                    verifier_context = (
-                        {**context, "host_direct_feature_source": False, "host_source_owned": True}
-                        if incremental_state.get("strategy") == "host_source_owned"
-                        else context
-                    )
-                    _verify_full_source(source, spec, verifier_context, package=package,
-                                        name=name, source_context=source_context)
-                except (RuntimeError, ValueError, OSError) as compiler_error:
-                    # Stop A -> B -> A compiler oscillations even when every
-                    # immediate edit changed bytes. A SHA is an exact identity;
-                    # the token-level no-progress gate separately handles
-                    # formatting-only changes.
-                    from .incremental_java_pipeline import record_rejected_compiler_source
-                    record_rejected_compiler_source(source, rejected_compiler_fingerprints)
-                    # A host-rendered rule is not an incremental Java program.
-                    # Never send its diagnostic to the unrelated member repair
-                    # loop or silently replace it with a different trigger.
-                    if locals().get("rule_template_used", False):
-                        raise HostJavaConstructionError(
-                            "HOST_RULE_TEMPLATE_COMPILATION_FAILED: "
-                            + str(compiler_error)
-                        ) from compiler_error
-                    _save_checkpoint(candidate, identifier, candidate_data(
-                        source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
-                    if exhausted(incremental_protocol, attempt, budget):
-                        raise
-                    repair_context = _repair_context(spec, context, name, owner, prompt,
-                        state_access, behavior_rows, mutation_receipts, attempt)
-                    rejected_source = source
-                    if incremental_protocol:
-                        from .incremental_java_pipeline import repair_member
-                        source = repair_member(
-                            repair_router, source, str(compiler_error),
-                            context={**context, **repair_context, "implementation_context": prompt,
-                                     "incremental_state": incremental_state, "incremental_spec": effective_spec,
-                                     "incremental_messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
-                                     "host_state_access": state_access})
+            if incremental_state.get("strategy") == "host_source_owned" and not pending:
+                incremental_state["source_publications"] = list(
+                    context["pending_source_publications"])
+            from .host_source_publication import source_publication_transaction
+            with source_publication_transaction(
+                project_root=root, symbols=context.get("symbols") or {},
+                records=incremental_state.get("source_publications") or (),
+            ):
+                acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
+                budget = acceptance.get("max_compiler_repair_attempts", 2)
+                if type(budget) is not int or budget < 0:
+                    raise HostJavaConstructionError("JAVA_HOST_REPAIR_BUDGET_INVALID")
+                from .construction_host_member_repair import repair_compiler_member
+                from .construction_journal import JournaledConstructionRouter
+                # Parsed declarations are not compiler-verified repairs. Replaying
+                # a rejected correction would freeze a fresh session at the same
+                # failure. Resume the whole candidate, then author only its failing
+                # member against the latest compiler diagnostic.
+                repair_router = router.router if isinstance(router, JournaledConstructionRouter) else router
+                # The source-owned fallback is a different compiler protocol,
+                # not an incremental AST. Never send its Java compilation errors
+                # to repair_incremental_program (there is no saved program), and
+                # never give it the incremental route's unlimited per-cell loop.
+                from .incremental_java_pipeline import has_incremental_ast
+                incremental_protocol = has_incremental_ast(direct_feature, incremental_state)
+                rejected_compiler_fingerprints = set()
+                for attempt in compile_attempts(incremental_protocol, budget):
+                    try:
+                        verifier_context = (
+                            {**context, "host_direct_feature_source": False, "host_source_owned": True}
+                            if incremental_state.get("strategy") == "host_source_owned"
+                            else context
+                        )
+                        _verify_full_source(source, spec, verifier_context, package=package,
+                                            name=name, source_context=source_context)
+                    except (RuntimeError, ValueError, OSError) as compiler_error:
+                        # Stop A -> B -> A compiler oscillations even when every
+                        # immediate edit changed bytes. A SHA is an exact identity;
+                        # the token-level no-progress gate separately handles
+                        # formatting-only changes.
+                        from .incremental_java_pipeline import record_rejected_compiler_source
+                        record_rejected_compiler_source(source, rejected_compiler_fingerprints)
+                        # A host-rendered rule is not an incremental Java program.
+                        # Never send its diagnostic to the unrelated member repair
+                        # loop or silently replace it with a different trigger.
+                        if locals().get("rule_template_used", False):
+                            raise HostJavaConstructionError(
+                                "HOST_RULE_TEMPLATE_COMPILATION_FAILED: "
+                                + str(compiler_error)
+                            ) from compiler_error
+                        _save_checkpoint(candidate, identifier, candidate_data(
+                            source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
+                        if exhausted(incremental_protocol, attempt, budget):
+                            raise
+                        repair_context = _repair_context(spec, context, name, owner, prompt,
+                            state_access, behavior_rows, mutation_receipts, attempt)
+                        rejected_source = source
+                        if incremental_protocol:
+                            from .incremental_java_pipeline import repair_member
+                            source = repair_member(
+                                repair_router, source, str(compiler_error),
+                                context={**context, **repair_context, "implementation_context": prompt,
+                                         "incremental_state": incremental_state, "incremental_spec": effective_spec,
+                                         "incremental_messages": [{"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}],
+                                         "host_state_access": state_access})
+                        else:
+                            source = repair_compiler_member(
+                                repair_router, source, str(compiler_error), **repair_context)
+                        from .incremental_java_pipeline import require_compiler_repair_progress
+                        require_compiler_repair_progress(rejected_source, source, compiler_error)
                     else:
-                        source = repair_compiler_member(
-                            repair_router, source, str(compiler_error), **repair_context)
-                    from .incremental_java_pipeline import require_compiler_repair_progress
-                    require_compiler_repair_progress(rejected_source, source, compiler_error)
-                else:
-                    # A compiler-valid edit may still delete a mandatory
-                    # checked mutation. Re-prove final source after every
-                    # repair and fail closed if a receipt's call disappeared.
-                    if required_native:
-                        verify_native_runtime_mutation_coverage(
-                            source, behavior_rows, mutation_receipts)
-                    break
+                        # A compiler-valid edit may still delete a mandatory
+                        # checked mutation. Re-prove final source after every
+                        # repair and fail closed if a receipt's call disappeared.
+                        if required_native:
+                            verify_native_runtime_mutation_coverage(
+                                source, behavior_rows, mutation_receipts)
+                        break
+                from .construction_coverage import record_authored_source_calls
+                record_authored_source_calls(
+                    root, spec["target_path"], source, source_kind="direct")
+                if required_native:
+                    _save_checkpoint(proof_path, identifier, {
+                        "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                        "receipts_json": json.dumps(
+                            mutation_receipts, ensure_ascii=False, sort_keys=True),
+                    })
+                _save_checkpoint(strategy_path, identifier, {"author_strategy": (
+                    (incremental_state.get("strategy") or "host_verified_source")
+                    if direct_feature else "host_member_author")})
+                _save_checkpoint(checkpoint, identifier, {"source": source})
+                candidate.unlink(missing_ok=True)
+                print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
+                    "target_path": spec["target_path"], "owner": owner,
+                    "target_compilation_verified": True,
+                    "runtime_verified": False,
+                    "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                }, ensure_ascii=False), flush=True)
+                return source
         except (RuntimeError, ValueError, OSError) as exc:
             trace = root / ".mmm" / "construction_host_failures"
             trace.mkdir(parents=True, exist_ok=True)
@@ -408,27 +438,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "failed_response": getattr(exc, "failed_response", None),
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             raise
-        from .construction_coverage import record_authored_source_calls
-        record_authored_source_calls(
-            root, spec["target_path"], source, source_kind="direct")
-        if required_native:
-            _save_checkpoint(proof_path, identifier, {
-                "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
-                "receipts_json": json.dumps(
-                    mutation_receipts, ensure_ascii=False, sort_keys=True),
-            })
-        _save_checkpoint(strategy_path, identifier, {"author_strategy": (
-            (incremental_state.get("strategy") or "host_verified_source")
-            if direct_feature else "host_member_author")})
-        _save_checkpoint(checkpoint, identifier, {"source": source})
-        candidate.unlink(missing_ok=True)
-        print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
-            "target_path": spec["target_path"], "owner": owner,
-            "target_compilation_verified": True,
-            "runtime_verified": False,
-            "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
-        }, ensure_ascii=False), flush=True)
-        return source
+
 
 
 
