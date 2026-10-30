@@ -1,7 +1,6 @@
 """Production integration for incremental source programs and per-operation repairs."""
 from __future__ import annotations
 
-from itertools import count
 import json
 
 
@@ -187,15 +186,20 @@ def require_compiler_repair_progress(before, after, diagnostic):
                          + str(diagnostic)[:240])
     return after
 
+MAX_INCREMENTAL_COMPILER_ATTEMPTS = 64
+
+
 def compile_attempts(direct, legacy_budget):
-    # Independent operation errors do not consume one shared whole-feature retry.
-    # Cancellation/deadlines still bound model execution. Repeated failures of
-    # the same cell are counted in repair_member, without discarding other work.
-    return count() if direct else range(legacy_budget + 1)
+    # Independent operand repairs receive a larger budget than whole-source
+    # repairs, but never an infinite sequence of javac/model calls. The host
+    # also rejects replayed Java token streams and candidate cycles.
+    return (range(MAX_INCREMENTAL_COMPILER_ATTEMPTS)
+            if direct else range(legacy_budget + 1))
 
 
 def exhausted(direct, attempt, legacy_budget):
-    return not direct and attempt == legacy_budget
+    return (attempt + 1 >= MAX_INCREMENTAL_COMPILER_ATTEMPTS
+            if direct else attempt == legacy_budget)
 
 
 def repair_member(router, source, diagnostic, *, context):
