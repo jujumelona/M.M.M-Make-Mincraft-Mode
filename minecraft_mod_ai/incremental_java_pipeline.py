@@ -77,7 +77,9 @@ def _verify_observable_program(context):
             callbacks = context.get("verified_fabric_callbacks") or ()
             bindings = context.get("runtime_state_bindings") or {}
             symbols = context.get("symbols") or {}
-        verify_incremental_feature_execution(program, behaviors, callbacks, bindings, symbols)
+        checked_source = context.get("verified_source_events") or ()
+        verify_incremental_feature_execution(
+            program, behaviors, [*callbacks, *checked_source], bindings, symbols)
 
 
 def verify_full_source(source, spec, context, *, package, name, source_context=(), verifier, state_validators):
