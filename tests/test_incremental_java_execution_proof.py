@@ -80,5 +80,8 @@ def test_invalid_or_unreachable_mutation_is_not_causal_evidence():
         verify_incremental_feature_execution(program, [native], [CALLBACK], bindings, symbols)
 
 
-def test_custom_derived_gameplay_state_does_not_claim_native_mutation_proof():
-    assert native_write_targets({**BEHAVIOR, "runtime_state_writes": ["claim_tracking"]}, {}) == ()
+def test_unbound_runtime_write_fails_closed_but_declared_custom_state_is_separate():
+    obligation = {**BEHAVIOR, "runtime_state_writes": ["claim_tracking"]}
+    assert native_write_targets(obligation, {}) == ("claim_tracking",)
+    declared = {"claim_tracking": {"semantic_status": "host_owned_state_model"}}
+    assert native_write_targets(obligation, declared) == ()
