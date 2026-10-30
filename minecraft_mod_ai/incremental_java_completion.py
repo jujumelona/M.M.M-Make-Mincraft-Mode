@@ -23,11 +23,17 @@ def _complete_lambda(builder, member, node):
     _append_return(builder, node["body"], node["return_type"])
 
 
+def _repairable_behavior_body(body):
+    """Remove unconditional terminal failures before appending real behavior."""
+    return [node for node in body if node["op"] != "throw"
+            and (node["op"] != "return" or node.get("value"))]
+
+
 def _complete_member(builder, member, diagnostic, missing_return):
     if member["kind"] in {"class", "record", "enum"} and "does not override abstract method" in diagnostic:
         builder.author_block(member, initial_scope(member), [], body=member["body"])
     elif "CONSTRUCTION_FILE_BEHAVIOR_" in diagnostic and _is_behavior_entrypoint(member):
-        member["body"][:] = [item for item in member["body"] if item["op"] != "return" or item.get("value")]
+        member["body"][:] = _repairable_behavior_body(member["body"])
         builder.author_block(member, scope_at(member), [], body=member["body"])
     elif missing_return and member["metadata"].get("return_type", "void") != "void":
         builder.scope = scope_at(member)
