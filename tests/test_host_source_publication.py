@@ -209,3 +209,39 @@ def test_transaction_rolls_back_acceptance_receipts_and_previous_authorship(tmp_
     assert not new_checkpoint.exists()
     assert manifest.read_text() == initial
     assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
+
+
+def test_whole_feature_failure_restores_retired_custom_event_and_receipt(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import (
+        materialize_verified_custom_event, plan_verified_custom_event)
+    manifest, _ = _workspace(tmp_path)
+    symbols = {**_SYMBOLS, "replacement": {
+        "kind": "METHOD", "owner": "example.Transaction",
+        "name": "finishPurchase", "parameters": ["int"],
+        "return_type": "boolean", "access": 1,
+    }}
+    previous = materialize_verified_custom_event(
+        project_root=tmp_path, symbols=symbols, **_ARGS)
+    previous_manifest = manifest.read_bytes()
+    previous_receipts = {
+        path.name: path.read_bytes()
+        for path in (tmp_path / ".mmm/source-producers").glob("*.json")
+    }
+    replacement_args = {**_ARGS, "source_site_ref": "replacement"}
+    replacement = plan_verified_custom_event(
+        symbols=symbols, mod_id="custommod", **replacement_args)
+    with pytest.raises(RuntimeError, match="javac rejected replacement"):
+        with source_publication_transaction(
+            project_root=tmp_path, symbols=symbols,
+            records=[{"kind": "custom", "args": replacement_args}]):
+            assert all(not (tmp_path / name).exists() for name in previous["files"])
+            assert all((tmp_path / name).is_file() for name in replacement["files"])
+            raise RuntimeError("javac rejected replacement")
+    assert manifest.read_bytes() == previous_manifest
+    assert all((tmp_path / name).read_text() == body
+               for name, body in previous["files"].items())
+    assert all(not (tmp_path / name).exists() for name in replacement["files"])
+    assert previous_receipts == {
+        path.name: path.read_bytes()
+        for path in (tmp_path / ".mmm/source-producers").glob("*.json")
+    }
