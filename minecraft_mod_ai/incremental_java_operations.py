@@ -150,9 +150,30 @@ def _lambda(builder, node):
     builder.scope["locals"].append({"type": node["type"], "name": node["name"]})
 
 
+def _resolve_declined_registration(builder, event):
+    """Switch from unproductive event paging to original-occurrence planning."""
+    if event is not None:
+        return event
+    member = builder.member or {}
+    if not member.get("registrar"):
+        return None
+    rejected = getattr(builder, "_event_declines", {})
+    identity = member["id"]
+    rejected[identity] = rejected.get(identity, 0) + 1
+    builder._event_declines = rejected
+    if rejected[identity] < 2:
+        return None
+    # Repeated cancellation is evidence that the Java menu cannot supply
+    # the requested source occurrence. Ask the checked source-hook planner
+    # instead of spending 96 more coding choices on the same event menu.
+    from .source_owned_hook import choose_source_hook
+    return choose_source_hook(
+        builder.router, member.get("behavior") or {}, builder.api.callbacks())
+
+
 def _register(builder, node):
     from .incremental_java_events import select_event
-    event = select_event(builder)
+    event = _resolve_declined_registration(builder, select_event(builder))
     if event is None:
         return False
     from .incremental_java_model import method_metadata
