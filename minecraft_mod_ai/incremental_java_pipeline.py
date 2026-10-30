@@ -12,7 +12,16 @@ def compose_source(router, spec, messages, *, source_context, construction_conte
         try:
             source, program = compose_incremental_feature(router, spec, messages,
                 construction_context=construction_context, behaviors=behaviors)
-        except SourceHookUnavailable:
+        except (SourceHookUnavailable, RuntimeError) as exc:
+            # Switch to a different *implementation engine* only for a missing
+            # original occurrence or the proven no-progress terminal. Compiler
+            # exceptions and unrelated model/runtime failures are not a
+            # license to conceal errors behind another authoring strategy.
+            if not isinstance(exc, SourceHookUnavailable) and not str(exc).startswith(
+                ("INCREMENTAL_JAVA_NO_SEMANTIC_PROGRESS:",
+                 "INCREMENTAL_JAVA_NO_AVAILABLE_OPERATION:")
+            ):
+                raise
             # The incremental registrar cannot invent an original occurrence.
             # Escalate the *strategy*, not the prompt or the 9B model's retry
             # counter. The host-first source author can construct a real
