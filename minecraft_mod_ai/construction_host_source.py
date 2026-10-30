@@ -334,9 +334,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 incremental_state["source_publications"] = list(
                     context["pending_source_publications"])
             from .host_source_publication import source_publication_transaction
+            from .construction_coverage import _authored_source_path
             with source_publication_transaction(
                 project_root=root, symbols=context.get("symbols") or {},
                 records=incremental_state.get("source_publications") or (),
+                tracked_paths=(checkpoint, proof_path, strategy_path,
+                               _authored_source_path(root, spec["target_path"])),
             ):
                 acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
                 budget = acceptance.get("max_compiler_repair_attempts", 2)
