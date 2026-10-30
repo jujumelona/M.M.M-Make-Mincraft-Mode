@@ -71,10 +71,18 @@ def select_event(builder):
             return indexed[selected]
         if selected == "@cancel":
             return None
-        record_navigation_transition(
-            transitions, (query, offset), selected,
-            error="JAVA_EVENT_SELECTION_NAVIGATION_CYCLE",
-        )
+        try:
+            record_navigation_transition(
+                transitions, (query, offset), selected,
+                error="JAVA_EVENT_SELECTION_NAVIGATION_CYCLE",
+            )
+        except RuntimeError as exc:
+            if not str(exc).startswith("JAVA_EVENT_SELECTION_NAVIGATION_CYCLE:"):
+                raise
+            # A cycling menu is a declined attempt, not a compiler/runtime
+            # failure. The registrar's alternate producer strategy owns it.
+            builder.rejection = {"operand_diagnostic": str(exc)}
+            return None
         if selected == "@next":
             offset += PAGE
         else:
