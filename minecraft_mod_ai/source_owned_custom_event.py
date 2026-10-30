@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import threading
 from collections.abc import Mapping
 
 from .java_operation_ir import parameter_types
@@ -193,6 +194,8 @@ public abstract class {mixin_name} {{
 
 from contextlib import contextmanager
 
+_PRODUCER_LOCK_LOCAL = threading.local()
+
 
 @contextmanager
 def _producer_cross_process_lock(path: Path):
@@ -203,6 +206,18 @@ def _producer_cross_process_lock(path: Path):
     platforms and release it even on validation or filesystem failure.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    identity = str(path.resolve())
+    held = getattr(_PRODUCER_LOCK_LOCAL, "held", None)
+    if held is None:
+        held = {}
+        _PRODUCER_LOCK_LOCAL.held = held
+    if identity in held:
+        held[identity] += 1
+        try:
+            yield
+        finally:
+            held[identity] -= 1
+        return
     with path.open("a+b") as handle:
         if os.name == "nt":
             import msvcrt
@@ -215,9 +230,11 @@ def _producer_cross_process_lock(path: Path):
         else:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        held[identity] = 1
         try:
             yield
         finally:
+            held.pop(identity, None)
             if os.name == "nt":
                 handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
