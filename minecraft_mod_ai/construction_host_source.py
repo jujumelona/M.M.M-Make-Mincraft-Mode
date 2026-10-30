@@ -161,6 +161,19 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         )
         context["host_state_access"] = state_access
         if direct_feature:
+            from .source_owned_custom_event import read_verified_custom_event_receipts
+            from .source_owned_ui_event import read_verified_typed_ui_events
+
+            side = str(spec.get("side") or "COMMON").upper()
+            context["verified_source_events"] = [
+                *read_verified_custom_event_receipts(
+                    project_root=root, symbols=context.get("symbols") or {},
+                    behavior_ids=[row["behavior_id"] for row in behavior_rows],
+                    package=package, side=side),
+                *read_verified_typed_ui_events(
+                    project_root=root, symbols=context.get("symbols") or {},
+                    behaviors=behavior_rows, package=package, side=side),
+            ]
             from .host_fabric_callback_abi import callback_interfaces
 
             bindings = spec.get("bindings", {})
@@ -170,6 +183,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 context.get("symbols") or {}, side=str(spec.get("side") or "COMMON"))
             prompt["runtime_state_bindings"] = json.loads(
                 bindings.get("runtime_state_bindings_json") or "{}")
+            context["verified_fabric_callbacks"] = prompt["available_fabric_callbacks"]
+            context["runtime_state_bindings"] = prompt["runtime_state_bindings"]
+            context["behaviors"] = behavior_rows
             prompt["retained_typed_behavior"] = json.loads(
                 bindings.get("retained_typed_behavior_json") or "{}")
             prompt["owned_runtime_records"] = json.loads(
