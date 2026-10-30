@@ -114,3 +114,77 @@ def test_source_owned_compiler_loads_qualified_external_producer_closure():
     assert direct_source_dependencies({"host_direct_feature_source": True}) == {
         "include_qualified_sources": True}
     assert direct_source_dependencies({}) == {}
+
+
+@pytest.mark.parametrize("compiler_accepts", [False, True])
+def test_actual_host_construction_rollback_boundary(tmp_path, monkeypatch, compiler_accepts):
+    import minecraft_mod_ai.construction_host_source as host
+    import minecraft_mod_ai.incremental_java_pipeline as pipeline
+    from minecraft_mod_ai.source_owned_custom_event import plan_verified_custom_event
+    manifest, original = _workspace(tmp_path)
+    plan = plan_verified_custom_event(symbols=_SYMBOLS, mod_id="custommod", **_ARGS)
+    spec = {
+        "language": "java", "target_path": "src/main/java/example/Bridge.java",
+        "requirement": "implement original occurrence",
+        "bindings": {"request_feature_entrypoint": True},
+    }
+    behavior = {"behavior_id": "test_behavior", "intent": "actual task",
+                "trigger": "concrete source invocation", "effects": "real effect"}
+    context = {
+        "project_root": str(tmp_path), "java_classpath": ["test-only"],
+        "target": {"loader": "fabric", "java_version": 25},
+        "symbols": _SYMBOLS,
+        "feature_work_order": {"acceptance": {"max_compiler_repair_attempts": 0}},
+    }
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "source-publication-boundary-integration-v1")
+    monkeypatch.setattr(host, "_build_host_java_prompt",
+        lambda *a, **kw: ({}, "original occurrence", [behavior], {
+            "inspected_target_api": {}, "materialized_prerequisite_api": [],
+            "host_state_work_order_scope": {}, "available_fabric_callbacks": [],
+            "retained_typed_behavior": {}, "owned_runtime_records": [],
+        }, []))
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_verified_entity_type.verified_entity_type_source",
+        lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_verified_entity_registry.verified_entity_registry_source",
+        lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.template_first_route.checked_rule_template_ready",
+        lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_coverage.record_authored_source_calls",
+        lambda *a, **kw: None)
+    output = "package example; public class Bridge {}"
+    def produce(router, spec, messages, *, construction_context, **kwargs):
+        construction_context["incremental_state"]["strategy"] = "host_source_owned"
+        construction_context["pending_source_publications"].append({
+            "kind": "custom", "args": dict(_ARGS)})
+        assert not (tmp_path / next(iter(plan["files"]))).exists()
+        return output
+    monkeypatch.setattr(pipeline, "compose_source", produce)
+    observed = []
+    def check(source, *args, **kwargs):
+        assert source == output
+        assert all((tmp_path / name).is_file() for name in plan["files"])
+        observed.append(True)
+        if not compiler_accepts:
+            raise ValueError("mock javac error after event files were materialized")
+    monkeypatch.setattr(host, "_verification_boundary", lambda: check)
+    from minecraft_mod_ai.construction_host_source import compose_host_java_source
+    call = lambda: compose_host_java_source(
+        object(), spec, context, package="example", name="Bridge",
+        owner="example.Bridge", behaviors=[behavior])
+    if not compiler_accepts:
+        with pytest.raises(ValueError, match="mock javac error"):
+            call()
+        assert manifest.read_text() == original
+        assert all(not (tmp_path / name).exists() for name in plan["files"])
+        assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
+    else:
+        assert call() == output
+        assert manifest.read_text() != original
+        assert all((tmp_path / name).is_file() for name in plan["files"])
+    assert len(observed) == 1
