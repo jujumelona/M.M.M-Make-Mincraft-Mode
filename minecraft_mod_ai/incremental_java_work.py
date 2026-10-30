@@ -43,9 +43,16 @@ def work_view(builder):
         "complete this method. Nested rejection returns remain available.")}
 
 
+def _owns_runtime_effect_obligation(builder, member, path):
+    """Only original occurrence owners must prove an effect in this method."""
+    return (not path and member.get("kind") == "method"
+            and member.get("work_role") != "supporting_abi"
+            and _world_bound(builder, member)
+            and bool(member.get("registrar") or member.get("event")))
+
+
 def work_options(builder, member, scope, path, body, options):
-    if (path or member.get("kind") != "method" or member.get("work_role") == "supporting_abi"
-            or not _world_bound(builder, member)):
+    if not _owns_runtime_effect_obligation(builder, member, path):
         return options
     if _needs_observation(builder, member, body):
         from .incremental_java_registration_policy import host_registration_enabled
@@ -70,11 +77,6 @@ def work_options(builder, member, scope, path, body, options):
         if (host_registration_enabled(builder)
                 or observed_world_input or mutation_without_occurrence):
             return [op for op in options if op == "register"]
-        return options
-    # A helper inherits its parent behavior for context, but does not own
-    # the original occurrence or native-effect acceptance obligation. Only
-    # the registrar and its actual event listener must prove an effect here.
-    if not (member.get("registrar") or member.get("event")):
         return options
     if _member_has_potential_effect({**member, "body": body}):
         return options
