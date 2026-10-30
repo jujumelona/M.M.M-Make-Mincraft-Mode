@@ -352,6 +352,14 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         raise ConstructionFileError("CONSTRUCTION_FILE_TARGET_CLASSPATH_REQUIRED")
     from .construction_project_compile import verify_java_source_with_dependencies
     registered_ui = []
+    # Source-owned gameplay is not allowed to succeed as a bare Java class
+    # when the inspected Fabric symbol index was never loaded. Without that
+    # index, the event-receipt gate below was previously skipped entirely.
+    # A compilable no-op registrar could then pass as an installed mechanic.
+    if (spec.get("bindings", {}).get("request_feature_entrypoint")
+            and context.get("host_source_owned")
+            and not context.get("symbols")):
+        raise ConstructionFileError("SOURCE_OWNED_INSPECTED_ABI_REQUIRED")
     use_source_receipts = (spec.get("bindings", {}).get("request_feature_entrypoint")
                            and context.get("symbols") and not context.get("host_direct_feature_source"))
     if use_source_receipts:
