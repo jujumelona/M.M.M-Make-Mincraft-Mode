@@ -86,7 +86,12 @@ def shortlist_verified_sites(behavior: Mapping, symbols: Mapping, *, limit=24,
         # for code actually authored into this project; an explicitly bound,
         # separately verified vanilla Mixin remains possible through its
         # precise source_site_ref, never via full-classpath keyword search.
-        if source_path and not is_project_method:
+        # A missing source path is NOT evidence of project ownership.
+        # External classpath symbols often have no file provenance at all;
+        # accepting them lets keyword overlap select arbitrary vanilla/JDK
+        # methods as new gameplay occurrence sites. Explicit inspected
+        # source_site_ref bindings are handled by the caller separately.
+        if not is_project_method:
             continue
         if provenance and provenance != "materialized_source":
             continue
