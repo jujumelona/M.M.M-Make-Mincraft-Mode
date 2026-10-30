@@ -132,7 +132,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     # proof. Do not accept a checkpointed Java file after losing that proof.
     saved_strategy = _read_checkpoint(strategy_path, identifier)
     if saved_strategy and saved_strategy.get("author_strategy") not in {
-        "incremental_java", "host_source_owned",
+        "incremental_java", "host_source_owned", "host_member_author",
     }:
         raise HostJavaConstructionError("JAVA_HOST_SAVED_STRATEGY_INVALID")
     source_owned_saved = saved_strategy.get("author_strategy") == "host_source_owned"
@@ -143,6 +143,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     context["incremental_state"] = incremental_state
     with _claim_checkpoint(checkpoint):
         saved = _read_checkpoint(checkpoint, identifier)
+        # A legacy direct candidate has no provenance tying its source to
+        # the correct validation engine. Re-author instead of silently
+        # validating it under a weaker or unrelated registration rule.
+        if saved and direct_feature and not saved_strategy:
+            saved = {}
         if saved:
             if set(saved) != {"source"} or not isinstance(saved["source"], str):
                 raise HostJavaConstructionError("JAVA_HOST_CHECKPOINT_INVALID")
@@ -360,10 +365,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 "receipts_json": json.dumps(
                     mutation_receipts, ensure_ascii=False, sort_keys=True),
             })
-        _save_checkpoint(checkpoint, identifier, {"source": source})
         _save_checkpoint(strategy_path, identifier, {"author_strategy": (
-            incremental_state.get("strategy") or "incremental_java"
+            (incremental_state.get("strategy") or "incremental_java")
             if direct_feature else "host_member_author")})
+        _save_checkpoint(checkpoint, identifier, {"source": source})
         candidate.unlink(missing_ok=True)
         print("CONSTRUCTION HOST JAVA AUTHOR: " + json.dumps({
             "target_path": spec["target_path"], "owner": owner,
