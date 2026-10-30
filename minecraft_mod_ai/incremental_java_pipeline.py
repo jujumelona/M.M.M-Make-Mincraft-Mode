@@ -131,6 +131,18 @@ def has_incremental_ast(direct_feature, state):
     return True
 
 
+def require_compiler_repair_progress(before, after, diagnostic):
+    """Reject an unchanged compiler candidate before a second javac round.
+
+    A Java repair must produce new bytes. A repeated rejected member is not
+    progress and cannot justify another inference/compilation turn.
+    """
+    if not isinstance(after, str) or not after.strip():
+        raise ValueError("JAVA_HOST_COMPILER_REPAIR_EMPTY")
+    if before == after:
+        raise ValueError("JAVA_HOST_COMPILER_REPAIR_NO_PROGRESS: " + str(diagnostic)[:240])
+    return after
+
 def compile_attempts(direct, legacy_budget):
     # Independent operation errors do not consume one shared whole-feature retry.
     # Cancellation/deadlines still bound model execution. Repeated failures of
