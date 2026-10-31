@@ -35,6 +35,17 @@ def _receiver_target(evidence, root, key, row):
     if not name or name.startswith(("set", "register", "wait", "notify")):
         return None
     target = canonical_type_name(row.get("return_type") or "")
+    # A world/entity observation getter returning some Player does NOT
+    # establish that this is the player whose state the callback may mutate.
+    # A world.getRandomPlayer() and victim.getLastHurtByPlayer() were previously
+    # admitted as mutation receivers simply because their return types matched.
+    # Actor identities must come from callback parameters (or a separately
+    # proved causal source relation), never an ambient actor search.
+    player_types = (
+        ".Player", ".ServerPlayer", ".PlayerEntity", ".ServerPlayerEntity",
+    )
+    if target.endswith(player_types) and not root.endswith(player_types):
+        return None
     if not evidence._accessible(target) or target.startswith(
         ("java.", "javax.", "jdk.", "sun.", "com.sun.", "org.lwjgl.")
     ):
