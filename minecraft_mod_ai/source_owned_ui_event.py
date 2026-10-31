@@ -449,9 +449,13 @@ def read_verified_typed_ui_events(*, project_root, symbols, behaviors, package, 
             raise ValueError("UI_OCCURRENCE_RECEIPT_ID_MISMATCH")
         for side_name, owner in expected["entrypoints"].items():
             entries = metadata["entrypoints"][side_name]
-            if not any((entry if isinstance(entry, str) else entry.get("value")) == owner
-                       for entry in entries if isinstance(entry, (str, dict))):
+            count = sum(
+                (entry if isinstance(entry, str) else entry.get("value")) == owner
+                for entry in entries if isinstance(entry, (str, dict)))
+            if count == 0:
                 raise ValueError("UI_OCCURRENCE_STARTUP_NOT_REGISTERED")
+            if count != 1:
+                raise ValueError("UI_OCCURRENCE_STARTUP_DUPLICATE")
         for relative, contents in expected["files"].items():
             path = _path(root, relative)
             if not path.is_file() or path.read_text(encoding="utf-8") != contents:
