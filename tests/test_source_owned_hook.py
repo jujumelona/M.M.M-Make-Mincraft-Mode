@@ -185,9 +185,7 @@ def test_source_owned_mining_requires_real_block_break_not_middle_click():
     }
     picker = HookPicker(mined["event_id"])
     assert choose_source_hook(picker, b, [picked, mined]) == mined
-    assert picker.calls[0][2]["properties"]["event_id"]["enum"] == [
-        mined["event_id"], "SOURCE_REQUIRED",
-    ]
+    assert not picker.calls  # exact inspected AFTER-break is host bound
 
 
 def test_source_owned_explicit_death_occurrence_preserved():
