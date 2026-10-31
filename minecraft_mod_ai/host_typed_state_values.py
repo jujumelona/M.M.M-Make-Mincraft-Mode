@@ -89,7 +89,7 @@ def typed_state_transition_schema(java_type: str) -> dict:
     schema = typed_value_schema(java_type)
     family = _TYPES[java_type.strip()]
     permitted = ["set", "add", "subtract"] if family in {
-        "byte", "short", "int", "long", "float", "double"} else ["set"]
+        "int", "long", "float", "double"} else ["set"]
     schema["properties"]["operator"] = {
         "type": "string", "enum": permitted,
     }
@@ -113,7 +113,7 @@ def lower_typed_state_transition(row: dict, java_type: str, *,
     if operator not in ("set", "add", "subtract"):
         raise ValueError("CALLBACK_REQUIRED_STATE_TRANSITION_OPERATOR_INVALID")
     if operator != "set" and family not in {
-        "byte", "short", "int", "long", "float", "double"}:
+        "int", "long", "float", "double"}:
         raise ValueError("CALLBACK_REQUIRED_STATE_TRANSITION_TYPE_INVALID")
     value = lower_typed_java_value({"value": row["value"]}, java_type)
     if operator == "set":
@@ -128,6 +128,4 @@ def lower_typed_state_transition(row: dict, java_type: str, *,
                 + ", " + value + ")")
     sign = "+" if operator == "add" else "-"
     expr = "(" + reader_expression + " " + sign + " " + value + ")"
-    if family in {"byte", "short"}:
-        return "(" + family + ") " + expr
     return expr
