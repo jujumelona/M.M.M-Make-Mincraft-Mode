@@ -120,6 +120,8 @@ def test_structured_journal_write_failure_restores_cursor_and_replays_after_retr
     class StructuredBackend(Backend):
         def generate_structured_data(self, role, messages, *, data_name, parameters):
             self.calls += 1
+            if self.error:
+                raise self.error
             return {"value": "accepted"}
     backend = StructuredBackend()
     current = journal(tmp_path, backend)
