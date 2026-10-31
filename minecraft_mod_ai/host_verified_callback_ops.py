@@ -294,6 +294,25 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
             if any(kind not in inputs and kind not in scalar_types for kind in arguments):
                 continue
             signature = owner + "#" + name + "(" + ", ".join(arguments) + ")"
+            # The platform has state concepts whose *storage representation*
+            # is different from their name. Lost item durability is recorded
+            # as the ItemStack's damage value. Recognize that relation only
+            # when the actual indexed class exposes a complete getter/setter
+            # ABI. A mere similarly named method is not proof.
+            companion_methods = {
+                (m.get("name"), tuple(m.get("parameters") or ()), m.get("return_type"))
+                for m in record.get("members", ())
+                if isinstance(m, dict) and m.get("kind") == "METHOD"
+                and not m.get("static")
+            }
+            damageable_trait = (
+                owner == "net.minecraft.world.item.ItemStack"
+                and name == "setDamageValue"
+                and arguments == ["int"]
+                and row.get("return_type") == "void"
+                and ("getDamageValue", (), "int") in companion_methods
+                and ("getMaxDamage", (), "int") in companion_methods
+            )
             for receiver in receivers:
                 identity = (receiver, signature)
                 if identity in seen:
@@ -304,6 +323,8 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
                     "receiver": receiver, "name": name, "signature": signature,
                     "arguments": _runtime_argument_slots(arguments, inputs),
                     "return_type": row.get("return_type"),
+                    "native_state_traits": (
+                        ["minecraft:item_durability_as_damage"] if damageable_trait else []),
                 })
     return candidates
 
