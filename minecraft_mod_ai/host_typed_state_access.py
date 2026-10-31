@@ -23,6 +23,11 @@ def render_typed_state_accessors(variables) -> str:
         java_type = _java_type(kind)
         literal = json.dumps(name, ensure_ascii=True)
         default = _default_value(variable)
+        # Emit a host-owned ABI marker for scoped values. Prerequisite API
+        # extraction retains declarations (not bodies), so this zero-arg
+        # marker carries the verified scope into later callback compilation.
+        if str(variable.get("owner") or "").strip() == "player":
+            members.append(f"public static boolean mmmPlayerScoped_{name}() {{ return true; }}")
         members.append(f"""public static synchronized {java_type} readState_{name}() {{
     return readState_{name}(java.util.Map.of());
 }}
@@ -52,6 +57,7 @@ def state_access_contract(prerequisite_api) -> list[dict]:
             if owner.rsplit(".", 1)[-1] != "AuthoredStateModel":
                 continue
             methods = []
+            player_scoped = set()
             has_state_api = False
             for header in declared_type.get("members", ()):
                 raw, root = _parse("class MmmStateApi {\n" + header + "\n}")
@@ -61,10 +67,20 @@ def state_access_contract(prerequisite_api) -> list[dict]:
                         continue
                     name = _text(raw, member.child_by_field_name("name"))
                     has_state_api |= name in {"getState", "setState"}
+                    if name.startswith("mmmPlayerScoped_"):
+                        player_scoped.add(name[len("mmmPlayerScoped_"):])
                     if name.startswith(("readState_", "writeState_")):
                         methods.append({"name": name, "signature": header})
             if has_state_api:
-                contracts.append({"owner": owner, "methods": methods})
+                declared_names = {
+                    row["name"].split("_", 1)[1] for row in methods
+                }
+                if not player_scoped <= declared_names:
+                    raise ValueError("STATE_ACCESS_SCOPED_MARKER_ORPHAN")
+                contracts.append({
+                    "owner": owner, "methods": methods,
+                    "state_scopes": {name: "player" for name in sorted(player_scoped)},
+                })
     return contracts
 
 
@@ -218,9 +234,27 @@ def state_prompt_api(prerequisite_api, evidence, contracts):
             for header in declared.get('members', ()):
                 raw, root = _parse('class MmmStatePrompt {\n' + header + '\n}')
                 body = root.named_children[0].child_by_field_name('body')
-                blocked = any(member.type == 'method_declaration'
-                    and _text(raw, member.child_by_field_name('name')) in _HOST_STATE_INTERNALS
-                    for member in body.named_children)
+                blocked = False
+                scoped = next(
+                    (row.get("state_scopes") or {} for row in contracts
+                     if row.get("owner") == declared.get("owner")), {})
+                for member in body.named_children:
+                    if member.type != "method_declaration":
+                        continue
+                    method_name = _text(raw, member.child_by_field_name("name"))
+                    if method_name in _HOST_STATE_INTERNALS or method_name.startswith("mmmPlayerScoped_"):
+                        blocked = True
+                        break
+                    if method_name.startswith(("readState_", "writeState_")):
+                        state_name = method_name.split("_", 1)[1]
+                        if scoped.get(state_name) == "player":
+                            arguments = [param for param in
+                                member.child_by_field_name("parameters").named_children
+                                if param.type == "formal_parameter"]
+                            required = 1 if method_name.startswith("readState_") else 2
+                            if len(arguments) < required:
+                                blocked = True
+                                break
                 if not blocked:
                     members.append(header)
             declared['members'] = members
@@ -283,6 +317,21 @@ def validate_behavior_state_provenance(source: str, contracts, behavior) -> None
             if receiver is not None and name is not None:
                 owner = _text(raw, receiver)
                 called = _text(raw, name)
+                state_name = called.split("_", 1)[1] if called.startswith(
+                    ("readState_", "writeState_")) else ""
+                scope = next((
+                    (contract.get("state_scopes") or {}).get(state_name)
+                    for contract in contracts
+                    if contract.get("owner") in owner_names
+                    and (contract.get("state_scopes") or {}).get(state_name)
+                ), None)
+                if scope == "player" and called.startswith(("readState_", "writeState_")):
+                    argument_node = node.child_by_field_name("arguments")
+                    arity = len(argument_node.named_children) if argument_node is not None else 0
+                    minimum = 1 if called.startswith("readState_") else 2
+                    if arity < minimum:
+                        raise ValueError(
+                            "JAVA_PLAYER_STATE_CONTEXT_REQUIRED: " + called)
                 for method_prefix, accepted in permitted.items():
                     if (owner in owner_names and called.startswith(method_prefix)
                             and called[len(method_prefix):] not in accepted):
