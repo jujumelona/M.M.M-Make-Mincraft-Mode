@@ -206,6 +206,11 @@ def _producer_cross_process_lock(path: Path):
     platforms and release it even on validation or filesystem failure.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # The OS lock must belong to this project. Following a linked lock file
+    # or linked .mmm directory could lock an unrelated external inode and
+    # silently remove cross-process mutual exclusion for publication.
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError("SOURCE_PRODUCER_LOCK_PATH_UNSAFE")
     identity = str(path.resolve())
     held = getattr(_PRODUCER_LOCK_LOCAL, "held", None)
     if held is None:
