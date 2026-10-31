@@ -175,3 +175,29 @@ def test_pick_block_hook_is_only_admitted_for_explicit_pick_block_action():
         "behavior_id": "pick-block",
         "trigger": "Player uses the pick-block control to clone a block item",
     }, [pick]) is pick
+
+
+def test_pick_entity_and_pick_block_callbacks_are_not_interchangeable():
+    owner = "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents"
+    entity = _event(owner, "ENTITY")
+    block = _event(owner, "BLOCK")
+
+    class ExactSelector:
+        def __init__(self, wanted):
+            self.wanted = wanted
+
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            return {"event_binding": self.wanted}
+
+    assert select_behavior_callback(
+        ExactSelector(entity["event_id"]),
+        {"behavior_id": "pick-creature",
+         "trigger": "Player uses pick-entity control to select an entity"},
+        [entity, block],
+    ) is entity
+    assert select_behavior_callback(
+        ExactSelector(block["event_id"]),
+        {"behavior_id": "clone-block",
+         "trigger": "Player uses pick-block control to select a block"},
+        [entity, block],
+    ) is block
