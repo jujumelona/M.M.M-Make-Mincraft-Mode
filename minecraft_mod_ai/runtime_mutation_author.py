@@ -73,6 +73,43 @@ def mutation_targets(behavior: Mapping | None) -> tuple[str, ...]:
     return tuple(targets)
 
 
+def _mutation_field_words(state_name):
+    """Extract the *target property*, not its enclosing player/world scope."""
+    tail = re.split(r"[./:]", str(state_name).strip())[-1]
+    return tuple(re.findall(r"[a-z]+", re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])", " ", tail).casefold()))
+
+
+def _state_backed_native_candidates(state_name, candidates):
+    """Reduce model options to ABI methods naming the required target field.
+
+    Finding a callable on a player does not show that it changes currency,
+    inventory ownership, health or a world node. An unmatched generic method
+    (for example apply, sendMessage or removeAllEffects) must never become a
+    mutation receipt merely because the small model selected it. This is a
+    conservative precondition, NOT sufficient proof of gameplay semantics.
+    API methods with non-obvious side effects need an explicit semantic bridge
+    before they can be admitted as required native mutations.
+    """
+    words = _mutation_field_words(state_name)
+    if not words:
+        return []
+    # Qualifying by the terminal field prevents a live owner like "player"
+    # or "world" from dominating irrelevant method rankings.
+    field = words[-1]
+    # The exact Java method name is indexed in the immutable API catalogue.
+    # Do not search receiver types, arbitrary arguments or other state fields.
+    result = []
+    for identifier, item in candidates:
+        method = str(item.get("name") or item.get("signature", "").split("#")[-1].split("(")[0])
+        method_words = re.findall(r"[a-z]+", re.sub(
+            r"(?<=[a-z0-9])(?=[A-Z])", " ", method).casefold())
+        if field in method_words or (
+                field.endswith("s") and len(field) > 3 and field[:-1] in method_words):
+            result.append((identifier, item))
+    return result
+
+
 def _choose_native_argument(router, scoped, data_name, state_name, selected, argument, offset):
     from .host_callback_body import _ask
 
@@ -194,7 +231,15 @@ def author_runtime_mutation_calls(
                 r"(?<=[a-z0-9])(?=[A-Z])", " ", text).lower()))
             return -len(words & tokens)
 
-        ordered = sorted(available.items(), key=relevance)
+        matching = _state_backed_native_candidates(name, available.items())
+        if not matching:
+            raise ValueError(
+                "CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED: "
+                + name + "; inspected " + str(len(available))
+                + " callable candidates but none names the required target "
+                  "field. Materialize an owned typed state/accessor or a "
+                  "verified native semantic bridge before callback authoring.")
+        ordered = sorted(matching, key=relevance)
         options = {}
 
         def lower(row):
