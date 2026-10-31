@@ -255,6 +255,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # receipts before permitting compilation or repair.
                 pending = {}
             pending = load_candidate(pending, incremental_state, direct_feature)
+            if incremental_state.get("strategy") == "host_rule_template":
+                for record in incremental_state.get("rule_ir_records") or ():
+                    context["pending_rule_ir"].append((
+                        root / record["path"], record["identity"], record["proof"]))
             rule_template_used = incremental_state.get("strategy") == "host_rule_template"
             if incremental_state.get("strategy") == "host_source_owned":
                 required_native = bool(has_runtime_writes)
@@ -393,6 +397,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                                 "HOST_RULE_TEMPLATE_COMPILATION_FAILED: "
                                 + str(compiler_error)
                             ) from compiler_error
+                        if incremental_state.get("strategy") == "host_rule_template":
+                            incremental_state["rule_ir_records"] = [
+                                {"path": path.relative_to(root).as_posix(),
+                                 "identity": identity, "proof": proof}
+                                for path, identity, proof in context["pending_rule_ir"]
+                            ]
                         _save_checkpoint(candidate, identifier, candidate_data(
                             source, str(compiler_error) or type(compiler_error).__name__, incremental_state))
                         if exhausted(incremental_protocol, attempt, budget):
