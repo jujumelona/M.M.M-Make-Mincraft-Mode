@@ -130,3 +130,47 @@ def test_unbound_owner_is_search_uncertainty_not_absence_of_all_hooks():
         "select_verified_fabric_event_owner",
         "select_verified_fabric_event",
     ]
+
+
+def test_mining_cannot_select_creative_pick_block_hook():
+    pick = _event(
+        "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents", "BLOCK")
+    mined = _event(
+        "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents", "AFTER")
+
+    class MineEventSelector:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            data = json.loads(messages[-1]["content"])
+            # The old model selected pick-item from this global index, even
+            # though its occurrence is not a Minecraft mining completion.
+            ids = {item["event_id"] for item in data.get("verified_hook_index", [])}
+            assert mined["event_id"] in ids
+            assert pick["event_id"] not in ids
+            return {"event_binding": mined["event_id"]}
+
+    result = select_behavior_callback(MineEventSelector(), {
+        "behavior_id": "resource-loop",
+        "trigger": "Player mines ore blocks and gathers resources",
+        "effects": "Accumulate the owned resource inventory",
+    }, [pick, mined])
+    assert result == mined
+
+
+def test_pick_block_hook_is_only_admitted_for_explicit_pick_block_action():
+    pick = _event(
+        "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents", "BLOCK")
+
+    class OnlyEventSelector:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            return {"event_binding": pick["event_id"]}
+
+    with pytest.raises(
+            HostEventBindingError, match="no_intrinsically_compatible_verified_occurrence"):
+        select_behavior_callback(OnlyEventSelector(), {
+            "behavior_id": "harvest",
+            "trigger": "Player breaks a block to gather its drops",
+        }, [pick])
+    assert select_behavior_callback(OnlyEventSelector(), {
+        "behavior_id": "pick-block",
+        "trigger": "Player uses the pick-block control to clone a block item",
+    }, [pick]) is pick
