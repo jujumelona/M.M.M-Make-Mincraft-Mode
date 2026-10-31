@@ -85,7 +85,6 @@ def test_real_llama_coder_stays_host_owned_through_journal_router(tmp_path, monk
     from types import SimpleNamespace
     from minecraft_mod_ai.construction_journal import JournaledConstructionRouter
     from minecraft_mod_ai.incremental_java_pipeline import compose_source
-    from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
     class LiveCoder:
         profile = "MiMo-V2.6-9B_6GB"
         class Registry:

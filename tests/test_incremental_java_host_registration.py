@@ -439,15 +439,38 @@ def test_ast_strategy_requires_a_saved_program_not_just_a_route_label():
 
 @pytest.mark.parametrize("strategy", ["host_verified_source", "host_rule_template"])
 def test_compiler_resume_preserves_host_source_strategy_without_ast(strategy):
+    from hashlib import sha256
     from minecraft_mod_ai.incremental_java_pipeline import candidate_data, load_candidate
-    record = candidate_data(
-        "package example; class Feature {}", "javac: expected symbol",
-        {"strategy": strategy},
-    )
+
+    source = "package example; class Feature {}"
+    state = {"strategy": strategy}
+    if strategy == "host_rule_template":
+        identity = sha256(b"host-rule-compiler-resume-proof").hexdigest()
+        state["rule_ir_records"] = [{
+            "identity": identity,
+            "path": ".mmm/construction_rule_ir/" + identity + ".json",
+            "proof": {
+                "schema": "mmm/host-observation-rules-v1",
+                "rules": [{"behavior_id": "observed-behavior"}],
+                "source_sha256": sha256(source.encode()).hexdigest(),
+            },
+        }]
+    record = candidate_data(source, "javac: expected symbol", state)
     restored = {}
     assert load_candidate(record, restored, True) == record
-    assert restored == {"strategy": strategy}
+    assert restored == state
     assert "program_json" not in record
+
+
+def test_compiler_resume_rejects_rule_template_without_bound_rule_ir():
+    from minecraft_mod_ai.incremental_java_pipeline import candidate_data, load_candidate
+
+    record = candidate_data(
+        "package example; class Feature {}", "javac: missing symbol",
+        {"strategy": "host_rule_template"},
+    )
+    with pytest.raises(ValueError, match="JAVA_HOST_RULE_IR_CANDIDATE_INVALID"):
+        load_candidate(record, {}, True)
 
 
 def test_compiler_resume_rejects_native_proof_on_non_ast_host_strategy():
