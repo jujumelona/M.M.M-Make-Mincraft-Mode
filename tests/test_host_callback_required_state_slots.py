@@ -217,3 +217,116 @@ def test_player_scoped_write_supports_mojang_named_player_api():
         effect_receipt=True,
     )
     assert 'java.util.Map.of("player", owner.getUUID())' in source
+
+
+def test_compiled_player_state_delta_is_atomic_and_isolated_per_uuid(tmp_path):
+    """Real JVM probe: generated callback must not share or reset player money."""
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    from minecraft_mod_ai.host_prerequisite_api import java_api_declarations
+    from minecraft_mod_ai.host_typed_state_access import state_access_contract
+    from minecraft_mod_ai.production_state_compiler import render_production_state_java
+    from test_production_state_compiler import _state_section
+
+    javac, java = shutil.which("javac"), shutil.which("java")
+    if not javac or not java:
+        pytest.skip("JDK compiler/runtime required")
+
+    section = _state_section(variables=[{
+        "name": "credits", "owner": "player", "type": "long",
+        "unit": "credits", "default": "0", "domain": "nonnegative",
+    }])
+    state = render_production_state_java(section, package_name="proof")
+    api = java_api_declarations(
+        state, path="src/main/java/proof/AuthoredStateModel.java")
+    contracts = state_access_contract([api])
+    assert contracts[0]["state_scopes"] == {"credits": "player"}
+
+    frame = {
+        "kind": "method",
+        "prefix": (
+            "private boolean apply("
+            "net.minecraft.server.network.ServerPlayerEntity player) {\n"
+        ),
+        "suffix": "\n}",
+        "host_state_access": contracts,
+        "host_behavior_contract": {
+            "behavior_id": "earn_credits",
+            "state_reads": ["credits"],
+            "state_writes": ["credits"],
+        },
+    }
+    msg = [{"role": "user", "content": json.dumps({
+        "verified_event_callback": {
+            "parameters": ["net.minecraft.server.network.ServerPlayerEntity"]
+        },
+        "callback_input_api": [],
+    })}]
+    callback = author_callback_body(
+        Router([{"value": 5, "operator": "add"}]),
+        msg, data_name="scoped_increment", frame=frame, effect_receipt=True,
+    )
+    assert "synchronized (proof.AuthoredStateModel.class)" in callback
+    assert 'java.util.Map.of("player", player.getUuid())' in callback
+    bridge = """package proof;
+public class Bridge {
+    public boolean run(net.minecraft.server.network.ServerPlayerEntity p) {
+        return apply(p);
+    }
+""" + callback + "\n}\n"
+
+    player = """package net.minecraft.server.network;
+public class ServerPlayerEntity {
+    private final java.util.UUID uuid;
+    public ServerPlayerEntity(String id) {
+        this.uuid = java.util.UUID.fromString(id);
+    }
+    public java.util.UUID getUuid() { return uuid; }
+}
+"""
+    probe = """package proof;
+public class Probe {
+    public static void main(String[] args) {
+        Bridge bridge = new Bridge();
+        var a = new net.minecraft.server.network.ServerPlayerEntity(
+          "00000000-0000-0000-0000-000000000001");
+        var b = new net.minecraft.server.network.ServerPlayerEntity(
+          "00000000-0000-0000-0000-000000000002");
+        for (int i = 0; i < 4; i++) {
+            if (!bridge.run(a)) throw new AssertionError("receipt");
+        }
+        if (!bridge.run(b)) throw new AssertionError("receipt B");
+        long aBalance = AuthoredStateModel.readState_credits(
+            java.util.Map.of("player", a.getUuid()));
+        long bBalance = AuthoredStateModel.readState_credits(
+            java.util.Map.of("player", b.getUuid()));
+        if (aBalance != 20L || bBalance != 5L)
+            throw new AssertionError("scoped balances: " + aBalance + "/" + bBalance);
+        System.out.println("PLAYER_STATE_ATOMIC_PASS");
+    }
+}
+"""
+    sources = {
+        "proof/AuthoredStateModel.java": state,
+        "proof/Bridge.java": bridge,
+        "proof/Probe.java": probe,
+        "net/minecraft/server/network/ServerPlayerEntity.java": player,
+    }
+    paths = []
+    for relative, source in sources.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+        paths.append(str(path))
+    compiled = subprocess.run(
+        [javac, "-proc:none", "-d", str(tmp_path), *paths],
+        capture_output=True, text=True, timeout=60, check=False)
+    assert compiled.returncode == 0, compiled.stderr
+    executed = subprocess.run(
+        [java, "-cp", str(tmp_path), "proof.Probe"],
+        capture_output=True, text=True, timeout=30, check=False)
+    assert executed.returncode == 0, executed.stderr
+    assert "PLAYER_STATE_ATOMIC_PASS" in executed.stdout
