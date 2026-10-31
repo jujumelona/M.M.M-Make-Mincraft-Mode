@@ -198,9 +198,19 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
     root.mkdir(parents=True, exist_ok=True)
     from .construction_direct_writer import _save_checkpoint
     identity = hashlib.sha256((owner + "\0" + source).encode()).hexdigest()
-    _save_checkpoint(root / (identity + ".json"), identity, {
+    proof = {
         "schema": "mmm/host-observation-rules-v1", "owner": owner, "rules": records,
         "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "target_compilation_verified": False, "runtime_verified": False,
-    })
+    }
+    if context.get("defer_rule_ir_persistence"):
+        pending = context.get("pending_rule_ir")
+        if not isinstance(pending, list):
+            raise ValueError("RULE_SOURCE_PENDING_PROOF_LEDGER_REQUIRED")
+        # A proposed rule is not a compiler-accepted artifact. Stage its
+        # observation record until the enclosing Java/source transaction
+        # succeeds; failed candidates must not leave plausible proof files.
+        pending.append((root / (identity + ".json"), identity, proof))
+    else:
+        _save_checkpoint(root / (identity + ".json"), identity, proof)
     return source
