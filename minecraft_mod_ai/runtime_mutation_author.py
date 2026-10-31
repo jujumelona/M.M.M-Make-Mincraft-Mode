@@ -154,6 +154,10 @@ def _state_backed_native_candidates(state_name, candidates):
         if field in method_words or (
                 field.endswith("s") and len(field) > 3 and field[:-1] in method_words):
             result.append((identifier, item))
+        elif (field == "durability"
+              and "minecraft:item_durability_as_damage" in
+              (item.get("native_state_traits") or ())):
+            result.append((identifier, item))
     return result
 
 
@@ -216,6 +220,19 @@ def _native_mutation_expression(router, scoped, data_name, state_name, selected,
             value = _author_native_scalar(router, scoped, data_name, state_name,
                                           selected, argument, offset, behavior)
         args.append(value)
+    if "minecraft:item_durability_as_damage" in (
+            selected.get("native_state_traits") or ()):
+        # Losing durability increases the damage-value component. The value
+        # supplied by the model is a *positive wear delta*, never a replacement
+        # for the current damage count. Both readers and this setter were
+        # admitted only from the same inspected ItemStack class.
+        if len(args) != 1 or selected["name"] != "setDamageValue":
+            raise ValueError("CALLBACK_NATIVE_DURABILITY_ABI_INVALID")
+        receiver = selected["receiver"]
+        delta = args[0]
+        args = ["(int) Math.min((long) " + receiver
+                + ".getMaxDamage(), (long) " + receiver
+                + ".getDamageValue() + Math.max(1L, (long) (" + delta + ")))"]
     return selected["receiver"] + "." + selected["name"] + "(" + ", ".join(args) + ")"
 
 
