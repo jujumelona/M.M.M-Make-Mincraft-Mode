@@ -95,7 +95,7 @@ def test_native_write_forces_source_owned_even_when_read_hook_exists():
 
 
 def test_exact_checked_world_mutation_is_emitted_with_host_receipt():
-    router = Router([{"action": "complete"}, {"verified_call_id": "v1"}])
+    router = Router([{"verified_call_id": "v1"}])
     output = author_callback_body(
         router, verified_messages(), data_name="native",
         frame=verified_frame(), effect_receipt=True,
@@ -121,7 +121,6 @@ def test_no_checked_owner_fails_before_any_small_model_output():
 
 def test_no_semantically_valid_checked_effect_fails_instead_of_substituting():
     router = Router([
-        {"action": "complete"}, {"verified_call_id": "unavailable"},
         {"verified_call_id": "unavailable"},
     ])
     with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
@@ -168,7 +167,6 @@ def test_native_mutator_with_float_argument_is_not_lost_by_callback_binding():
         }],
     })}]
     router = Router([
-        {"action": "complete"},
         {"verified_call_id": "m0"},
         {"expression": "6.0f"},
     ])
@@ -179,9 +177,9 @@ def test_native_mutator_with_float_argument_is_not_lost_by_callback_binding():
     assert "target.setHealth(6.0f);" in source
     assert source.index("target.setHealth(6.0f);") < source.index(
         "return __mmmHostEffectApplied;")
-    selection = router.calls[1][1]
+    selection = router.calls[0][1]
     assert selection["inspected_calls"][0]["signature"] == "example.Target#setHealth(float)"
-    scalar = router.calls[2][1]
+    scalar = router.calls[1][1]
     assert scalar["required_java_type"] == "float"
     assert scalar["required_native_state"] == "Player health"
 
@@ -260,7 +258,7 @@ def test_unrelated_checked_callable_cannot_claim_native_effect():
         member for member in payload["callback_input_api"][0]["members"]
         if member["name"] != "setHealth"
     ]
-    router = Router([{"action": "complete"}])
+    router = Router([])
     with pytest.raises(ValueError, match="CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED"):
         author_callback_body(
             router, [{"role": "user", "content": json.dumps(payload)}],
