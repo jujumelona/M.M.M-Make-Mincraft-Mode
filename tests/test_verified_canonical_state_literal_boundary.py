@@ -121,6 +121,9 @@ def test_verified_numeric_state_addition_uses_checked_read_modify_write():
     frame["host_state_access"][0]["methods"] = [{
         "name": "writeState_credits",
         "signature": "public static void writeState_credits(long value);",
+    }, {
+        "name": "readState_credits",
+        "signature": "public static long readState_credits();",
     }]
     router = Router([{"value": 5, "operator": "add"}])
     source = author_callback_body(
@@ -142,6 +145,9 @@ def test_checked_typed_state_transition_blocks_noop_delta():
     frame["host_state_access"][0]["methods"] = [{
         "name": "writeState_credits",
         "signature": "public static void writeState_credits(long value);",
+    }, {
+        "name": "readState_credits",
+        "signature": "public static long readState_credits();",
     }]
     router = Router([{"value": 0, "operator": "add"},
                      {"value": 0, "operator": "add"}])
