@@ -353,3 +353,22 @@ def test_typed_ui_publication_rolls_back_post_replace_errors(tmp_path, monkeypat
     assert manifest.read_text() == original
     assert all(not (tmp_path / name).exists() for name in planned["files"])
     assert not list((tmp_path / ".mmm/typed-ui-producers").glob("*.json"))
+
+
+def test_duplicate_launcher_entrypoint_does_not_prove_single_original_action(tmp_path):
+    from minecraft_mod_ai.source_owned_ui_event import (
+        materialize_typed_ui_occurrence, read_verified_typed_ui_events)
+    planned = _plan()
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"id": "allocation", "entrypoints": {
+        "main": [], "client": []}}))
+    materialize_typed_ui_occurrence(planned, project_root=tmp_path, symbols=SYMBOLS)
+    metadata = json.loads(manifest.read_text())
+    main_owner = planned["entrypoints"]["main"]
+    metadata["entrypoints"]["main"].append(main_owner)
+    manifest.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="UI_OCCURRENCE_STARTUP_DUPLICATE"):
+        read_verified_typed_ui_events(
+            project_root=tmp_path, symbols=SYMBOLS, behaviors=[BEHAVIOR],
+            package="example.generated")
