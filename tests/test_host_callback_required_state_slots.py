@@ -174,7 +174,7 @@ def test_real_prerequisite_header_without_method_body_is_accepted():
 def test_player_scoped_write_uses_callback_uuid_not_global_state():
     frame = effect_frame()
     frame["prefix"] = (
-        "private boolean apply(net.minecraft.server.network.ServerPlayerEntity player) {\\n"
+        "private boolean apply(net.minecraft.server.network.ServerPlayerEntity player) {\n"
     )
     frame["host_state_access"][0]["state_scopes"] = {"credits": "player"}
     router = Router([
@@ -205,7 +205,7 @@ def test_player_scoped_write_fails_before_model_if_event_has_no_player():
 def test_player_scoped_write_supports_mojang_named_player_api():
     frame = effect_frame()
     frame["prefix"] = (
-        "private boolean apply(net.minecraft.server.level.ServerPlayer owner) {\\n"
+        "private boolean apply(net.minecraft.server.level.ServerPlayer owner) {\n"
     )
     frame["host_state_access"][0]["state_scopes"] = {"credits": "player"}
     router = Router([
