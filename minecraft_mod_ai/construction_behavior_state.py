@@ -398,7 +398,7 @@ def reconcile_behavior_state(router, plan):
 
     from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
     checkpoint = BehaviorPlanningCheckpoint(scope, router)
-    identity = _digest({"schema": "mmm/behavior-state-bindings-v5",
+    identity = _digest({"schema": "mmm/behavior-state-bindings-v6",
                         "variables": variables, "behaviors": behaviors})
     path = (checkpoint.root / "state-bindings" / (identity + ".json")
             if checkpoint.enabled else None)
