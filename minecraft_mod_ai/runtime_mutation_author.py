@@ -123,7 +123,10 @@ def _state_owner_receiver_admissible(state_name, item, frame):
             return False
         origin_type = params.get(match.group(1), "")
         if match.group(2) == "getWeaponItem":
-            return origin_type == "net.minecraft.world.damagesource.DamageSource"
+            # DamageSource#getWeaponItem is nullable for non-weapon damage.
+            # This generated statement has no non-null guard, so a causal
+            # relation alone is insufficient to make direct mutation safe.
+            return False
         return origin_type.startswith("net.minecraft.") and origin_type.endswith((
             ".Player", ".ServerPlayer", ".PlayerEntity",
             ".ServerPlayerEntity", ".LivingEntity",
