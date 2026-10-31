@@ -491,6 +491,11 @@ def read_verified_custom_event_receipts(
             continue
         if behavior_id in checked:
             raise ValueError("SOURCE_SITE_RECEIPT_DUPLICATE_BEHAVIOR")
+        fingerprint = hashlib.sha256((
+            behavior_id + chr(0) + data["source_site_ref"] + chr(0) + data["at"]
+        ).encode()).hexdigest()[:16]
+        if receipt_path.name != fingerprint + ".json":
+            raise ValueError("SOURCE_SITE_RECEIPT_ID_MISMATCH")
         expected = plan_verified_custom_event(
             symbols=symbols, source_site_ref=data["source_site_ref"],
             behavior_id=behavior_id, package=package,
