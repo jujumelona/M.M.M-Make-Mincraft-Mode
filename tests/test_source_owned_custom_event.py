@@ -530,3 +530,21 @@ def test_symlinked_receipt_folder_never_proves_or_mutates_source_ownership(tmp_p
             behavior_ids=["buy_module"], package="example.generated")
     with pytest.raises(ValueError, match="SOURCE_SITE_PATH_UNSAFE"):
         materialize_verified_custom_event(**options)
+
+
+def test_duplicate_mixin_manifest_entries_do_not_count_as_one_verified_hook(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    produced = materialize_verified_custom_event(
+        project_root=tmp_path, symbols=SYMBOLS,
+        source_site_ref="opaqueMethod", behavior_id="buy_module",
+        package="example.generated")
+    metadata = json.loads(manifest.read_text())
+    metadata["mixins"].append(produced["mixin_config"])
+    manifest.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="SOURCE_SITE_MIXIN_REGISTRATION_DUPLICATE"):
+        read_verified_custom_event_receipts(
+            project_root=tmp_path, symbols=SYMBOLS,
+            behavior_ids=["buy_module"], package="example.generated")
