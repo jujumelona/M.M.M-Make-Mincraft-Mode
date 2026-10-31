@@ -106,6 +106,28 @@ def _state_owner_receiver_admissible(state_name, item, frame):
     getLastHurtByPlayer(). Those are live Java receivers but not proof
     of WHICH player's state the behavior is allowed to mutate.
     """
+    # A verified ItemStack setter alone does not tell us which weapon it
+    # belongs to. Only the callback's own item, a causal damage-source weapon,
+    # or equipment on its player/living-entity input may receive wear.
+    if "minecraft:item_durability_as_damage" in (
+            item.get("native_state_traits") or ()):
+        from .host_verified_callback_ops import _callback_parameters
+        params = dict((name, typ) for typ, name in _callback_parameters(frame))
+        receiver = str(item.get("receiver") or "")
+        if receiver in params:
+            return params[receiver] == "net.minecraft.world.item.ItemStack"
+        match = re.fullmatch(
+            r"([A-Za-z_$][A-Za-z0-9_$]*)\."
+            r"(getMainHandItem|getOffhandItem|getWeaponItem)\(\\)", receiver)
+        if not match:
+            return False
+        origin_type = params.get(match.group(1), "")
+        if match.group(2) == "getWeaponItem":
+            return origin_type == "net.minecraft.world.damagesource.DamageSource"
+        return origin_type.startswith("net.minecraft.") and origin_type.endswith((
+            ".Player", ".ServerPlayer", ".PlayerEntity",
+            ".ServerPlayerEntity", ".LivingEntity",
+        ))
     words = set(re.findall(r"[a-z]+", re.sub(
         r"(?<=[a-z0-9])(?=[A-Z])", " ", state_name).casefold()))
     if "player" not in words:
