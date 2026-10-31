@@ -262,10 +262,10 @@ def test_argument_choices_are_bound_after_method_selection(value_count, argument
                                                      for i in range(value_count)]]
     task = {"verified_event_callback": {"parameters": [t for t, _ in parameters]},
             "callback_input_api": [{"verified_class": "example.Target", "members": [{
-                "kind": "METHOD", "name": "apply", "static": False, "return_type": "void",
+                "kind": "METHOD", "name": "setInventory", "static": False, "return_type": "void",
                 "parameters": ["example.Value"] * arguments,
             }]}]}
-    frame = _frame(("Inventory mutation",))
+    frame = _frame(("player.inventory",))
     frame["prefix"] = "private boolean run(" + ", ".join(t + " " + n for t, n in parameters) + ") {\n"
     candidates = verified_runtime_mutation_candidates([], frame, api_task=task)
     assert len(candidates) == 1
@@ -273,7 +273,7 @@ def test_argument_choices_are_bound_after_method_selection(value_count, argument
 
     class ArgumentRouter(SelectingRouter):
         def __init__(self):
-            super().__init__("apply")
+            super().__init__("setInventory")
             self.argument_pages = []
 
         def generate_structured_data(self, role, messages, *, data_name, parameters):
@@ -290,7 +290,7 @@ def test_argument_choices_are_bound_after_method_selection(value_count, argument
     router = ArgumentRouter()
     source = author_callback_body(router, [{"role": "user", "content": json.dumps(task)}],
                                    data_name="factored", frame=frame, effect_receipt=True)
-    assert "target.apply(" + ", ".join(wanted) + ");" in source
+    assert "target.setInventory(" + ", ".join(wanted) + ");" in source
     assert all(len(page["verified_arguments"]) <= 32 for page in router.argument_pages)
     assert len(router.argument_pages) == (4 if value_count == 4 else 2)
     method_arguments = router.pages[0]["inspected_calls"][0]["typed_arguments"]
