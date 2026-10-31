@@ -197,3 +197,37 @@ def test_source_owned_explicit_death_occurrence_preserved():
          "effects": "Give a reward"}
     assert choose_source_hook(
         HookPicker(killed["event_id"]), b, [killed]) == killed
+
+
+
+def test_after_damage_hook_is_not_a_general_encounter_activation():
+    after_damage = _real_hook(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents",
+        "AFTER_DAMAGE")
+    attack = _real_hook(
+        "net.fabricmc.fabric.api.event.player.AttackEntityCallback",
+        "EVENT", params=["net.minecraft.world.entity.player.Player"])
+
+    class Picker(HookPicker):
+        pass
+
+    chosen = choose_source_hook(
+        Picker(attack["event_id"]), {
+            "behavior_id": "encounter",
+            "trigger": "A hostile entity approaches and starts combat",
+            "effects": "Fight the enemy",
+        }, [after_damage, attack])
+    assert chosen == attack
+
+
+def test_after_damage_hook_stays_legal_for_post_damage_consequence():
+    after_damage = _real_hook(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents",
+        "AFTER_DAMAGE")
+    behavior = {
+        "behavior_id": "on_damage",
+        "trigger": "After being damaged, apply a custom consequence",
+        "effects": "Record the hit",
+    }
+    assert choose_source_hook(
+        HookPicker(after_damage["event_id"]), behavior, [after_damage]) == after_damage
