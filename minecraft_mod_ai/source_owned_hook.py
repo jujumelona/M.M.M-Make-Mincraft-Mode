@@ -36,7 +36,8 @@ def _event_candidates_for_occurrence(behavior, candidates):
 
     candidates = [row for row in candidates if _occurrence_admissible(behavior, row)]
     mined = _verified_block_mining_occurrence(behavior, candidates)
-    if mined is not None:
+    if mined is not None and not (
+            behavior.get("event_binding") or behavior.get("event_interface")):
         return [mined]
     trigger = str(behavior.get("trigger") or "").casefold()
     transition = bool(re.search(
