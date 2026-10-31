@@ -111,8 +111,11 @@ def test_saved_heuristic_world_owner_reopened_and_canonicalized():
         "semantic_status": "host_native_runtime_owner",
     }}
     before = old.to_dict()
-    recovered = reconcile_behavior_state(
-        BindingRouter(new_state_decisions()), old)
+    decisions = [row for row in new_state_decisions() if "owner" not in row]
+    router = BindingRouter(decisions)
+    recovered = reconcile_behavior_state(router, old)
+    assert all(call[1]["properties"].keys() != {"owner"} for call in router.calls)
+    assert recovered.structured_sections["state_model"]["specification"]["variables"][-1]["owner"] == "player"
     assert old.to_dict() == before
     fixed = recovered.request_scope["behavior_requirements"][0]
     assert fixed.get("runtime_state_reads") == []
