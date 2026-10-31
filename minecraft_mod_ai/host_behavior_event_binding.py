@@ -47,6 +47,40 @@ def _occurrence_admissible(behavior, event):
     return False
 
 
+_BLOCK_BREAK_OWNER = "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents"
+_BLOCK_MINING_TRIGGER = re.compile(
+    r"\b(?:mine|mines|mined|mining|harvest(?:s|ed|ing)?\s+(?:a\s+|the\s+)?block|"
+    r"break(?:s|ing|ing)?\s+(?:a\s+|the\s+)?block|"
+    r"dig(?:s|ging)?\s+(?:a\s+|the\s+)?block)\b"
+    r"|채굴|블록\s*파괴",
+    re.IGNORECASE,
+)
+_NEGATED_BLOCK_MINING = re.compile(
+    r"\b(?:not|never|without)\s+(?:\w+\s+){0,2}"
+    r"(?:mine|mines|mined|mining|harvest|break|dig)\b",
+    re.IGNORECASE,
+)
+
+
+def _verified_block_mining_occurrence(behavior, candidates):
+    """Use a known Fabric occurrence rather than a model-chosen nearby event.
+
+    Only the exact inspected AFTER hook is eligible. It fires after a player
+    has actually broken a block, unlike PickItemFromBlock (creative selection),
+    USE_ON, item clicks or ticks. This is a general event-kind adapter;
+    it does not choose a block, resource, payout, world state or game logic.
+    Other/ambiguous triggers still use ordinary verified event selection.
+    """
+    trigger = str(behavior.get("trigger") or "")
+    if (not _BLOCK_MINING_TRIGGER.search(trigger)
+            or _NEGATED_BLOCK_MINING.search(trigger)):
+        return None
+    matches = [row for row in candidates
+               if row.get("event_owner") == _BLOCK_BREAK_OWNER
+               and row.get("event_field") == "AFTER"]
+    return matches[0] if len(matches) == 1 else None
+
+
 class HostEventBindingError(ValueError):
     def __init__(self, behavior, response):
         self.failed_response = json.dumps(response, ensure_ascii=False, default=str)
@@ -76,6 +110,12 @@ _INSTRUCTION = (
 def select_behavior_callback(router, behavior, candidates):
     candidates = [row for row in candidates
                   if _occurrence_admissible(behavior, row)]
+    # Do not let the model replace a known block-break occurrence with
+    # middle-click pick-block, an unrelated item callback or an idle tick.
+    # The event still needs a host-compiled predicate and gameplay effects.
+    mined = _verified_block_mining_occurrence(behavior, candidates)
+    if mined is not None and not behavior.get("event_binding"):
+        return mined
     by_event = {row["event_id"]: row for row in candidates}
     if not by_event:
         raise HostEventBindingError(behavior, {
