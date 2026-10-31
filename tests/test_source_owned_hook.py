@@ -136,3 +136,66 @@ def test_explicit_world_transition_cannot_bind_unrelated_damage_abi():
     }
     with pytest.raises(SourceHookUnavailable, match="explicit_hook_cannot_observe_original_occurrence"):
         choose_source_hook(HookPicker("real#AFTER_DAMAGE"), behavior, [bad])
+
+
+
+def _real_hook(owner, field, *, params=()):
+    return {
+        "event_id": owner + "#" + field,
+        "event_owner": owner, "event_field": field,
+        "event_interface": owner + ".Listener", "method": "invoke",
+        "parameters": list(params), "return_type": "void",
+    }
+
+
+def test_source_owned_production_never_chooses_post_kill_for_ongoing_combat():
+    killed = _real_hook(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents",
+        "AFTER_KILLED_OTHER_ENTITY")
+    attacked = _real_hook(
+        "net.fabricmc.fabric.api.event.player.AttackEntityCallback",
+        "EVENT", params=["net.minecraft.world.entity.player.Player"])
+    behavior = {
+        "behavior_id": "combat",
+        "source_quote": "외계인과 싸움",
+        "intent": "Fight aliens in space",
+        "trigger": "Alien encounter in space",
+        "effects": "Combat with aliens",
+        "runtime_state_writes": ["Combat damage", "Player health", "Weapon durability"],
+    }
+    picker = HookPicker(attacked["event_id"])
+    assert choose_source_hook(picker, behavior, [killed, attacked]) == attacked
+    offered = picker.calls[0][2]["properties"]["event_id"]["enum"]
+    assert killed["event_id"] not in offered
+    assert attacked["event_id"] in offered
+    with pytest.raises(Exception):
+        choose_source_hook(HookPicker(killed["event_id"]), behavior, [killed, attacked])
+
+
+def test_source_owned_mining_requires_real_block_break_not_middle_click():
+    mined = _real_hook(
+        "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents", "AFTER")
+    picked = _real_hook(
+        "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents", "BLOCK")
+    b = {
+        "behavior_id": "mining",
+        "trigger": "Player mines ore to gather materials",
+        "intent": "Gather resources",
+        "effects": "Add collected minerals",
+    }
+    picker = HookPicker(mined["event_id"])
+    assert choose_source_hook(picker, b, [picked, mined]) == mined
+    assert picker.calls[0][2]["properties"]["event_id"]["enum"] == [
+        mined["event_id"], "SOURCE_REQUIRED",
+    ]
+
+
+def test_source_owned_explicit_death_occurrence_preserved():
+    killed = _real_hook(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents",
+        "AFTER_KILLED_OTHER_ENTITY")
+    b = {"behavior_id": "kill_reward",
+         "trigger": "After an alien is killed",
+         "effects": "Give a reward"}
+    assert choose_source_hook(
+        HookPicker(killed["event_id"]), b, [killed]) == killed
