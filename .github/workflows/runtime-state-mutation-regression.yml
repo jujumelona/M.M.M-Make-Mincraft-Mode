@@ -51,7 +51,7 @@ jobs:
           python -m py_compile minecraft_mod_ai/construction_behavior_state.py minecraft_mod_ai/host_typed_state_access.py minecraft_mod_ai/host_typed_state_values.py minecraft_mod_ai/host_callback_body.py minecraft_mod_ai/runtime_mutation_author.py tests/test_native_runtime_state_ownership.py tests/test_runtime_mutation_end_to_end_contract.py tests/test_verified_canonical_state_literal_boundary.py tests/test_host_typed_state_access.py
       - name: Validate state ownership and native execution invariants
         run: |
-          python -m pytest -q --maxfail=1 \
+          python -m pytest -q \
             tests/test_construction_behavior_state.py \
             tests/test_native_runtime_state_ownership.py \
             tests/test_runtime_mutation_end_to_end_contract.py \
