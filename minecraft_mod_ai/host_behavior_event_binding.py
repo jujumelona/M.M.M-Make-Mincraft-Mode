@@ -18,8 +18,14 @@ import re
 _PICK_ITEM_OWNER = "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents"
 _PICK_BLOCK_ACTION = re.compile(
     r"\b(?:pick[- ]block|pick[- ]item[- ]from[- ]block|clone[- ]block|"
-    r"middle[- ]click(?:ing|ed)?\s+(?:on\s+)?(?:a\s+|the\s+)?block)\b"
+    r"middle[- ]click(?:s|ing|ed)?\s+(?:on\s+)?(?:a\s+|the\s+)?block)\b"
     r"|블록\s*선택",
+    re.IGNORECASE,
+)
+_PICK_ENTITY_ACTION = re.compile(
+    r"\b(?:pick[- ]entity|clone[- ]entity|"
+    r"middle[- ]click(?:s|ing|ed)?\s+(?:on\s+)?(?:an?\s+|the\s+)?entity)\b"
+    r"|개체\s*선택",
     re.IGNORECASE,
 )
 
@@ -33,7 +39,12 @@ def _occurrence_admissible(behavior, event):
     # noun in a mining/gathering, UI or resource-farming requirement.
     requested = " ".join(str(behavior.get(k) or "") for k in (
         "trigger", "intent", "effects", "source_quote"))
-    return bool(_PICK_BLOCK_ACTION.search(requested))
+    field = str(event.get("event_field") or "").upper()
+    if field == "BLOCK":
+        return bool(_PICK_BLOCK_ACTION.search(requested))
+    if field == "ENTITY":
+        return bool(_PICK_ENTITY_ACTION.search(requested))
+    return False
 
 
 class HostEventBindingError(ValueError):
