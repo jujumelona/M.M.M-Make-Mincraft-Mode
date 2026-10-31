@@ -1,0 +1,62 @@
+name: Runtime state ownership and mutation regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/construction_behavior_state.py'
+      - 'minecraft_mod_ai/host_typed_state_access.py'
+      - 'minecraft_mod_ai/host_typed_state_values.py'
+      - 'minecraft_mod_ai/host_callback_body.py'
+      - 'minecraft_mod_ai/runtime_mutation_author.py'
+      - 'minecraft_mod_ai/structured_state_runtime.py'
+      - 'minecraft_mod_ai/host_runtime_mutation_catalog.py'
+      - 'minecraft_mod_ai/host_verified_callback_ops.py'
+      - 'tests/test_construction_behavior_state.py'
+      - 'tests/test_native_runtime_state_ownership.py'
+      - 'tests/test_runtime_mutation_end_to_end_contract.py'
+      - 'tests/test_host_callback_required_state_slots.py'
+      - 'tests/test_verified_canonical_state_literal_boundary.py'
+      - 'tests/test_host_typed_state_access.py'
+      - 'tests/test_typed_state_context.py'
+      - 'tests/test_behavior_state_store_rebinding.py'
+      - '.github/workflows/runtime-state-mutation-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  state-mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install dev dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Compile affected modules and tests
+        run: |
+          python -m py_compile minecraft_mod_ai/construction_behavior_state.py minecraft_mod_ai/host_typed_state_access.py minecraft_mod_ai/host_typed_state_values.py minecraft_mod_ai/host_callback_body.py minecraft_mod_ai/runtime_mutation_author.py tests/test_native_runtime_state_ownership.py tests/test_runtime_mutation_end_to_end_contract.py tests/test_verified_canonical_state_literal_boundary.py tests/test_host_typed_state_access.py
+      - name: Validate state ownership and native execution invariants
+        run: |
+          python -m pytest -q --maxfail=1 \
+            tests/test_construction_behavior_state.py \
+            tests/test_native_runtime_state_ownership.py \
+            tests/test_runtime_mutation_end_to_end_contract.py \
+            tests/test_host_callback_required_state_slots.py \
+            tests/test_verified_canonical_state_literal_boundary.py \
+            tests/test_host_typed_state_access.py \
+            tests/test_typed_state_context.py \
+            tests/test_behavior_state_store_rebinding.py \
+            tests/test_native_callback_catalog.py \
+            tests/test_host_callback_runtime.py \
+            tests/test_host_callback_body.py \
+            tests/test_host_callback_repair.py \
+            tests/test_state_provenance_contract.py
