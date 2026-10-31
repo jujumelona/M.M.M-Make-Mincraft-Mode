@@ -326,3 +326,46 @@ def test_player_native_health_mutator_must_bind_to_event_player():
     assert not _state_owner_receiver_admissible("Player health", {
         **direct, "receiver": "level",
     }, frame)
+
+
+
+def test_runtime_mutation_author_rejects_damage_log_and_arbitrary_player():
+    from minecraft_mod_ai.runtime_mutation_author import author_runtime_mutation_calls
+
+    frame = {
+        "prefix": (
+            "private boolean apply(net.minecraft.server.level.ServerLevel serverLevel, "
+            "net.minecraft.world.entity.LivingEntity victim) {\n"),
+        "suffix": "\n}",
+        "host_behavior_contract": {"behavior_id": "combat"},
+    }
+    telemetry = [{
+        "id": "m0",
+        "name": "recordDamage",
+        "receiver": "victim.getCombatTracker()",
+        "signature": "net.minecraft.world.damagesource.CombatTracker#recordDamage(float)",
+        "arguments": [{"type": "float", "expression": None}],
+    }]
+    with pytest.raises(ValueError, match="CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED"):
+        author_runtime_mutation_calls(
+            Router([]), [], data_name="record_only", frame=frame,
+            verified_calls=[], typed_candidates=telemetry,
+            targets=["Combat damage"], statements=[],
+            semantic_statements=[], effect_receipt=True,
+            receipt_name="__mmmHostEffectApplied",
+        )
+    random_player = [{
+        "id": "m0",
+        "name": "setHealth",
+        "receiver": "serverLevel.getRandomPlayer()",
+        "signature": "net.minecraft.server.level.ServerPlayer#setHealth(float)",
+        "arguments": [{"type": "float", "expression": None}],
+    }]
+    with pytest.raises(ValueError, match="CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED"):
+        author_runtime_mutation_calls(
+            Router([]), [], data_name="unowned_player", frame=frame,
+            verified_calls=[], typed_candidates=random_player,
+            targets=["Player health"], statements=[],
+            semantic_statements=[], effect_receipt=True,
+            receipt_name="__mmmHostEffectApplied",
+        )
