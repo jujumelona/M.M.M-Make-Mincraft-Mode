@@ -205,3 +205,34 @@ def test_host_state_contract_reaches_generated_members_lifecycle_and_repair(tmp_
     assert any(name.startswith("repair_") for name in calls)
     if side == "CLIENT":
         assert "submit_java_entrypoint_source" in calls
+
+
+def test_player_state_contract_survives_declared_api_and_blocks_contextless_access():
+    from minecraft_mod_ai.host_typed_state_access import (
+        state_access_contract, state_prompt_api,
+        validate_behavior_state_provenance,
+    )
+    state = render_production_state_java(_state_section(variables=[{
+        "name": "balance", "owner": "player", "type": "long",
+        "unit": "credits", "default": "0", "domain": "nonnegative",
+    }]), package_name="proof")
+    api = java_api_declarations(
+        state, path="src/main/java/proof/AuthoredStateModel.java")
+    contracts = state_access_contract([api])
+    assert contracts[0]["state_scopes"] == {"balance": "player"}
+    filtered, _ = state_prompt_api(
+        [api], {"source": [], "target_api": [], "class_members": [],
+                "typed_input_producers": []}, contracts)
+    headers = " ".join(filtered[0]["types"][0]["members"])
+    assert "mmmPlayerScoped_balance" not in headers
+    assert "writeState_balance(long value)" not in headers
+    assert "writeState_balance(long value, java.util.Map<String, Object> context)" in headers
+    behavior = {"behavior_id": "credit", "state_reads": [], "state_writes": ["balance"]}
+    with pytest.raises(ValueError, match="JAVA_PLAYER_STATE_CONTEXT_REQUIRED"):
+        validate_behavior_state_provenance(
+            "void run() { proof.AuthoredStateModel.writeState_balance(9L); }",
+            contracts, behavior)
+    validate_behavior_state_provenance(
+        'void run() { proof.AuthoredStateModel.writeState_balance(9L, '
+        'java.util.Map.of("player", "some-id")); }',
+        contracts, behavior)
