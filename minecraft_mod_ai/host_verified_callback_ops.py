@@ -273,6 +273,16 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
         receivers = list(inputs.get(owner, ()))
         if not receivers:
             continue
+        # Derive companion getter contracts ONCE per inspected Java owner.
+        # A large 26.x API owner may have hundreds of methods; recomputing
+        # this set for every method would turn catalogue creation quadratic.
+        companion_methods = {
+            (member.get("name"), tuple(member.get("parameters") or ()),
+             member.get("return_type"))
+            for member in record.get("members", ())
+            if isinstance(member, dict) and member.get("kind") == "METHOD"
+            and not member.get("static")
+        }
         for row in record.get("members", ()):
             if (not isinstance(row, dict) or row.get("kind") != "METHOD"
                     or row.get("static") or int(row.get("access", 0)) & 8
@@ -299,12 +309,6 @@ def verified_runtime_mutation_candidates(messages, frame, *, api_task=None):
             # as the ItemStack's damage value. Recognize that relation only
             # when the actual indexed class exposes a complete getter/setter
             # ABI. A mere similarly named method is not proof.
-            companion_methods = {
-                (m.get("name"), tuple(m.get("parameters") or ()), m.get("return_type"))
-                for m in record.get("members", ())
-                if isinstance(m, dict) and m.get("kind") == "METHOD"
-                and not m.get("static")
-            }
             damageable_trait = (
                 owner == "net.minecraft.world.item.ItemStack"
                 and name == "setDamageValue"
