@@ -433,3 +433,37 @@ def test_rule_ir_checkpoint_roundtrip_rejects_structural_corruption(tmp_path):
     _save_checkpoint(location, "test", {"rule_ir_json": '{"rules":[]}'})
     with pytest.raises(ValueError, match="RULE_IR_CHECKPOINT_PROOF_INVALID"):
         read_rule_ir_proof(location, "test")
+
+
+def test_rejected_rule_candidate_replays_original_ir_not_a_java_only_success():
+    import hashlib
+    from minecraft_mod_ai.incremental_java_pipeline import candidate_data, load_candidate
+    source = "package example; public class Bridge {}"
+    identity = hashlib.sha256(("example.Bridge" + "\0" + source).encode()).hexdigest()
+    proof = {
+        "schema": "mmm/host-observation-rules-v1", "owner": "example.Bridge",
+        "rules": [{"observation": "original world event"}],
+        "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "target_compilation_verified": False, "runtime_verified": False,
+    }
+    record = {
+        "identity": identity,
+        "path": ".mmm/construction_rule_ir/" + identity + ".json",
+        "proof": proof,
+    }
+    pending = candidate_data(source, "java compilation failed", {
+        "strategy": "host_rule_template", "rule_ir_records": [record],
+    })
+    restored = {}
+    assert load_candidate(pending, restored, True) == pending
+    assert restored["rule_ir_records"] == [record]
+    assert restored["strategy"] == "host_rule_template"
+    legacy = dict(pending)
+    legacy.pop("rule_ir_records_json")
+    assert load_candidate(legacy, {}, True) == {}
+    forged = dict(pending)
+    forged["rule_ir_records_json"] = json.dumps([{
+        **record, "proof": {**proof, "source_sha256": "0" * 64},
+    }])
+    with pytest.raises(ValueError, match="JAVA_HOST_RULE_IR_CANDIDATE_INVALID"):
+        load_candidate(forged, {}, True)
