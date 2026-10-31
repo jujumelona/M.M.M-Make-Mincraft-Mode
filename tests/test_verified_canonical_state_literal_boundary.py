@@ -143,7 +143,8 @@ def test_checked_typed_state_transition_blocks_noop_delta():
         "name": "writeState_credits",
         "signature": "public static void writeState_credits(long value);",
     }]
-    router = Router([{"value": 0, "operator": "add"}])
+    router = Router([{"value": 0, "operator": "add"},
+                     {"value": 0, "operator": "add"}])
     with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
         author_callback_body(
             router, _verified_source(), data_name="zero_delta",
