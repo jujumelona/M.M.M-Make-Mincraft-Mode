@@ -325,7 +325,8 @@ def validate_behavior_state_provenance(source: str, contracts, behavior) -> None
                     if contract.get("owner") in owner_names
                     and (contract.get("state_scopes") or {}).get(state_name)
                 ), None)
-                if scope == "player" and called.startswith(("readState_", "writeState_")):
+                if (owner in owner_names and scope == "player"
+                        and called.startswith(("readState_", "writeState_"))):
                     argument_node = node.child_by_field_name("arguments")
                     arity = len(argument_node.named_children) if argument_node is not None else 0
                     minimum = 1 if called.startswith("readState_") else 2
