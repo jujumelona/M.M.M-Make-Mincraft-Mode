@@ -121,19 +121,21 @@ def test_first_pass_keeps_scalar_mutator_from_actual_full_symbol_index(tmp_path)
 
 
 def test_native_selection_searches_past_old_candidate_and_page_cutoffs():
-    # No lexical match to the obligation: relevance cannot establish absence.
-    methods = [{"kind": "METHOD", "name": f"applyNoise{i:03d}", "static": False,
+    # Every candidate names the health property, but the exact mutator is
+    # intentionally beyond several model pages. Unrelated apply()/zeta()
+    # methods cannot certify a Player health transition.
+    methods = [{"kind": "METHOD", "name": f"setHealthVariant{i:03d}", "static": False,
                 "parameters": ["float"], "return_type": "void"} for i in range(90)]
-    methods.append({"kind": "METHOD", "name": "zeta", "static": False,
+    methods.append({"kind": "METHOD", "name": "setHealth", "static": False,
                     "parameters": ["float"], "return_type": "void"})
     message = [{"role": "user", "content": json.dumps({
         "verified_event_callback": {"parameters": ["example.Target"]},
         "callback_input_api": [{"verified_class": "example.Target", "members": methods}],
     })}]
-    router = SelectingRouter("zeta")
+    router = SelectingRouter("setHealth")
     result = author_callback_body(router, message, data_name="paged", frame=_frame(),
                                   effect_receipt=True)
-    assert "target.zeta(6.0f);" in result
+    assert "target.setHealth(6.0f);" in result
     assert len(router.pages) >= 3
     assert all(len(p["inspected_calls"]) <= 32 for p in router.pages)
 
@@ -146,12 +148,15 @@ def test_one_checked_invocation_can_cover_two_explicit_native_obligations():
             "parameters": ["float"], "return_type": "void",
         }]}],
     })}]
-    frame = _frame(("Combat damage", "Player health"))
+    # Same underlying health property may be referenced by two behavioral
+    # labels; a different field such as damage cannot be satisfied by a
+    # health setter without an explicit semantic bridge.
+    frame = _frame(("player.health", "Player health"))
     result = author_callback_body(SelectingRouter(), message, data_name="shared", frame=frame,
                                   effect_receipt=True)
     assert result.count("target.setHealth(6.0f);") == 1
     assert {r["state_name"] for r in frame["host_runtime_mutation_receipts"]} == {
-        "Combat damage", "Player health"}
+        "player.health", "Player health"}
 
 
 def test_same_mutation_abi_in_independent_handlers_keeps_per_behavior_proof():
