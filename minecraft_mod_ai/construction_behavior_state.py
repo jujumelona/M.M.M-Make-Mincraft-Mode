@@ -51,37 +51,42 @@ _BINDING_KINDS = frozenset({"canonical_state", "new_scalar_state", "world_state"
 
 
 def _runtime_owned_state_reference(reference):
-    """Identify native Minecraft state that MUST stay on its runtime owner.
+    """Conservatively recognize *native fields*, never infer from an ancestor.
 
-    Generic state planners previously created independent boolean/number
-    variables for actual health, combat damage, durability, positions and
-    inventories. Those scalars compile yet cannot change a living entity,
-    item stack or server level. This intentionally conservative classifier
-    covers explicit native owner/field pairs, not mod-defined upgrade levels.
-    Unknown concepts still follow the existing semantic binding protocol.
+    In particular, an inventory is native but an arbitrary property of an
+    inventory is NOT necessarily vanilla: "player.inventory.currency" can be
+    new mod-owned state. Likewise a world is native, but every proposed field
+    below "world.*" is not automatically backed by Minecraft. The old broad
+    word-intersection rules sent such states to a 4,000+ method search even
+    though no relevant native mutation could exist.
+
+    This classifier is only a preliminary guard against cloning known vanilla
+    fields. It is not proof that a mutator exists: callback resolution still
+    requires a checked symbol and a gameplay acceptance test.
     """
-    words = set(_identifier_parts(reference))
-    if not words:
+    parts = _identifier_parts(reference)
+    if not parts:
         return False
-    if "hunger" in words or "durability" in words:
+    words = set(parts)
+    # Interpret the property at the END of a dotted object path. A native
+    # ancestor ("player.inventory" or "world") never confers native ownership
+    # on custom descendants (".currency", ".resource_nodes.depleted").
+    tail = re.split(r"[./:]", str(reference).strip())[-1]
+    field_parts = _identifier_parts(tail)
+    field = field_parts[-1] if field_parts else ""
+    actor = bool({"player", "entity", "alien", "mob", "living"} & words)
+    if actor and field in {"health", "hunger", "durability", "position", "alive"}:
         return True
-    if "position" in words and ({"player", "entity", "world"} & words):
+    if field == "durability" and "weapon" in words:
         return True
-    if "health" in words and ({"player", "alien", "entity", "mob", "living"} & words):
+    if field == "damage" and bool({"combat", "weapon", "player", "entity", "alien"} & words):
         return True
-    if "damage" in words and ({"combat", "weapon", "player", "entity", "alien"} & words):
+    if field == "position" and "world" in words:
         return True
-    if "inventory" in words and ({"player", "entity", "weapon"} & words):
+    if field in {"inventory", "items", "slots"} and bool(
+            {"player", "entity"} & words):
         return True
-    if "mode" in words and "game" in words:
-        return True
-    if "world" in words and ({"current", "active", "resource", "nodes"} & words):
-        return True
-    if "alive" in words and ({"alien", "entity", "mob"} & words):
-        return True
-    if "particles" in words and "combat" in words:
-        return True
-    if "available" in words and "planets" in words:
+    if parts[-2:] == ("game", "mode"):
         return True
     return False
 
@@ -304,6 +309,42 @@ def _migrate_legacy_native_scalars(scope, sections):
     return removed
 
 
+def _reopen_legacy_inferred_runtime_states(scope):
+    """Undo a prior heuristic-only native classification on resume.
+
+    Only records explicitly stamped by the old host classifier are reopened.
+    Model-authored world bindings and genuinely verified runtime ownership
+    are not silently rewritten. Restored obligations must pass through normal
+    canonical state reconciliation rather than disappearing from saved plans.
+    """
+    bindings = scope.get("behavior_state_bindings") or {}
+    if not isinstance(bindings, dict):
+        raise ValueError("BEHAVIOR_STATE_SAVED_BINDINGS_INVALID")
+    reopened = []
+    for reference, binding in list(bindings.items()):
+        if (not isinstance(binding, dict)
+                or binding.get("binding") != "world_state"
+                or binding.get("semantic_status") not in {
+                    "host_native_runtime_owner", "host_migrated_native_runtime_owner"
+                }
+                or _runtime_owned_state_reference(reference)):
+            continue
+        for behavior in scope.get("behavior_requirements", ()):
+            for field, runtime_field in (
+                    ("state_reads", "runtime_state_reads"),
+                    ("state_writes", "runtime_state_writes")):
+                previous = list(behavior.get(runtime_field) or ())
+                if reference in previous:
+                    behavior[runtime_field] = [name for name in previous if name != reference]
+                    behavior[field] = list(dict.fromkeys(
+                        [*(behavior.get(field) or ()), reference]))
+        del bindings[reference]
+        reopened.append(reference)
+    if reopened:
+        scope["behavior_state_bindings"] = bindings
+    return reopened
+
+
 def reconcile_behavior_state(router, plan):
     """Return a resolved plan; never mutate the saved user design in place.
 
@@ -312,6 +353,7 @@ def reconcile_behavior_state(router, plan):
     Every missing concept is resolved once even when many behaviors share it.
     """
     scope = deepcopy(plan.request_scope)
+    _reopen_legacy_inferred_runtime_states(scope)
     behaviors = scope.get("behavior_requirements", [])
     if not behaviors:
         return plan
