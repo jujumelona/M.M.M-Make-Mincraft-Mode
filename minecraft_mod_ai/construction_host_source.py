@@ -147,7 +147,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
     # exists before allowing the source writer to create it.
     direct_feature = bool(spec.get("bindings", {}).get("request_feature_entrypoint"))
     context = {**context, "host_direct_feature_source": direct_feature,
-               "defer_source_publication": True, "pending_source_publications": []}
+               "defer_source_publication": True, "pending_source_publications": [],
+               "defer_rule_ir_persistence": True, "pending_rule_ir": []}
 
     identifier = _digest({
         "schema": "mmm/host-java-compilation-unit-v1",
@@ -344,8 +345,11 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
             with source_publication_transaction(
                 project_root=root, symbols=context.get("symbols") or {},
                 records=incremental_state.get("source_publications") or (),
-                tracked_paths=(checkpoint, proof_path, strategy_path,
-                               _authored_source_path(root, spec["target_path"])),
+                tracked_paths=(
+                    checkpoint, proof_path, strategy_path,
+                    _authored_source_path(root, spec["target_path"]),
+                    *(item[0] for item in context["pending_rule_ir"]),
+                ),
             ):
                 acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
                 budget = acceptance.get("max_compiler_repair_attempts", 2)
@@ -417,6 +421,12 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             verify_native_runtime_mutation_coverage(
                                 source, behavior_rows, mutation_receipts)
                         break
+                # Only compiler-admitted rules may become durable source
+                # observation evidence, and failures in this write participate
+                # in the same rollback as the Java owner and its producers.
+                from .construction_direct_writer import _save_checkpoint as _save_rule_ir
+                for rule_path, rule_identity, rule_proof in context["pending_rule_ir"]:
+                    _save_rule_ir(rule_path, rule_identity, rule_proof)
                 from .construction_coverage import record_authored_source_calls
                 record_authored_source_calls(
                     root, spec["target_path"], source, source_kind="direct")
