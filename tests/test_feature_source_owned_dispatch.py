@@ -79,3 +79,51 @@ def test_unimplemented_runtime_producer_reaches_direct_source_author(
     )
     assert output == "package example; public class Bridge {}"
     assert called == [True]
+
+
+def test_real_llama_coder_stays_host_owned_through_journal_router(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from minecraft_mod_ai.construction_journal import JournaledConstructionRouter
+    from minecraft_mod_ai.incremental_java_pipeline import compose_source
+    from minecraft_mod_ai.incremental_java_author import compose_incremental_feature
+    class LiveCoder:
+        profile = "MiMo-V2.6-9B_6GB"
+        class Registry:
+            def role(self, profile, role):
+                assert role == "coder"
+                return SimpleNamespace(adapter="llama_cpp")
+        registry = Registry()
+    bare = LiveCoder()
+    journal = JournaledConstructionRouter(bare, tmp_path, {
+        "target_path": "src/main/java/example/Bridge.java"},
+        {"target": {"loader": "fabric", "java_version": 25},
+         "prerequisite_hashes": {}, "project_symbols": {}})
+    def forbidden(*args, **kwargs):
+        raise AssertionError("MiMo 9B re-entered the 96-choice incremental AST loop")
+    monkeypatch.setattr(
+        "minecraft_mod_ai.incremental_java_author.compose_incremental_feature",
+        forbidden)
+    seen = []
+    def author(_router, _spec, messages, **kwargs):
+        user = json.loads(messages[0]["content"])
+        assert user["host_source_owned"] is True
+        assert user["host_java_authoring"] is False
+        assert kwargs["construction_context"]["host_source_owned"] is True
+        seen.append(True)
+        return "package example; class Bridge {}"
+    state = {}
+    result = compose_source(
+        journal, {"side": "COMMON"},
+        [{"role": "user", "content": json.dumps({"host_java_authoring": True})}],
+        source_context=(),
+        construction_context={
+            "host_direct_feature_source": True,
+            "incremental_state": state, "symbols": {},
+            "source_owned_work_graph": {},
+        },
+        behaviors=[{"behavior_id": "b", "trigger": "real event",
+                    "effects": "original effect"}],
+        legacy_author=author)
+    assert result == "package example; class Bridge {}"
+    assert state["strategy"] == "host_source_owned"
+    assert seen == [True]
