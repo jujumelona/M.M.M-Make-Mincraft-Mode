@@ -143,7 +143,8 @@ def test_mining_cannot_select_creative_pick_block_hook():
             data = json.loads(messages[-1]["content"])
             # The old model selected pick-item from this global index, even
             # though its occurrence is not a Minecraft mining completion.
-            ids = {item["event_id"] for item in data.get("verified_hook_index", [])}
+            offered = data.get("verified_hook_index", data.get("verified_listeners", []))
+            ids = {item["event_id"] for item in offered}
             assert mined["event_id"] in ids
             assert pick["event_id"] not in ids
             return {"event_binding": mined["event_id"]}
