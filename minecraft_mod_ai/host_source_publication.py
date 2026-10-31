@@ -92,7 +92,6 @@ def source_publication_transaction(*, project_root, symbols, records, tracked_pa
         yield
         return
 
-    from contextlib import nullcontext
     from .project_write_lock import project_write_lock
     from .source_owned_custom_event import (
         _atomic_write, _producer_cross_process_lock, materialize_verified_custom_event,
@@ -100,9 +99,14 @@ def source_publication_transaction(*, project_root, symbols, records, tracked_pa
     from .source_owned_ui_event import materialize_typed_ui_occurrence
 
     root = Path(project_root).resolve()
-    producer_lock = (_producer_cross_process_lock(root / ".mmm/source-producer.lock")
-                     if records else nullcontext())
-    with project_write_lock(root), producer_lock:
+    # All generation transactions update shared authorship/checkpoint files,
+    # including ordinary Java units that do not create Mixin/UI producers.
+    # The project_write_lock is process-local; skipping the OS lock for
+    # records=[] could let another process commit and then be overwritten
+    # by an older failed generation's rollback.
+    with project_write_lock(root), _producer_cross_process_lock(
+        root / ".mmm/source-producer.lock"
+    ):
         paths = sorted(
             (set(_publication_paths(root, symbols, records)) if records else set())
             | {_safe_path(root, path) for path in tracked_paths}
