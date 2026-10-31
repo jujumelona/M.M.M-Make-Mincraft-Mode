@@ -169,3 +169,51 @@ def test_real_prerequisite_header_without_method_body_is_accepted():
     slots = _required_state_write_slots(frame)
     assert slots["credits"]["value_type"] == "long"
     assert slots["credits"]["signature"].endswith("(long value);")
+
+
+def test_player_scoped_write_uses_callback_uuid_not_global_state():
+    frame = effect_frame()
+    frame["prefix"] = (
+        "private boolean apply(net.minecraft.server.network.ServerPlayerEntity player) {\\n"
+    )
+    frame["host_state_access"][0]["state_scopes"] = {"credits": "player"}
+    router = Router([
+        {"action": "complete"},
+        {"expression": "19L"},
+    ])
+    source = author_callback_body(
+        router, [], data_name="player_purchase", frame=frame,
+        effect_receipt=True,
+    )
+    assert ('example.AuthoredStateModel.writeState_credits('
+            '19L, java.util.Map.of("player", player.getUuid()));') in source
+    assert 'example.AuthoredStateModel.writeState_credits(19L);' not in source
+
+
+def test_player_scoped_write_fails_before_model_if_event_has_no_player():
+    frame = effect_frame()
+    frame["host_state_access"][0]["state_scopes"] = {"credits": "player"}
+    router = Router([])
+    with pytest.raises(ValueError, match="CALLBACK_PLAYER_STATE_OWNER_UNRESOLVED"):
+        author_callback_body(
+            router, [], data_name="missing_player", frame=frame,
+            effect_receipt=True,
+        )
+    assert router.calls == []
+
+
+def test_player_scoped_write_supports_mojang_named_player_api():
+    frame = effect_frame()
+    frame["prefix"] = (
+        "private boolean apply(net.minecraft.server.level.ServerPlayer owner) {\\n"
+    )
+    frame["host_state_access"][0]["state_scopes"] = {"credits": "player"}
+    router = Router([
+        {"action": "complete"},
+        {"expression": "19L"},
+    ])
+    source = author_callback_body(
+        router, [], data_name="mojang_player", frame=frame,
+        effect_receipt=True,
+    )
+    assert 'java.util.Map.of("player", owner.getUUID())' in source
