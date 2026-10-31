@@ -8,6 +8,32 @@ from __future__ import annotations
 
 from collections import defaultdict
 import json
+import re
+
+
+# These are *intrinsic* occurrence semantics of a verified Fabric hook.
+# Creative pick-block (middle-click / clone-block) is not block mining,
+# item collection, or a completed block-break occurrence. A model may not
+# turn a verified but wrong listener into proof of the requested trigger.
+_PICK_ITEM_OWNER = "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents"
+_PICK_BLOCK_ACTION = re.compile(
+    r"\\b(?:pick[- ]block|pick[- ]item[- ]from[- ]block|clone[- ]block|"
+    r"middle[- ]click(?:ing|ed)?\\s+(?:on\\s+)?(?:a\\s+|the\\s+)?block)\\b"
+    r"|블록\\s*선택",
+    re.IGNORECASE,
+)
+
+
+def _occurrence_admissible(behavior, event):
+    owner = str(event.get("event_owner") or "")
+    if owner != _PICK_ITEM_OWNER:
+        return True
+    # Pick-item event only fires when the pick-block control is used. This
+    # must be an actual requested occurrence, not merely a block-related
+    # noun in a mining/gathering, UI or resource-farming requirement.
+    requested = " ".join(str(behavior.get(k) or "") for k in (
+        "trigger", "intent", "effects", "source_quote"))
+    return bool(_PICK_BLOCK_ACTION.search(requested))
 
 
 class HostEventBindingError(ValueError):
@@ -37,7 +63,14 @@ _INSTRUCTION = (
 
 
 def select_behavior_callback(router, behavior, candidates):
+    candidates = [row for row in candidates
+                  if _occurrence_admissible(behavior, row)]
     by_event = {row["event_id"]: row for row in candidates}
+    if not by_event:
+        raise HostEventBindingError(behavior, {
+            "event_binding": "UNBOUND",
+            "reason": "no_intrinsically_compatible_verified_occurrence",
+        })
     requested = str(behavior.get("event_binding") or "")
     if not requested and behavior.get("event_interface"):
         matches = [row["event_id"] for row in candidates
