@@ -80,6 +80,53 @@ def _mutation_field_words(state_name):
         r"(?<=[a-z0-9])(?=[A-Z])", " ", tail).casefold()))
 
 
+_STATE_MUTATOR_VERBS = (
+    "set", "add", "remove", "increase", "decrease", "increment",
+    "decrement", "damage", "hurt", "heal", "consume", "destroy",
+    "break", "repair", "modify", "update", "change",
+)
+
+
+def _native_state_effect_method(method):
+    """Exclude telemetry, event notifications and queries from mutation proof.
+
+    Presence of a checked Java method is not proof of a state transition.
+    Restrict the first gate to imperative methods rather than arbitrary
+    signatures containing a state's name (recordDamage, broadcastDamageEvent,
+    showVehicleHealth). Semantic/causal proof remains a separate requirement.
+    """
+    return method.startswith(_STATE_MUTATOR_VERBS)
+
+
+def _state_owner_receiver_admissible(state_name, item, frame):
+    """A player state must target a real player supplied by the event.
+
+    Never infer the affected player from a world getter such as
+    getRandomPlayer() or from a historical relation such as
+    getLastHurtByPlayer(). Those are live Java receivers but not proof
+    of WHICH player's state the behavior is allowed to mutate.
+    """
+    words = set(re.findall(r"[a-z]+", re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])", " ", state_name).casefold()))
+    if "player" not in words:
+        return True
+    signature = str(item.get("signature") or "")
+    owner = signature.partition("#")[0]
+    if not owner.startswith("net.minecraft."):
+        return True  # Self-contained synthetic test APIs are not Minecraft owners.
+    if not (owner.endswith((".Player", ".ServerPlayer", ".PlayerEntity",
+                             ".ServerPlayerEntity"))):
+        return False
+    receiver = str(item.get("receiver") or "")
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", receiver):
+        return False
+    from .host_verified_callback_ops import _callback_parameters
+    return any(name == receiver and typ.startswith("net.minecraft.")
+               and typ.endswith((".Player", ".ServerPlayer", ".PlayerEntity",
+                                 ".ServerPlayerEntity"))
+               for typ, name in _callback_parameters(frame))
+
+
 def _state_backed_native_candidates(state_name, candidates):
     """Reduce model options to ABI methods naming the required target field.
 
@@ -231,14 +278,23 @@ def author_runtime_mutation_calls(
                 r"(?<=[a-z0-9])(?=[A-Z])", " ", text).lower()))
             return -len(words & tokens)
 
-        matching = _state_backed_native_candidates(name, available.items())
+        matching = [
+            (identifier, item)
+            for identifier, item in _state_backed_native_candidates(
+                name, available.items())
+            if _native_state_effect_method(
+                str(item.get("name") or item.get("signature", "").split("#")[-1].split("(")[0]))
+            and _state_owner_receiver_admissible(name, item, frame)
+        ]
         if not matching:
             raise ValueError(
                 "CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED: "
                 + name + "; inspected " + str(len(available))
                 + " callable candidates but none names the required target "
                   "field. Materialize an owned typed state/accessor or a "
-                  "verified native semantic bridge before callback authoring.")
+                  "verified native semantic bridge before callback authoring. "
+                  "Telemetry, queries, and unowned actor receivers are not "
+                  "authoritative mutation targets.")
         ordered = sorted(matching, key=relevance)
         options = {}
 
