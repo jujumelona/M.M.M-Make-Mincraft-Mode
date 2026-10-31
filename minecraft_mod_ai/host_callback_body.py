@@ -209,6 +209,30 @@ def _checked_player_state_context(frame):
     return 'java.util.Map.of("player", ' + variable + "." + getter + "())"
 
 
+def _declared_state_accessor(contract, name, arity):
+    """Check an accessor's exact materialized Java declaration and argument count."""
+    for declaration in contract.get("methods") or ():
+        if declaration.get("name") != name:
+            continue
+        signature = str(declaration.get("signature") or "")
+        try:
+            raw, root = _parse("class MmmStateReadAbi {\n" + signature + "\n}")
+        except ValueError:
+            continue
+        for node in root.named_children:
+            if node.type != "class_declaration":
+                continue
+            for method in node.child_by_field_name("body").named_children:
+                if method.type != "method_declaration":
+                    continue
+                params = method.child_by_field_name("parameters")
+                if (params is not None and len([
+                    row for row in params.named_children
+                    if row.type == "formal_parameter"]) == arity):
+                    return True
+    return False
+
+
 def _required_state_write_slots(frame):
     """Resolve exact, already-materialized typed writers before coding starts.
 
@@ -256,14 +280,19 @@ def _required_state_write_slots(frame):
                 scope = (contract.get("state_scopes") or {}).get(name)
                 if scope not in (None, "player"):
                     raise ValueError("CALLBACK_REQUIRED_STATE_SCOPE_UNSUPPORTED: " + name)
-                matches.append((owner, signature, _text(raw, param_type), scope))
+                reader_verified = _declared_state_accessor(
+                    contract, "readState_" + name, 1 if scope == "player" else 0)
+                matches.append((owner, signature, _text(raw, param_type),
+                                scope, reader_verified))
         if not matches:
             raise ValueError("CALLBACK_REQUIRED_STATE_ACCESSOR_UNDECLARED: " + name)
-        if len({(owner, typ, scope) for owner, _, typ, scope in matches}) != 1:
+        if len({(owner, typ, scope, verified)
+                for owner, _, typ, scope, verified in matches}) != 1:
             raise ValueError("CALLBACK_REQUIRED_STATE_OWNER_AMBIGUOUS: " + name)
-        owner, signature, value_type, scope = matches[0]
+        owner, signature, value_type, scope, reader_verified = matches[0]
         slots[name] = {"owner": owner, "signature": signature,
-                       "value_type": value_type, "scope": scope}
+                       "value_type": value_type, "scope": scope,
+                       "reader_verified": reader_verified}
         if scope == "player":
             # The real callback ABI, not model prose, supplies the UUID.
             # Reject impossible ownership before any model choice is made.
@@ -314,6 +343,10 @@ def _complete_required_state_effects(
             read_argument = read_context if read_context else ""
             reader = (state_owner + ".readState_" + state_name + "("
                       + read_argument + ")")
+            if (typed_values and row.get("operator", "set") != "set"
+                    and not slot["reader_verified"]):
+                raise ValueError("CALLBACK_REQUIRED_STATE_READER_UNDECLARED: "
+                                 + state_name)
             expression = (
                 lower_typed_state_transition(
                     row, slot["value_type"], reader_expression=reader)
