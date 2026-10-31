@@ -195,7 +195,6 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
               + "\n".join(registrations) + "\n}\n" + "\n\n".join(members) + "\n}\n")
     _parse(source)
     root = Path(context["project_root"]) / ".mmm" / "construction_rule_ir"
-    root.mkdir(parents=True, exist_ok=True)
     from .construction_direct_writer import _save_checkpoint
     identity = hashlib.sha256((owner + "\0" + source).encode()).hexdigest()
     proof = {
@@ -212,5 +211,6 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         # succeeds; failed candidates must not leave plausible proof files.
         pending.append((root / (identity + ".json"), identity, proof))
     else:
+        root.mkdir(parents=True, exist_ok=True)
         _save_checkpoint(root / (identity + ".json"), identity, proof)
     return source
