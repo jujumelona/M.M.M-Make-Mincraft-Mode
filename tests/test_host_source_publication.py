@@ -303,3 +303,81 @@ def test_java_only_checkpoint_rollback_holds_cross_process_publication_lock(
             receipt.write_text("unverified")
             raise ValueError("javac rejected")
     assert receipt.read_text() == "accepted"
+
+
+@pytest.mark.parametrize("compiler_ok", [False, True])
+def test_rule_ir_is_not_persisted_before_target_compile_acceptance(
+    tmp_path, monkeypatch, compiler_ok,
+):
+    import minecraft_mod_ai.construction_host_source as host
+    import minecraft_mod_ai.host_rule_feature as rules
+    from minecraft_mod_ai.construction_host_source import compose_host_java_source
+    from minecraft_mod_ai.construction_direct_writer import _read_checkpoint
+    manifest, _ = _workspace(tmp_path)
+    behavior = {"behavior_id": "observation", "trigger": "inspected event",
+                "intent": "respond to observation", "effects": "actual effect"}
+    spec = {
+        "language": "java", "target_path": "src/main/java/example/Bridge.java",
+        "requirement": "implement callback",
+        "bindings": {"request_feature_entrypoint": True},
+    }
+    ctx = {
+        "project_root": str(tmp_path), "java_classpath": ["test-only"],
+        "target": {"loader": "fabric", "java_version": 25},
+        "symbols": {"owner": {"kind": "CLASS", "owner": "example.Bridge"}},
+        "feature_work_order": {"acceptance": {"max_compiler_repair_attempts": 0}},
+    }
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "rule-proof-deferred-compile-contract-v1")
+    monkeypatch.setattr(host, "_build_host_java_prompt",
+        lambda *a, **kw: ({}, "compile checked rule", [behavior], {
+            "inspected_target_api": {}, "materialized_prerequisite_api": [],
+            "host_state_work_order_scope": {}, "available_fabric_callbacks": [],
+            "retained_typed_behavior": {}, "owned_runtime_records": [],
+        }, []))
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_verified_entity_type.verified_entity_type_source",
+        lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.host_verified_entity_registry.verified_entity_registry_source",
+        lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.template_first_route.checked_rule_template_ready",
+        lambda *a, **kw: True)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_coverage.record_authored_source_calls",
+        lambda *a, **kw: None)
+    rule_path = tmp_path / ".mmm/construction_rule_ir/rule-proof.json"
+    source = "package example; public final class Bridge {}"
+    def proposed_rule(_router, _spec, context, **kwargs):
+        assert context["defer_rule_ir_persistence"]
+        assert not rule_path.exists()
+        context["pending_rule_ir"].append((
+            rule_path, "rule-proof", {
+                "schema": "mmm/host-observation-rules-v1",
+                "target_compilation_verified": False,
+                "runtime_verified": False,
+            }))
+        return source
+    monkeypatch.setattr(rules, "compose_rule_feature", proposed_rule)
+    checked = []
+    def verify(candidate, *a, **kw):
+        assert candidate == source
+        assert not rule_path.exists(), "rule was stored before javac"
+        checked.append(True)
+        if not compiler_ok:
+            raise ValueError("javac rejected rule")
+    monkeypatch.setattr(host, "_verification_boundary", lambda: verify)
+    def produce():
+        return compose_host_java_source(
+            object(), spec, ctx, package="example", name="Bridge",
+            owner="example.Bridge", behaviors=[behavior])
+    if compiler_ok:
+        assert produce() == source
+        assert _read_checkpoint(rule_path, "rule-proof")["runtime_verified"] is False
+    else:
+        with pytest.raises(ValueError, match="HOST_RULE_TEMPLATE_COMPILATION_FAILED"):
+            produce()
+        assert not rule_path.exists()
+    assert checked == [True]
