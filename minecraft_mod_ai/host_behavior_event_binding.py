@@ -30,8 +30,31 @@ _PICK_ENTITY_ACTION = re.compile(
 )
 
 
+# Termination callbacks are not ongoing combat/damage occurrences. In
+# particular AFTER_KILLED_OTHER_ENTITY is emitted *after* the target is dead.
+# It cannot be used to apply the very damage which supposedly caused the kill.
+_TERMINAL_EVENTS = {
+    ("net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents",
+     "AFTER_KILLED_OTHER_ENTITY"),
+    ("net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents",
+     "AFTER_DEATH"),
+}
+_DEATH_TRIGGER = re.compile(
+    r"\b(?:kill(?:s|ed|ing)?|slay(?:s|ing)?|slew|death|dead|"
+    r"dies|died|defeat(?:s|ed|ing)?|fatal|lethal)\b"
+    r"|사망|죽(?:음|었|이는|인)|처치|격파",
+    re.IGNORECASE,
+)
+
+
 def _occurrence_admissible(behavior, event):
     owner = str(event.get("event_owner") or "")
+    field = str(event.get("event_field") or "").upper()
+    if (owner, field) in _TERMINAL_EVENTS:
+        # Use the original occurrence, not the model's invented auxiliary
+        # state writes. A combat feature does not imply a kill/death hook.
+        trigger = str(behavior.get("trigger") or "")
+        return bool(_DEATH_TRIGGER.search(trigger))
     if owner != _PICK_ITEM_OWNER:
         return True
     # Pick-item event only fires when the pick-block control is used. This
