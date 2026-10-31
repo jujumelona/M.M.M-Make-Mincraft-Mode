@@ -548,3 +548,24 @@ def test_duplicate_mixin_manifest_entries_do_not_count_as_one_verified_hook(tmp_
         read_verified_custom_event_receipts(
             project_root=tmp_path, symbols=SYMBOLS,
             behavior_ids=["buy_module"], package="example.generated")
+
+
+def test_symlinked_fabric_manifest_does_not_prove_custom_event_receipt(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    materialize_verified_custom_event(
+        project_root=tmp_path, symbols=SYMBOLS,
+        source_site_ref="opaqueMethod", behavior_id="buy_module",
+        package="example.generated")
+    actual = manifest.with_name("fabric-original.json")
+    manifest.rename(actual)
+    try:
+        manifest.symlink_to(actual)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError, match="SOURCE_SITE_PATH_UNSAFE"):
+        read_verified_custom_event_receipts(
+            project_root=tmp_path, symbols=SYMBOLS,
+            behavior_ids=["buy_module"], package="example.generated")
