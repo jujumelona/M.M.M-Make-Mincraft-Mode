@@ -69,6 +69,43 @@ def _tracking(author, program, gate, mode):
             {"observed": observed, "context": key, "first_observation": policy})
 
 
+def save_rule_ir_proof(path, identity, proof):
+    """Serialize structured observation evidence via the string-only checkpoint ABI.
+
+    The direct Java checkpoint store accepts only named nonempty source
+    strings. Storing a raw rule dictionary silently creates a file that its
+    own reader subsequently refuses to load. Preserve the existing atomic
+    writer but encode this distinct structured payload explicitly.
+    """
+    from .construction_direct_writer import _save_checkpoint
+    if (not isinstance(proof, dict)
+            or proof.get("schema") != "mmm/host-observation-rules-v1"
+            or not isinstance(proof.get("rules"), list)
+            or not isinstance(proof.get("source_sha256"), str)
+            or len(proof["source_sha256"]) != 64):
+        raise ValueError("RULE_IR_PROOF_INVALID")
+    _save_checkpoint(path, identity, {
+        "rule_ir_json": json.dumps(proof, sort_keys=True, ensure_ascii=False),
+    })
+
+
+def read_rule_ir_proof(path, identity):
+    from .construction_direct_writer import _read_checkpoint
+    members = _read_checkpoint(path, identity)
+    if not members:
+        return {}
+    if set(members) != {"rule_ir_json"}:
+        raise ValueError("RULE_IR_CHECKPOINT_SCHEMA_INVALID")
+    proof = json.loads(members["rule_ir_json"])
+    if (not isinstance(proof, dict)
+            or proof.get("schema") != "mmm/host-observation-rules-v1"
+            or not isinstance(proof.get("rules"), list)
+            or not isinstance(proof.get("source_sha256"), str)
+            or len(proof["source_sha256"]) != 64):
+        raise ValueError("RULE_IR_CHECKPOINT_PROOF_INVALID")
+    return proof
+
+
 def compose_rule_feature(router, spec, context, *, package, name, behaviors, state_access,
                          prerequisite_apis=()):
     qualified_name(package)
@@ -195,7 +232,6 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
               + "\n".join(registrations) + "\n}\n" + "\n\n".join(members) + "\n}\n")
     _parse(source)
     root = Path(context["project_root"]) / ".mmm" / "construction_rule_ir"
-    from .construction_direct_writer import _save_checkpoint
     identity = hashlib.sha256((owner + "\0" + source).encode()).hexdigest()
     proof = {
         "schema": "mmm/host-observation-rules-v1", "owner": owner, "rules": records,
@@ -212,5 +248,5 @@ def compose_rule_feature(router, spec, context, *, package, name, behaviors, sta
         pending.append((root / (identity + ".json"), identity, proof))
     else:
         root.mkdir(parents=True, exist_ok=True)
-        _save_checkpoint(root / (identity + ".json"), identity, proof)
+        save_rule_ir_proof(root / (identity + ".json"), identity, proof)
     return source
