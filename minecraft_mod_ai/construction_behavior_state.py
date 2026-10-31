@@ -50,45 +50,57 @@ def _canonical_targets(reference, variables):
 _BINDING_KINDS = frozenset({"canonical_state", "new_scalar_state", "world_state"})
 
 
+_NATIVE_STATE_FIELDS = {
+    # Only whole, recognized native properties count. A custom leaf such as
+    # player.custom_health or player.inventory.currency is not vanilla merely
+    # because one of its tokens matches a native field or ancestor.
+    "player": {
+        ("health",), ("hunger",), ("position",), ("inventory",),
+        ("armor", "durability"), ("weapon", "damage"),
+    },
+    "entity": {("health",), ("position",), ("inventory",), ("alive",)},
+    "alien": {("health",), ("position",), ("alive",)},
+    "mob": {("health",), ("position",), ("alive",)},
+    "living": {("health",), ("position",), ("alive",)},
+    "weapon": {("durability",), ("damage",)},
+    "combat": {("damage",)},
+    "world": {("position",)},
+    "game": {("mode",)},
+}
+
+
 def _runtime_owned_state_reference(reference):
-    """Conservatively recognize *native fields*, never infer from an ancestor.
+    """Recognize explicit native owner/field pairs, not partial-name matches.
 
-    In particular, an inventory is native but an arbitrary property of an
-    inventory is NOT necessarily vanilla: "player.inventory.currency" can be
-    new mod-owned state. Likewise a world is native, but every proposed field
-    below "world.*" is not automatically backed by Minecraft. The old broad
-    word-intersection rules sent such states to a 4,000+ method search even
-    though no relevant native mutation could exist.
-
-    This classifier is only a preliminary guard against cloning known vanilla
-    fields. It is not proof that a mutator exists: callback resolution still
-    requires a checked symbol and a gameplay acceptance test.
+    This is a *conservative guard* against cloning a known vanilla field,
+    not evidence of a Java mutation API. If the owner/field pair is not
+    exact, preserve the requirement for canonical state resolution and later
+    checked source binding. In particular, descendants of native objects
+    do not inherit native state ownership.
     """
-    parts = _identifier_parts(reference)
-    if not parts:
+    value = str(reference).strip()
+    if not value:
         return False
-    words = set(parts)
-    # Interpret the property at the END of a dotted object path. A native
-    # ancestor ("player.inventory" or "world") never confers native ownership
-    # on custom descendants (".currency", ".resource_nodes.depleted").
-    tail = re.split(r"[./:]", str(reference).strip())[-1]
-    field_parts = _identifier_parts(tail)
-    field = field_parts[-1] if field_parts else ""
-    actor = bool({"player", "entity", "alien", "mob", "living"} & words)
-    if actor and field in {"health", "hunger", "durability", "position", "alive"}:
+    if re.search(r"[./:]", value):
+        components = re.split(r"[./:]", value)
+        if len(components) != 2:
+            return False
+        owner = _identifier_parts(components[0])
+        field = _identifier_parts(components[1])
+        return (len(owner) == 1 and field in
+                _NATIVE_STATE_FIELDS.get(owner[0], frozenset()))
+    parts = _identifier_parts(value)
+    if len(parts) < 2:
+        return False
+    # Textual references may include explicit "entity" or armor qualifiers,
+    # but unrelated adjectives (such as custom, bonus or mod) are never
+    # discarded to manufacture a vanilla field match.
+    if parts in {
+        ("alien", "entity", "health"), ("living", "entity", "health"),
+        ("player", "armor", "durability"),
+    }:
         return True
-    if field == "durability" and "weapon" in words:
-        return True
-    if field == "damage" and bool({"combat", "weapon", "player", "entity", "alien"} & words):
-        return True
-    if field == "position" and "world" in words:
-        return True
-    if field in {"inventory", "items", "slots"} and bool(
-            {"player", "entity"} & words):
-        return True
-    if parts[-2:] == ("game", "mode"):
-        return True
-    return False
+    return parts[1:] in _NATIVE_STATE_FIELDS.get(parts[0], frozenset())
 
 
 def _valid_state_owner(owner):
