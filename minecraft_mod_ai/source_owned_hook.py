@@ -93,6 +93,13 @@ def choose_source_hook(
             inspected=len(by_id),
         )
     by_id = {str(row["event_id"]): dict(row) for row in relevant}
+    # A known, exact, inspected occurrence should never depend on the
+    # 9B model repeating the same hook ID. The occurrence is host-proven;
+    # the separately compiled predicate/effects still require verification.
+    from .host_behavior_event_binding import _verified_block_mining_occurrence
+    exact = _verified_block_mining_occurrence(behavior, relevant)
+    if exact is not None and len(relevant) == 1:
+        return dict(exact)
     # A model can decline inspected hooks, but it cannot invent an event owner.
     # Keep the event index compact: no 872K-symbol classpath in the 9B prompt.
     ordered = sorted(by_id.values(), key=lambda e: e["event_id"])
