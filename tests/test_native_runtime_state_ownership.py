@@ -35,6 +35,8 @@ def test_native_state_is_classified_as_live_runtime(name):
     "spacecraft_construction_progress", "weapon_level",
     "player.inventory.currency", "world.resource_nodes.depleted",
     "entity.custom_energy", "world.planets.colonized",
+    "player.custom_health", "player.health_bonus", "player.extra_damage",
+    "world.custom_position", "alien.custom_alive", "player ship position bonus",
     "current world", "Combat particles and effects", "available planets",
 ])
 def test_custom_state_is_not_reclassified_as_vanilla(name):
