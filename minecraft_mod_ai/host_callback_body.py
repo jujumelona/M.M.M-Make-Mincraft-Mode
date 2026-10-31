@@ -181,6 +181,34 @@ def _require_canonical_state_effects(source, frame):
         )
 
 
+def _checked_player_state_context(frame):
+    """Bind one *real callback participant* to a player-owned state write.
+
+    A generated player-scoped state throws at runtime when its context lacks
+    a player identity. Never guess a player name, use the global no-context
+    overload, or let the 9B model invent a UUID. Support the two checked
+    Minecraft mappings; other event ABI shapes must first provide a verified
+    player-producing source path.
+    """
+    from .host_verified_callback_ops import _callback_parameters
+
+    parameters = _callback_parameters(frame)
+    methods = {
+        "net.minecraft.entity.player.PlayerEntity": "getUuid",
+        "net.minecraft.server.network.ServerPlayerEntity": "getUuid",
+        "net.minecraft.world.entity.player.Player": "getUUID",
+        "net.minecraft.server.level.ServerPlayer": "getUUID",
+    }
+    matched = [(variable, methods[kind]) for kind, variable in parameters
+               if kind in methods]
+    if len(matched) != 1:
+        raise ValueError("CALLBACK_PLAYER_STATE_OWNER_UNRESOLVED: "
+                         "one verified Minecraft player callback parameter "
+                         "is required, found " + str(len(matched)))
+    variable, getter = matched[0]
+    return 'java.util.Map.of("player", ' + variable + "." + getter + "())"
+
+
 def _required_state_write_slots(frame):
     """Resolve exact, already-materialized typed writers before coding starts.
 
@@ -225,14 +253,21 @@ def _required_state_write_slots(frame):
                 param_type = parameters[0].child_by_field_name("type")
                 if param_type is None:
                     continue
-                matches.append((owner, signature, _text(raw, param_type)))
+                scope = (contract.get("state_scopes") or {}).get(name)
+                if scope not in (None, "player"):
+                    raise ValueError("CALLBACK_REQUIRED_STATE_SCOPE_UNSUPPORTED: " + name)
+                matches.append((owner, signature, _text(raw, param_type), scope))
         if not matches:
             raise ValueError("CALLBACK_REQUIRED_STATE_ACCESSOR_UNDECLARED: " + name)
-        if len({(owner, typ) for owner, _, typ in matches}) != 1:
+        if len({(owner, typ, scope) for owner, _, typ, scope in matches}) != 1:
             raise ValueError("CALLBACK_REQUIRED_STATE_OWNER_AMBIGUOUS: " + name)
-        owner, signature, value_type = matches[0]
+        owner, signature, value_type, scope = matches[0]
         slots[name] = {"owner": owner, "signature": signature,
-                       "value_type": value_type}
+                       "value_type": value_type, "scope": scope}
+        if scope == "player":
+            # The real callback ABI, not model prose, supplies the UUID.
+            # Reject impossible ownership before any model choice is made.
+            slots[name]["context"] = _checked_player_state_context(frame)
     return slots
 
 
@@ -284,7 +319,9 @@ def _complete_required_state_effects(
                 state_owner.rsplit(".", 1)[-1] + ".readState_" + state_name + "()",
             }:
                 raise ValueError("CALLBACK_CANONICAL_STATE_WRITE_NOOP: " + state_name)
-            operation = state_owner + ".writeState_" + state_name + "(" + expression + ");"
+            context_arg = ", " + slot["context"] if slot.get("context") else ""
+            operation = (state_owner + ".writeState_" + state_name + "("
+                         + expression + context_arg + ");")
             trial = frame["prefix"] + "\n".join([*statements, operation]) + frame["suffix"]
             validate_generated_java_source(trial, frame, frame["prefix"], frame["suffix"])
             _validate_state(trial, frame)
