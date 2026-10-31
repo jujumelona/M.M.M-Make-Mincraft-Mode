@@ -36,6 +36,8 @@ jobs:
           tests/test_source_owned_custom_event.py
           tests/test_source_owned_hook.py
           tests/test_source_owned_ui_event.py
+          tests/test_compound_player_occurrence.py
+          tests/test_source_owned_ui_host.py
           tests/test_source_owned_site_choice.py
           tests/test_construction_host_source.py
           tests/test_host_source_publication.py

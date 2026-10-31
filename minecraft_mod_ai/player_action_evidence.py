@@ -6,15 +6,19 @@ interpretation to its bytes before producing the form and server event.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
 import hashlib
 import json
+from collections.abc import Mapping
 
 from .player_action_modality import ACTION_FIELDS, assess_player_action_modality
 from .source_occurrence_error import SourceHookUnavailable
-from .structured_output import StructuredOutputValidationError, validate_structured_output
+from .structured_output import (
+    StructuredOutputValidationError,
+    validate_structured_output,
+)
 
-_SCHEMA = "mmm/player-action-evidence-v1"
+ACTION_EVIDENCE_SCHEMA = "mmm/player-action-evidence-v2"
+_LEGACY_SCHEMA = "mmm/player-action-evidence-v1"
 _FIELDS = ACTION_FIELDS
 
 
@@ -36,16 +40,28 @@ def _require_original_quote(behavior, field, quote):
         raise _unavailable(behavior, "action_evidence_quote_not_in_original_field")
 
 
+def _scope_for_evidence_version(behavior, quote, schema, current):
+    if schema == _LEGACY_SCHEMA:
+        return assess_player_action_modality(behavior, quote, legacy=True)
+    return current
+
+
 def validate_player_action_evidence(behavior, evidence):
     if (not isinstance(evidence, Mapping)
             or set(evidence) != {"schema", "behavior_sha256", "request_field", "request_quote", "activation_scope"}
-            or evidence.get("schema") != _SCHEMA):
+            or evidence.get("schema") not in {ACTION_EVIDENCE_SCHEMA, _LEGACY_SCHEMA}):
         raise ValueError("ACTION_EVIDENCE_SCHEMA_INVALID")
     if evidence["behavior_sha256"] != _behavior_hash(behavior):
         raise ValueError("ACTION_EVIDENCE_BEHAVIOR_MISMATCH")
     field, quote = evidence["request_field"], evidence["request_quote"]
     _require_original_quote(behavior, field, quote)
-    if evidence["activation_scope"] != assess_player_action_modality(behavior, quote):
+    # Always enforce current restrictions, including on historical recipes.
+    # A genuine v1 receipt must additionally match its original assessment
+    # byte-for-byte. Keep that recipe's identity and generated source intact
+    # instead of rewriting a valid producer merely to update evidence syntax.
+    scope = assess_player_action_modality(behavior, quote)
+    expected = _scope_for_evidence_version(behavior, quote, evidence["schema"], scope)
+    if evidence["activation_scope"] != expected:
         raise ValueError("ACTION_EVIDENCE_SCOPE_MISMATCH")
 
 
@@ -82,7 +98,7 @@ def author_player_action_evidence(router, behavior):
         raise _unavailable(behavior, "original_trigger_has_no_owned_ui_activation") from exc
     if selected["activation"] != "typed_ui_action":
         raise _unavailable(behavior, "original_trigger_has_no_owned_ui_activation")
-    evidence = {"schema": _SCHEMA, "behavior_sha256": _behavior_hash(behavior),
+    evidence = {"schema": ACTION_EVIDENCE_SCHEMA, "behavior_sha256": _behavior_hash(behavior),
                 "request_field": selected["request_field"],
                 "request_quote": selected["request_quote"].strip()}
     _require_original_quote(behavior, evidence["request_field"], evidence["request_quote"])

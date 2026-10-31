@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from .player_control_clause import PASSIVE_PLAYER_HEADS, explicit_player_control
 from .source_occurrence_error import SourceHookUnavailable
 
 ACTION_FIELDS = ("trigger", "intent", "effects", "source_quote")
@@ -31,6 +32,9 @@ _WITHOUT = re.compile(r"\bwithout\s+(?:(?:having|needing)\s+to\s+)?(?P<action>[^
 _NO_INPUT = re.compile(
     r"\bno\s+(?:(?:manual|player|user)\s+)*input\s+(?:is\s+)?required\b|"
     r"(?:플레이어|사용자)\s*입력\s*없이", re.IGNORECASE)
+_WITHOUT_INPUT = re.compile(
+    r"\bwithout\s+(?:(?:any|manual)\s+)*(?:player|user)\s+input\b",
+    re.IGNORECASE)
 _BOUNDARY = re.compile(
     r"[.;!?\n]+|\b(?:and|but|while|when|then)\s+(?=(?:the\s+)?"
     r"(?:player|user|server|system)\b|the\s+)", re.IGNORECASE)
@@ -40,9 +44,18 @@ def _words(text):
     return [m.group().casefold() for m in _WORD.finditer(text)]
 
 
-def _action_word(text):
+def _coordinated_control_anchor(text, first, *, legacy):
+    if legacy or first not in PASSIVE_PLAYER_HEADS:
+        return first
+    # Include prohibited controls so a passive prerequisite cannot hide
+    # the selected control's negation/automation in another original field.
+    return explicit_player_control(text, include_restricted=True) or first
+
+
+def _action_word(text, *, legacy=False):
     words = _words(_SUBJECT.sub("", text, count=1))
-    return next((word for word in words if word not in _SKIP), "")
+    first = next((word for word in words if word not in _SKIP), "")
+    return _coordinated_control_anchor(text, first, legacy=legacy)
 
 
 def _forms(word):
@@ -64,13 +77,13 @@ def _clauses(text):
     yield start, len(text), text[start:]
 
 
-def _automatic_operations(text):
+def _automatic_operations(text, *, legacy=False):
     operations = []
     for marker in _AUTO.finditer(text):
         following = next((w for w in _words(text[marker.end():]) if w not in _ADVERBS), "")
         operation = following
         if not following or following in _AFTER_AUTO:
-            operation = _action_word(text[:marker.start()])
+            operation = _action_word(text[:marker.start()], legacy=legacy)
         operations.append(operation)
     return operations
 
@@ -86,27 +99,42 @@ def _negated_operations(text):
     return operations
 
 
-def _mode_row(field, start, end, text, anchor):
-    automatic, negated = _automatic_operations(text), _negated_operations(text)
-    without = [word for m in _WITHOUT.finditer(text) for word in _words(m["action"])]
-    no_input = bool(_NO_INPUT.search(text))
+def _input_absence_scope(text, anchor, *, legacy):
+    without = [word for m in _WITHOUT.finditer(text)
+               if legacy or not _WITHOUT_INPUT.match(text, m.start())
+               for word in _words(m["action"])]
+    standalone_no_input = bool(_NO_INPUT.search(text))
+    input_markers = list(_WITHOUT_INPUT.finditer(text)) if not legacy else []
+    # "without player input" describes the operation in this clause. It
+    # prohibits converting THAT occurrence into a manual command; the same
+    # phrase on an independent server-side consequence does not prohibit
+    # the preceding player action.
+    related_input = any(
+        _forms(_action_word(text[:marker.start()])) & anchor
+        for marker in input_markers)
+    return without, standalone_no_input or bool(input_markers), standalone_no_input or related_input
+
+
+def _mode_row(field, start, end, text, anchor, *, legacy=False):
+    automatic, negated = _automatic_operations(text, legacy=legacy), _negated_operations(text)
+    without, no_input, input_restricted = _input_absence_scope(text, anchor, legacy=legacy)
     if not (automatic or negated or without or no_input):
         return None
     related = any(_forms(word) & anchor for word in (*automatic, *negated, *without))
     return {"field": field, "start": start, "end": end, "text": text,
             "automatic_operations": automatic, "negated_operations": negated,
             "without_operations": without, "no_player_input": no_input,
-            "restricts_activation": no_input or related}
+            "restricts_activation": input_restricted or related}
 
 
-def assess_player_action_modality(behavior, request_quote):
+def assess_player_action_modality(behavior, request_quote, *, legacy=False):
     """Bind scoped modality from every original field for deterministic replay."""
-    action = _action_word(request_quote)
+    action = _action_word(request_quote, legacy=legacy)
     anchor = _forms(action)
     rows = []
     for field in ACTION_FIELDS:
         for start, end, text in _clauses(str(behavior.get(field) or "")):
-            row = _mode_row(field, start, end, text, anchor)
+            row = _mode_row(field, start, end, text, anchor, legacy=legacy)
             if row is not None:
                 rows.append(row)
     if any(row["restricts_activation"] for row in rows):

@@ -138,7 +138,9 @@ def test_eligibility_trigger_and_action_effect_use_the_same_production_source_br
 
 def test_production_trade_uses_host_action_before_mimo_source_site_or_callback(tmp_path, monkeypatch):
     """Regression of the captured 2026-10-25 '거래 등으로' production failure."""
-    from minecraft_mod_ai.feature_registration_proof import validate_registered_event_sources
+    from minecraft_mod_ai.feature_registration_proof import (
+        validate_registered_event_sources,
+    )
     from minecraft_mod_ai.source_owned_ui_event import read_verified_typed_ui_events
 
     _, behavior, spec, context, _ = _fixture(tmp_path, monkeypatch)
@@ -189,3 +191,39 @@ def test_production_trade_uses_host_action_before_mimo_source_site_or_callback(t
     assert "registerBehavior" in source
     assert "applyBehavior" in source
     assert "matchesBehavior" in source
+
+
+def test_production_compound_trigger_builds_its_producer_before_missing_hook_search(tmp_path, monkeypatch):
+    """Captured production-logs (14): arrival is a prerequisite of an input."""
+    from minecraft_mod_ai.source_owned_ui_event import read_verified_typed_ui_events
+
+    _, behavior, spec, context, manifest = _fixture(tmp_path, monkeypatch)
+    behavior.update({
+        "behavior_id": "behavior_51abfccc946fe0413520",
+        "source_quote": "식민지화등 여러가지가 가능한 모드",
+        "intent": "Colonize worlds and unlock multiple gameplay possibilities.",
+        "trigger": "Player reaches a planet or space location and initiates colonization.",
+        "effects": "Colonization becomes available, enabling multiple gameplay possibilities.",
+        "runtime_state_reads": ["Player location", "Available planets", "Colonization prerequisites"],
+    })
+    spec["bindings"]["construction_behaviors_json"] = json.dumps([behavior])
+    context["source_owned_work_graph"] = build_source_work_graph(
+        [behavior], producer_obligations=[{
+            "behavior_id": behavior["behavior_id"], "name": name,
+            "reason": "no_inspected_semantic_source",
+        } for name in behavior["runtime_state_reads"]], inspected_hooks=[])
+
+    class MiMo:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            # SOURCE_REQUIRED cannot veto a producer the host already owns.
+            return {"ui_action_label": {"label": "Begin colonization"},
+                    "ui_action_input_count": {"count": 0}}[data_name]
+
+    source = compose_first_pass_java(MiMo(), spec, [],
+                                     construction_context=context, behaviors=[behavior])
+    installed = read_verified_typed_ui_events(
+        project_root=tmp_path, symbols=context["symbols"], behaviors=[behavior], package="example")
+    assert len(installed) == 1
+    validate_registered_event_sources(source, [behavior], [], materialized_events=installed)
+    entries = json.loads(manifest.read_text())["entrypoints"]
+    assert len(entries["main"]) == 2 and len(entries["client"]) == 1

@@ -13,16 +13,11 @@ from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 
+from .player_control_clause import explicit_player_control
 from .source_owned_hook import SourceHookUnavailable
 
-_ACTIVE = re.compile(
-    r"\b(?:selects?|chooses?|clicks?|confirms?|initiates?|requests?|submits?|"
-    r"press(?:es)?|interacts?|activates?)\b|선택|클릭|확인|요청|누르",
-    re.IGNORECASE,
-)
 _ACTOR = "net.minecraft.commands.CommandSourceStack"
 _SCHEMA = "mmm/typed-ui-occurrence-v1"
-_PLAYER = re.compile(r"\b(?:player|user)\b|플레이어|사용자", re.IGNORECASE)
 
 
 def _canonical(value):
@@ -30,31 +25,7 @@ def _canonical(value):
 
 
 def _player_activation(text):
-    # Admit an action whose grammatical subject remains the player. Merely
-    # finding "select" later in a world/server/negated clause would invent
-    # manual activation for an automatic occurrence.
-    for actor in _PLAYER.finditer(text):
-        if re.search(r"\b(?:no|not|without)(?:\s+\w+){0,2}\s*$", text[:actor.start()], re.IGNORECASE):
-            continue
-        tail = text[actor.end():actor.end() + 256]
-        if actor.group() in {"플레이어", "사용자"}:
-            if not re.search(r"자동|서버|시스템|없이|않", tail) and _ACTIVE.search(tail):
-                return True
-            continue
-        prefix = re.match(
-            r"\s*(?:(?:manually|explicitly|actively|deliberately|then)\s+)*"
-            r"(?:(?:must|can|may|will|should)\s+|needs?\s+to\s+)?", tail, re.IGNORECASE)
-        actions = [_ACTIVE.match(tail, prefix.end())]
-        for conjunction in re.finditer(
-                r"\band\s+(?:(?:then|manually|explicitly|actively|deliberately)\s+)*", tail, re.IGNORECASE):
-            before = tail[:conjunction.start()]
-            if not re.search(r"\b(?:without|not|never|while|unless|until|server|system)\b", before, re.IGNORECASE):
-                actions.append(_ACTIVE.match(tail, conjunction.end()))
-        for action in (item for item in actions if item is not None):
-            rest = re.split(r"[.;!?]|\band\b", tail[action.end():], maxsplit=1, flags=re.IGNORECASE)[0]
-            if not re.search(r"\b(?:automatically|autonomously|randomly|without)\b", rest, re.IGNORECASE):
-                return True
-    return False
+    return bool(explicit_player_control(text))
 
 
 def _require_target(behavior, symbols, minecraft_version):

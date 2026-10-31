@@ -4,12 +4,13 @@ import json
 import pytest
 
 from minecraft_mod_ai.host_action_occurrence import (
-    author_host_owned_player_occurrence, select_original_player_action,
+    author_host_owned_player_occurrence,
+    select_original_player_action,
 )
 from minecraft_mod_ai.source_owned_ui_event import (
-    materialize_typed_ui_occurrence, read_verified_typed_ui_events,
+    materialize_typed_ui_occurrence,
+    read_verified_typed_ui_events,
 )
-
 
 TRADE = {
     "behavior_id": "behavior_7e44c67dc12bf6885bb9",
@@ -110,7 +111,12 @@ def test_host_action_with_automatic_server_side_effect_keeps_manual_producer():
     assert contract["request_quote"].startswith("Player purchases supplies")
 
 
-def test_production_trade_java_compiles_against_real_fabric_26_2_sdk(tmp_path):
+@pytest.mark.parametrize("trigger", [
+    TRADE["trigger"],
+    "Player reaches a planet or space location and initiates colonization.",
+    "Player reaches a station and submits a repair request",
+])
+def test_production_trade_java_compiles_against_real_fabric_26_2_sdk(tmp_path, trigger):
     """Enabled only on the CI lane that provisions the actual 26.2 SDK."""
     import os
     import shutil
@@ -122,7 +128,7 @@ def test_production_trade_java_compiles_against_real_fabric_26_2_sdk(tmp_path):
     javac = shutil.which("javac")
     assert javac, "Minecraft SDK test requires JDK 25"
     plan = author_host_owned_player_occurrence(
-        SmallMiMo(), TRADE, symbols=SYMBOLS,
+        SmallMiMo(), {**TRADE, "trigger": trigger}, symbols=SYMBOLS,
         package="example.generated", mod_id="trade_test",
         minecraft_version="26.2",
     )

@@ -37,6 +37,7 @@ jobs:
             tests/test_typed_ui_action_contract.py \
             tests/test_source_ui_actions_sdk.py \
             tests/test_host_action_occurrence.py \
+            tests/test_compound_player_occurrence.py \
             tests/test_typed_ui_action_authoring.py \
             tests/test_typed_state_context.py \
             tests/test_production_state_compiler.py \
@@ -63,6 +64,7 @@ jobs:
             tests/test_source_owned_callback_authoring.py \
             tests/test_source_owned_host_integration.py \
             tests/test_host_action_occurrence.py \
+            tests/test_compound_player_occurrence.py \
             tests/test_source_owned_ui_host.py \
             tests/test_player_action_occurrence_evidence.py \
             tests/test_source_owned_custom_event.py \

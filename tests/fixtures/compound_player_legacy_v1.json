@@ -1,0 +1,93 @@
+{
+  "producer_commit": "4d6f66ed44bb8ab68e12b8fe50f1ede8369ac03e",
+  "recipe": {
+    "schema": "mmm/typed-ui-occurrence-v1",
+    "behavior": {
+      "behavior_id": "legacy_purchase",
+      "source_quote": "Purchase supplies and receive a receipt",
+      "intent": "Purchase supplies",
+      "trigger": "Player purchases supplies",
+      "effects": "Player reaches a station and confirms receipt automatically"
+    },
+    "action_metadata": {
+      "intent": "Purchase supplies",
+      "inputs": []
+    },
+    "package": "example.generated",
+    "mod_id": "legacy_test",
+    "minecraft_version": "26.2",
+    "activation_evidence": {
+      "schema": "mmm/player-action-evidence-v1",
+      "behavior_sha256": "sha256:90e18f21ffd729e2bcb5c0d3e392145ac65137bd3772aa104290e5951949e0e4",
+      "request_field": "trigger",
+      "request_quote": "Player purchases supplies",
+      "activation_scope": {
+        "action_anchor": "purchases",
+        "clauses": [
+          {
+            "field": "effects",
+            "start": 0,
+            "end": 59,
+            "text": "Player reaches a station and confirms receipt automatically",
+            "automatic_operations": [
+              "reaches"
+            ],
+            "negated_operations": [],
+            "without_operations": [],
+            "no_player_input": false,
+            "restricts_activation": false
+          }
+        ]
+      }
+    }
+  },
+  "digest": "eb86e413d48d0b658500",
+  "files_sha256": {
+    "src/main/java/example/generated/occurrenceeb86e413d48d0b658500/Occurrence.java": "b730cb84c5f9cc5f9af2d063fd02df3393843f2cbfa4377e9d8f02a946ad6596",
+    "src/main/java/example/generated/occurrenceeb86e413d48d0b658500/AuthoredProgram.java": "2aaa356227fd44dedc277fb3215ad10bb22967737cfde7c990f67ec752f8d0f9",
+    "src/main/java/example/generated/occurrenceeb86e413d48d0b658500/AuthoredActions.java": "a8910a4f7b8783227fecf102a76fc32e4f51144ac51eb83342c26901b38a12c0",
+    "src/main/java/example/generated/occurrenceeb86e413d48d0b658500/OccurrenceInitializer.java": "b2ae80be06afec26b57b7add15453d98daf4a68bc22f8c82a808eca7e5f78ff6",
+    "src/client/java/example/generated/occurrenceeb86e413d48d0b658500/AuthoredActionsClient.java": "53e50e2c0cc47864c4a1c1e71ba04b20445450d704284d907aa27ba9d3ae55d2"
+  },
+  "rejected_recipe": {
+    "schema": "mmm/typed-ui-occurrence-v1",
+    "behavior": {
+      "behavior_id": "legacy_automatic_confirmation",
+      "source_quote": "Player reaches a station and confirms allocation automatically",
+      "intent": "Confirm allocation",
+      "trigger": "Player confirms allocation",
+      "effects": "The server assigns allocation"
+    },
+    "action_metadata": {
+      "intent": "Confirm allocation",
+      "inputs": []
+    },
+    "package": "example.generated",
+    "mod_id": "legacy_test",
+    "minecraft_version": "26.2",
+    "activation_evidence": {
+      "schema": "mmm/player-action-evidence-v1",
+      "behavior_sha256": "sha256:82a621d549ee90c445a9820625d8387b5764b32ad2a4949a304b91eafa7144fd",
+      "request_field": "trigger",
+      "request_quote": "Player confirms allocation",
+      "activation_scope": {
+        "action_anchor": "confirms",
+        "clauses": [
+          {
+            "field": "source_quote",
+            "start": 0,
+            "end": 62,
+            "text": "Player reaches a station and confirms allocation automatically",
+            "automatic_operations": [
+              "reaches"
+            ],
+            "negated_operations": [],
+            "without_operations": [],
+            "no_player_input": false,
+            "restricts_activation": false
+          }
+        ]
+      }
+    }
+  }
+}

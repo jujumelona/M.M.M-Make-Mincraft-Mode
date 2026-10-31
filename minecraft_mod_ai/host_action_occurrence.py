@@ -11,6 +11,7 @@ import re
 from collections.abc import Mapping
 
 from .player_action_modality import assess_player_action_modality
+from .player_control_clause import PASSIVE_PLAYER_HEADS, explicit_player_control
 from .source_occurrence_error import SourceHookUnavailable
 
 # This grammar admits a *stated actor and verb*, not a synthesized request.
@@ -22,16 +23,6 @@ _ACTOR = re.compile(
 )
 _KOREAN_ACTOR = re.compile(r"(?:플레이어|사용자)(?:가|는)\s*[^.;!?\n]{1,180}")
 _KOREAN_MANUAL = re.compile(r"구매|거래|판매|선택|확인|요청|제작|건설|강화|설치|장착|교환|사용")
-_NON_ACTION = frozenset({
-    "has", "have", "had", "wants", "want", "needs", "need",
-    "is", "are", "was", "were", "can", "could", "should", "must",
-    "does", "do", "did", "gets", "get", "receives", "receive",
-    "reaches", "reach", "arrives", "arrive", "enters", "enter",
-    "travels", "travel", "dies", "die", "takes", "take",
-    "falls", "fall", "suffers", "suffer", "spawns", "spawn",
-    "owns", "own", "holds", "hold", "possesses", "possess",
-    "accumulates", "accumulate", "becomes", "become",
-})
 _NO_MANUAL = re.compile(
     r"\b(?:automatically|autonomously|without\s+(?:any\s+)?(?:player|user)\s+input)\b"
     r"|자동으로|자동적|입력\s*없이|않(?:는|다)|안\s+", re.IGNORECASE,
@@ -40,6 +31,10 @@ _NO_MANUAL = re.compile(
 
 def _clauses(text):
     return (item.strip() for item in re.split(r"[.;!?\n]+", text) if item.strip())
+
+
+def _is_player_action_predicate(verb, text):
+    return verb not in PASSIVE_PLAYER_HEADS or bool(explicit_player_control(text))
 
 
 def select_original_player_action(behavior: Mapping) -> dict | None:
@@ -53,9 +48,9 @@ def select_original_player_action(behavior: Mapping) -> dict | None:
         for clause in _clauses(str(behavior.get(field) or "")):
             for actor in _ACTOR.finditer(clause):
                 verb = actor["verb"].casefold()
-                if verb in _NON_ACTION:
-                    continue
                 original = clause[actor.start():].strip()
+                if not _is_player_action_predicate(verb, original):
+                    continue
                 # Directly bind a short original action clause, never compose
                 # a new sentence, even if the user's request is in Korean.
                 if len(original) > 512:
@@ -88,11 +83,11 @@ def author_host_owned_player_occurrence(router, behavior, *, symbols,
     selected = select_original_player_action(behavior)
     if selected is None:
         return None
-    from .player_action_evidence import _behavior_hash
+    from .player_action_evidence import ACTION_EVIDENCE_SCHEMA, _behavior_hash
     from .source_owned_ui_event import plan_typed_ui_occurrence
     from .typed_action_authoring import author_action_metadata
 
-    evidence = {"schema": "mmm/player-action-evidence-v1",
+    evidence = {"schema": ACTION_EVIDENCE_SCHEMA,
                 "behavior_sha256": _behavior_hash(behavior), **selected}
     record = {"trigger": str(behavior.get("trigger") or ""),
               "server_action": str(behavior.get("intent") or ""),
