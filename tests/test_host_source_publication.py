@@ -275,3 +275,31 @@ def test_duplicate_original_source_producers_for_one_behavior_are_rejected_prepu
             pytest.fail("conflicting producers were published")
     assert manifest.read_text() == original
     assert not (tmp_path / ".mmm/source-producers").exists()
+
+
+def test_java_only_checkpoint_rollback_holds_cross_process_publication_lock(
+    tmp_path, monkeypatch,
+):
+    from contextlib import contextmanager
+    import minecraft_mod_ai.source_owned_custom_event as producer
+    receipt = tmp_path / ".mmm/construction_host_files/owner.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("accepted")
+    actual_lock = producer._producer_cross_process_lock
+    entered = []
+    @contextmanager
+    def guarded_lock(path):
+        with actual_lock(path):
+            entered.append(path)
+            yield
+    monkeypatch.setattr(producer, "_producer_cross_process_lock", guarded_lock)
+    with pytest.raises(ValueError, match="javac rejected"):
+        with source_publication_transaction(
+            project_root=tmp_path, symbols={}, records=[],
+            tracked_paths=(receipt,),
+        ):
+            assert len(entered) == 1
+            assert entered[0] == tmp_path / ".mmm/source-producer.lock"
+            receipt.write_text("unverified")
+            raise ValueError("javac rejected")
+    assert receipt.read_text() == "accepted"
