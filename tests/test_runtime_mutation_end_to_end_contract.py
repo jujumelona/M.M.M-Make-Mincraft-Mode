@@ -43,6 +43,8 @@ def verified_messages():
             "verified_class": "example.Target", "members": [
                 {"kind": "METHOD", "name": "apply", "static": False,
                  "return_type": "void", "parameters": ["example.Hand"]},
+                {"kind": "METHOD", "name": "setHealth", "static": False,
+                 "return_type": "void", "parameters": ["example.Hand"]},
                 {"kind": "METHOD", "name": "getState", "static": False,
                  "return_type": "int", "parameters": []},
             ],
@@ -93,18 +95,18 @@ def test_native_write_forces_source_owned_even_when_read_hook_exists():
 
 
 def test_exact_checked_world_mutation_is_emitted_with_host_receipt():
-    router = Router([{"action": "complete"}, {"verified_call_id": "v0"}])
+    router = Router([{"action": "complete"}, {"verified_call_id": "v1"}])
     output = author_callback_body(
         router, verified_messages(), data_name="native",
         frame=verified_frame(), effect_receipt=True,
     )
-    assert "target.apply(hand);" in output
-    assert output.index("target.apply(hand);") < output.index("return __mmmHostEffectApplied;")
+    assert "target.setHealth(hand);" in output
+    assert output.index("target.setHealth(hand);") < output.index("return __mmmHostEffectApplied;")
     selection = router.calls[-1][1]
     assert selection["required_native_state"] == "Player health"
-    assert selection["inspected_calls"][0]["signature"] == "example.Target#apply(example.Hand)"
+    assert selection["inspected_calls"][0]["signature"] == "example.Target#setHealth(example.Hand)"
     assert all("getState" not in row["signature"] for row in selection["inspected_calls"])
-    assert selection["inspected_calls"][0]["verified_call_id"] == "v0"
+    assert selection["inspected_calls"][0]["verified_call_id"] == "v1"
 
 
 def test_no_checked_owner_fails_before_any_small_model_output():
@@ -248,3 +250,21 @@ def test_compiler_repair_cannot_drop_a_checked_native_mutation():
         verify_native_runtime_mutation_coverage(
             source.replace(method, "otherMethod"), behavior, receipt,
         )
+
+
+def test_unrelated_checked_callable_cannot_claim_native_effect():
+    # Indexed calls such as apply() may be valid Java but cannot certify an
+    # unrelated gameplay state change.
+    payload = json.loads(verified_messages()[0]["content"])
+    payload["callback_input_api"][0]["members"] = [
+        member for member in payload["callback_input_api"][0]["members"]
+        if member["name"] != "setHealth"
+    ]
+    router = Router([{"action": "complete"}])
+    with pytest.raises(ValueError, match="CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED"):
+        author_callback_body(
+            router, [{"role": "user", "content": json.dumps(payload)}],
+            data_name="irrelevant_mutation", frame=verified_frame(),
+            effect_receipt=True,
+        )
+    assert not any("_runtime_mutation_" in name for name, _, _ in router.calls)
