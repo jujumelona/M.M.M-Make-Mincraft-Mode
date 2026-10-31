@@ -50,7 +50,7 @@ def _occurrence_admissible(behavior, event):
 _BLOCK_BREAK_OWNER = "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents"
 _BLOCK_MINING_TRIGGER = re.compile(
     r"\b(?:mine|mines|mined|mining|harvest(?:s|ed|ing)?\s+(?:a\s+|the\s+)?block|"
-    r"break(?:s|ing|ing)?\s+(?:a\s+|the\s+)?block|"
+    r"break(?:s|ing)?\s+(?:a\s+|the\s+)?block|"
     r"dig(?:s|ging)?\s+(?:a\s+|the\s+)?block)\b"
     r"|채굴|블록\s*파괴",
     re.IGNORECASE,
@@ -114,7 +114,8 @@ def select_behavior_callback(router, behavior, candidates):
     # middle-click pick-block, an unrelated item callback or an idle tick.
     # The event still needs a host-compiled predicate and gameplay effects.
     mined = _verified_block_mining_occurrence(behavior, candidates)
-    if mined is not None and not behavior.get("event_binding"):
+    if mined is not None and not (
+            behavior.get("event_binding") or behavior.get("event_interface")):
         return mined
     by_event = {row["event_id"]: row for row in candidates}
     if not by_event:
