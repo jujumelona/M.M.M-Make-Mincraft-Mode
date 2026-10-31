@@ -361,6 +361,13 @@ def _complete_required_state_effects(
             context_arg = ", " + slot["context"] if slot.get("context") else ""
             operation = (state_owner + ".writeState_" + state_name + "("
                          + expression + context_arg + ");")
+            if typed_values and row.get("operator", "set") in {"add", "subtract"}:
+                # The state API has synchronized read/write methods, but a
+                # separate read + write loses updates on concurrent events.
+                # Both accessors lock this same class, so hold that monitor
+                # across the entire read-modify-write transition.
+                operation = ("synchronized (" + state_owner + ".class) {\n"
+                             + operation + "\n}")
             trial = frame["prefix"] + "\n".join([*statements, operation]) + frame["suffix"]
             validate_generated_java_source(trial, frame, frame["prefix"], frame["suffix"])
             _validate_state(trial, frame)
