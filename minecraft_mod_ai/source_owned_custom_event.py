@@ -512,6 +512,8 @@ def read_verified_custom_event_receipts(
             if (entry if isinstance(entry, str) else entry.get("config"))
             == expected["mixin_config"]
         ]
+        if len(registration) != 1:
+            raise ValueError("SOURCE_SITE_MIXIN_REGISTRATION_DUPLICATE")
         if side == "CLIENT":
             admitted = any(isinstance(entry, dict)
                            and entry.get("environment") == "client"
