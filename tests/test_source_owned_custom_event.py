@@ -485,3 +485,22 @@ def test_custom_rebinding_failure_rolls_back_previous_source(tmp_path, monkeypat
     assert manifest.read_bytes() == old_manifest
     assert all((tmp_path / path).read_text() == code for path, code in previous["files"].items())
     assert len(list((tmp_path / ".mmm/source-producers").glob("*.json"))) == 1
+
+
+def test_renaming_a_valid_mixin_receipt_cannot_pass_source_provenance(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    materialize_verified_custom_event(
+        project_root=tmp_path, symbols=SYMBOLS, source_site_ref="opaqueMethod",
+        behavior_id="buy_module", package="example.generated",
+    )
+    root = tmp_path / ".mmm/source-producers"
+    original = next(root.glob("*.json"))
+    original.rename(root / "unrelated-receipt.json")
+    with pytest.raises(ValueError, match="SOURCE_SITE_RECEIPT_ID_MISMATCH"):
+        read_verified_custom_event_receipts(
+            project_root=tmp_path, symbols=SYMBOLS, behavior_ids=["buy_module"],
+            package="example.generated",
+        )
