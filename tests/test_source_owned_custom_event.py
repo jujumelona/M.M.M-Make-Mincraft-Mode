@@ -504,3 +504,29 @@ def test_renaming_a_valid_mixin_receipt_cannot_pass_source_provenance(tmp_path):
             project_root=tmp_path, symbols=SYMBOLS, behavior_ids=["buy_module"],
             package="example.generated",
         )
+
+
+def test_symlinked_receipt_folder_never_proves_or_mutates_source_ownership(tmp_path):
+    from minecraft_mod_ai.source_owned_custom_event import read_verified_custom_event_receipts
+    manifest = tmp_path / "src/main/resources/fabric.mod.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"schemaVersion": 1, "id": "custommod"}))
+    options = {
+        "project_root": tmp_path, "symbols": SYMBOLS,
+        "source_site_ref": "opaqueMethod", "behavior_id": "buy_module",
+        "package": "example.generated",
+    }
+    materialize_verified_custom_event(**options)
+    original = tmp_path / ".mmm/source-producers"
+    actual = tmp_path / ".mmm/receipt-storage"
+    original.rename(actual)
+    try:
+        original.symlink_to(actual, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink is unsupported on this platform")
+    with pytest.raises(ValueError, match="SOURCE_SITE_PATH_UNSAFE"):
+        read_verified_custom_event_receipts(
+            project_root=tmp_path, symbols=SYMBOLS,
+            behavior_ids=["buy_module"], package="example.generated")
+    with pytest.raises(ValueError, match="SOURCE_SITE_PATH_UNSAFE"):
+        materialize_verified_custom_event(**options)
