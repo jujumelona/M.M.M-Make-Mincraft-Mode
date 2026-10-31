@@ -88,6 +88,10 @@ def candidate_data(source, diagnostic, state):
         result["strategy"] = strategy
     if strategy != "host_source_owned" and state.get("program"):
         result["program_json"] = json.dumps(state["program"], ensure_ascii=False, separators=(",", ":"))
+    if strategy == "host_rule_template":
+        result["rule_ir_records_json"] = json.dumps(
+            state.get("rule_ir_records") or [],
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if strategy == "host_source_owned":
         receipts = state.get("native_mutation_receipts") or []
         result["native_mutation_receipts_json"] = json.dumps(
@@ -101,7 +105,7 @@ def candidate_data(source, diagnostic, state):
 def load_candidate(pending, state, direct):
     if not pending:
         return pending
-    allowed = {"source", "diagnostic", "program_json", "strategy", "native_mutation_receipts_json", "source_publications_json"}
+    allowed = {"source", "diagnostic", "program_json", "strategy", "native_mutation_receipts_json", "source_publications_json", "rule_ir_records_json"}
     if set(pending) - allowed or not {"source", "diagnostic"} <= set(pending):
         raise ValueError("JAVA_HOST_CANDIDATE_INVALID")
     strategy = pending.get("strategy")
@@ -135,8 +139,35 @@ def load_candidate(pending, state, direct):
         state["strategy"] = strategy
         return pending
     if strategy in {"host_verified_source", "host_rule_template"}:
-        if not direct or "program_json" in pending or "native_mutation_receipts_json" in pending:
+        if (not direct or "program_json" in pending
+                or "native_mutation_receipts_json" in pending
+                or "source_publications_json" in pending):
             raise ValueError("JAVA_HOST_NON_AST_CANDIDATE_INVALID")
+        if strategy == "host_rule_template":
+            from hashlib import sha256
+            raw_rules = pending.get("rule_ir_records_json")
+            if not isinstance(raw_rules, str):
+                # Legacy candidates lost the typed observation IR after an
+                # interrupted compiler. Re-author rather than accept Java
+                # source without its exact original occurrence evidence.
+                return {}
+            records = json.loads(raw_rules)
+            if (not isinstance(records, list) or not records or not all(
+                    isinstance(item, dict)
+                    and set(item) == {"identity", "path", "proof"}
+                    and isinstance(item["identity"], str)
+                    and len(item["identity"]) == 64
+                    and item["path"] == ".mmm/construction_rule_ir/" + item["identity"] + ".json"
+                    and isinstance(item["proof"], dict)
+                    and item["proof"].get("schema") == "mmm/host-observation-rules-v1"
+                    and isinstance(item["proof"].get("rules"), list)
+                    and item["proof"].get("source_sha256")
+                    == sha256(pending["source"].encode()).hexdigest()
+                    for item in records)):
+                raise ValueError("JAVA_HOST_RULE_IR_CANDIDATE_INVALID")
+            state["rule_ir_records"] = records
+        elif "rule_ir_records_json" in pending:
+            raise ValueError("JAVA_HOST_NON_RULE_CANDIDATE_INVALID")
         state.pop("program", None)
         state["strategy"] = strategy
         return pending
