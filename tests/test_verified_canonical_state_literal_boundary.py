@@ -113,3 +113,39 @@ def test_typed_schema_uses_scalar_not_source_expression():
     schema = typed_value_schema("boolean")
     assert schema["properties"] == {"value": {"type": "boolean"}}
     assert "expression" not in schema["properties"]
+
+
+def test_verified_numeric_state_addition_uses_checked_read_modify_write():
+    frame = _frame()
+    frame["host_behavior_contract"]["state_writes"] = ["credits"]
+    frame["host_state_access"][0]["methods"] = [{
+        "name": "writeState_credits",
+        "signature": "public static void writeState_credits(long value);",
+    }]
+    router = Router([{"value": 5, "operator": "add"}])
+    source = author_callback_body(
+        router, _verified_source(), data_name="balance_delta",
+        frame=frame, effect_receipt=True,
+    )
+    assert ("example.AuthoredStateModel.writeState_credits("
+            "java.lang.Math.addExact(example.AuthoredStateModel.readState_credits(), 5L));"
+            in source)
+    assert "writeState_credits(5L);" not in source
+    assert router.calls[0][1]["properties"]["operator"]["enum"] == [
+        "set", "add", "subtract",
+    ]
+
+
+def test_checked_typed_state_transition_blocks_noop_delta():
+    frame = _frame()
+    frame["host_behavior_contract"]["state_writes"] = ["credits"]
+    frame["host_state_access"][0]["methods"] = [{
+        "name": "writeState_credits",
+        "signature": "public static void writeState_credits(long value);",
+    }]
+    router = Router([{"value": 0, "operator": "add"}])
+    with pytest.raises(ValueError, match="CALLBACK_OPERATION_INVALID"):
+        author_callback_body(
+            router, _verified_source(), data_name="zero_delta",
+            frame=frame, effect_receipt=True,
+        )
