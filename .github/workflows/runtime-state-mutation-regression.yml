@@ -13,6 +13,8 @@ on:
       - 'minecraft_mod_ai/host_runtime_mutation_catalog.py'
       - 'minecraft_mod_ai/host_verified_callback_ops.py'
       - 'minecraft_mod_ai/host_behavior_event_binding.py'
+      - 'minecraft_mod_ai/source_owned_hook.py'
+      - 'minecraft_mod_ai/host_runtime_mutation_catalog.py'
       - 'tests/test_construction_behavior_state.py'
       - 'tests/test_native_runtime_state_ownership.py'
       - 'tests/test_runtime_mutation_end_to_end_contract.py'
@@ -22,6 +24,7 @@ on:
       - 'tests/test_host_callback_body.py'
       - 'tests/test_host_callback_repair.py'
       - 'tests/test_host_behavior_event_binding.py'
+      - 'tests/test_source_owned_hook.py'
       - 'tests/test_state_provenance_contract.py'
       - 'tests/test_verified_canonical_state_literal_boundary.py'
       - 'tests/test_host_typed_state_access.py'
@@ -67,4 +70,5 @@ jobs:
             tests/test_host_callback_body.py \
             tests/test_host_callback_repair.py \
             tests/test_host_behavior_event_binding.py \
+            tests/test_source_owned_hook.py \
             tests/test_state_provenance_contract.py
