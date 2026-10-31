@@ -224,7 +224,6 @@ def test_compiled_player_state_delta_is_atomic_and_isolated_per_uuid(tmp_path):
     import json
     import shutil
     import subprocess
-    from pathlib import Path
 
     from minecraft_mod_ai.host_prerequisite_api import java_api_declarations
     from minecraft_mod_ai.host_typed_state_access import state_access_contract
