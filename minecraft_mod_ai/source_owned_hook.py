@@ -25,6 +25,19 @@ def _event_candidates_for_occurrence(behavior, candidates):
     not arbitrary feature or theme names. Unknown occurrences deliberately
     retain the complete inspected ABI rather than guessing.
     """
+    # The source-owned production writer must enforce the SAME inspected
+    # occurrence semantics as the host event binder. Previously these paths
+    # diverged: a model chose AFTER_KILLED_OTHER_ENTITY for an ongoing fight,
+    # and later attempted to fabricate damage, health and durability writes
+    # after the victim was already dead.
+    from .host_behavior_event_binding import (
+        _occurrence_admissible, _verified_block_mining_occurrence,
+    )
+
+    candidates = [row for row in candidates if _occurrence_admissible(behavior, row)]
+    mined = _verified_block_mining_occurrence(behavior, candidates)
+    if mined is not None:
+        return [mined]
     trigger = str(behavior.get("trigger") or "").casefold()
     transition = bool(re.search(
         r"\b(?:reach(?:es|ed)?|arriv(?:es|ed|ing)?|enter(?:s|ed|ing)?|"
