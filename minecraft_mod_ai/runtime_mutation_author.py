@@ -118,7 +118,7 @@ def _state_owner_receiver_admissible(state_name, item, frame):
             return params[receiver] == "net.minecraft.world.item.ItemStack"
         match = re.fullmatch(
             r"([A-Za-z_$][A-Za-z0-9_$]*)\."
-            r"(getMainHandItem|getOffhandItem|getWeaponItem)\(\\)", receiver)
+            r"(getMainHandItem|getOffhandItem|getWeaponItem)\(\)", receiver)
         if not match:
             return False
         origin_type = params.get(match.group(1), "")
