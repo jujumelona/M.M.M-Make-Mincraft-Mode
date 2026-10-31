@@ -307,11 +307,17 @@ def _complete_required_state_effects(
         owner = slot["owner"]
         if typed_values:
             from .host_typed_state_values import (
-                lower_typed_java_value, typed_value_schema,
+                lower_typed_state_transition, typed_state_transition_schema,
             )
         def lower(row, *, state_name=name, state_owner=owner):
-            expression = (lower_typed_java_value(row, slot["value_type"])
-                          if typed_values else parse_expression(row["expression"]))
+            read_context = slot.get("context")
+            read_argument = read_context if read_context else ""
+            reader = (state_owner + ".readState_" + state_name + "("
+                      + read_argument + ")")
+            expression = (
+                lower_typed_state_transition(
+                    row, slot["value_type"], reader_expression=reader)
+                if typed_values else parse_expression(row["expression"]))
             # Reading a variable and writing it back is a semantic no-op;
             # it cannot satisfy a requested gameplay state transition.
             if expression in {
@@ -328,15 +334,16 @@ def _complete_required_state_effects(
             return operation
         statement = _ask(
             router, scoped, name=data_name + "_required_state_" + name,
-            schema=(typed_value_schema(slot["value_type"]) if typed_values
+            schema=(typed_state_transition_schema(slot["value_type"]) if typed_values
                     else _EXPRESSION_SCHEMA),
             context={
                 "instruction": (
-                    "Choose the exact typed JSON value for this canonical state "
-                    "transition. Do not supply Java syntax, methods, getters, "
-                    "statements or quoted Java literals. The host renders Java "
-                    "from the JSON primitive. Never substitute an unrelated "
-                    "gameplay effect for the requested state change."
+                    "Choose the typed JSON state transition: 'set', 'add', "
+                    "or 'subtract' (numeric values only), plus a value. The "
+                    "host reads and writes the SAME canonical state and owner. "
+                    "Use 'add' for accumulating, 'subtract' for consumption "
+                    "and 'set' for an absolute target value. Do not supply "
+                    "Java source, method names or an unrelated effect."
                     if typed_values else
                     "Produce ONLY the value expression for this exact required "
                     "canonical state write. The host owns the call, state name "
