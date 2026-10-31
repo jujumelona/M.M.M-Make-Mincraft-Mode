@@ -238,3 +238,15 @@ def test_block_break_occurrence_does_not_override_explicit_nonmining_behavior():
         "trigger": "Each server tick, without mining",
     }, [after, tick])
     assert selected is tick
+
+
+def test_explicit_event_interface_contract_takes_precedence_over_inferred_mining():
+    after = _event(
+        "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents", "AFTER")
+    another = _event("test.CustomMiningEvents", "TRIGGER")
+    selected = select_behavior_callback(None, {
+        "behavior_id": "explicit-hook",
+        "trigger": "Player mines resource blocks",
+        "event_interface": another["event_interface"],
+    }, [after, another])
+    assert selected is another
