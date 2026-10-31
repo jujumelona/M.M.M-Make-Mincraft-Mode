@@ -424,9 +424,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # Only compiler-admitted rules may become durable source
                 # observation evidence, and failures in this write participate
                 # in the same rollback as the Java owner and its producers.
-                from .construction_direct_writer import _save_checkpoint as _save_rule_ir
+                from .host_rule_feature import save_rule_ir_proof
                 for rule_path, rule_identity, rule_proof in context["pending_rule_ir"]:
-                    _save_rule_ir(rule_path, rule_identity, rule_proof)
+                    save_rule_ir_proof(rule_path, rule_identity, rule_proof)
                 from .construction_coverage import record_authored_source_calls
                 record_authored_source_calls(
                     root, spec["target_path"], source, source_kind="direct")
