@@ -150,6 +150,13 @@ def _choose(router, field, schema, context):
 
 def _choose_verified_owner(router, schema, context, row, variables):
     """Choose a known runtime scope; never ask for an unconstrained label."""
+    reference = str(context.get("original_state_reference") or "")
+    segments = re.split(r"[.:/]", reference, maxsplit=1)
+    if len(segments) > 1 and segments[0].casefold() == "player":
+        # This is a player-scoped value. Permitting the LLM to select
+        # "server" here would convert each player's balance into one global
+        # balance that compiles but corrupts multiplayer behavior.
+        return "player"
     owners = ["server", "player", "world", "entity"]
     for variable in variables:
         owner = variable.get("owner")
