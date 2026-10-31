@@ -488,3 +488,29 @@ public class Bridge {
         capture_output=True, text=True, timeout=30, check=False)
     assert executed.returncode == 0, executed.stderr
     assert "ITEM_DAMAGE_DELTA_PASS" in executed.stdout
+
+
+
+def test_damageable_item_trait_requires_actual_callback_weapon_owner():
+    from minecraft_mod_ai.runtime_mutation_author import _state_owner_receiver_admissible
+
+    state = "Weapon durability"
+    trait = ["minecraft:item_durability_as_damage"]
+    frame = {"prefix": (
+        "private boolean apply("
+        "net.minecraft.world.damagesource.DamageSource source, "
+        "net.minecraft.server.level.ServerLevel world) {\n"
+    )}
+    def item(receiver):
+        return {
+            "receiver": receiver, "native_state_traits": trait,
+            "signature": "net.minecraft.world.item.ItemStack#setDamageValue(int)",
+        }
+    assert _state_owner_receiver_admissible(
+        state, item("source.getWeaponItem()"), frame)
+    assert not _state_owner_receiver_admissible(
+        state, item("world.getRandomWeaponItem()"), frame)
+    assert not _state_owner_receiver_admissible(
+        state, item("world.getWeaponItem()"), frame)
+    assert not _state_owner_receiver_admissible(
+        state, item("source.getUnrelatedItem()"), frame)
