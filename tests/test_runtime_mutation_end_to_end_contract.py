@@ -506,7 +506,9 @@ def test_damageable_item_trait_requires_actual_callback_weapon_owner():
             "receiver": receiver, "native_state_traits": trait,
             "signature": "net.minecraft.world.item.ItemStack#setDamageValue(int)",
         }
-    assert _state_owner_receiver_admissible(
+    # The damaged weapon is causally related to the attack, but the
+    # nullable getter cannot be dereferenced without a checked guard.
+    assert not _state_owner_receiver_admissible(
         state, item("source.getWeaponItem()"), frame)
     assert not _state_owner_receiver_admissible(
         state, item("world.getRandomWeaponItem()"), frame)
@@ -514,3 +516,22 @@ def test_damageable_item_trait_requires_actual_callback_weapon_owner():
         state, item("world.getWeaponItem()"), frame)
     assert not _state_owner_receiver_admissible(
         state, item("source.getUnrelatedItem()"), frame)
+
+
+
+def test_player_mainhand_item_is_nonnullable_verified_durability_receiver():
+    from minecraft_mod_ai.runtime_mutation_author import _state_owner_receiver_admissible
+
+    frame = {"prefix": (
+        "private boolean apply("
+        "net.minecraft.world.entity.player.Player player, "
+        "net.minecraft.server.level.ServerLevel level) {\n"
+    )}
+    item = {
+        "receiver": "player.getMainHandItem()",
+        "signature": "net.minecraft.world.item.ItemStack#setDamageValue(int)",
+        "native_state_traits": ["minecraft:item_durability_as_damage"],
+    }
+    assert _state_owner_receiver_admissible("Weapon durability", item, frame)
+    assert not _state_owner_receiver_admissible(
+        "Weapon durability", {**item, "receiver": "level.getMainHandItem()"}, frame)
