@@ -108,3 +108,73 @@ def test_metadata_key_order_after_reload_does_not_change_member_request_identity
     assert second.generate_java_source("coder", [{"role": "user", "content": json.dumps(reloaded)}],
         data_name="ping_body", source_frame=FRAME) == expected
     assert backend.calls == 0
+
+
+def test_structured_journal_write_failure_restores_cursor_and_replays_after_retry(
+    tmp_path, monkeypatch,
+):
+    from pathlib import Path
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "durable-structured-io-retry-test")
+    class StructuredBackend(Backend):
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            self.calls += 1
+            return {"value": "accepted"}
+    backend = StructuredBackend()
+    current = journal(tmp_path, backend)
+    original_replace = Path.replace
+    failed = []
+    def fail_once(self, target):
+        if str(target) == str(current.path) and not failed:
+            failed.append(True)
+            raise OSError("simulated journal disk write failure")
+        return original_replace(self, target)
+    monkeypatch.setattr(Path, "replace", fail_once)
+    with pytest.raises(OSError, match="simulated journal disk write failure"):
+        current.generate_structured_data(
+            "coder", MESSAGES, data_name="metadata",
+            parameters={"type": "object"})
+    assert current.position == 0
+    assert current.rows == []
+    assert not current.path.exists()
+    assert current.generate_structured_data(
+        "coder", MESSAGES, data_name="metadata",
+        parameters={"type": "object"}) == {"value": "accepted"}
+    assert backend.calls == 2
+    assert current.position == 1
+    assert len(current.rows) == 1
+    fresh = journal(tmp_path, StructuredBackend(error=AssertionError("must replay")))
+    assert fresh.generate_structured_data(
+        "coder", MESSAGES, data_name="metadata",
+        parameters={"type": "object"}) == {"value": "accepted"}
+
+
+def test_java_journal_write_failure_does_not_leave_unsaved_member_in_memory(
+    tmp_path, monkeypatch,
+):
+    from pathlib import Path
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "durable-java-io-retry-test")
+    backend = Backend()
+    current = journal(tmp_path, backend)
+    original_replace = Path.replace
+    failed = []
+    def fail_once(self, target):
+        if str(target) == str(current.path) and not failed:
+            failed.append(True)
+            raise OSError("simulated member journal failure")
+        return original_replace(self, target)
+    monkeypatch.setattr(Path, "replace", fail_once)
+    with pytest.raises(OSError, match="simulated member journal failure"):
+        current.generate_java_source(
+            "coder", MESSAGES, data_name="ping_body", source_frame=FRAME)
+    assert current.position == 0
+    assert current.rows == []
+    assert not current.path.exists()
+    assert "return;" in current.generate_java_source(
+        "coder", MESSAGES, data_name="ping_body", source_frame=FRAME)
+    assert backend.calls == 2
+    assert current.position == 1
+    assert len(current.rows) == 1
