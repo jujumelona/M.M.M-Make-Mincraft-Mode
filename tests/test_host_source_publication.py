@@ -312,7 +312,8 @@ def test_rule_ir_is_not_persisted_before_target_compile_acceptance(
     import minecraft_mod_ai.construction_host_source as host
     import minecraft_mod_ai.host_rule_feature as rules
     from minecraft_mod_ai.construction_host_source import compose_host_java_source
-    from minecraft_mod_ai.construction_direct_writer import _read_checkpoint
+    from minecraft_mod_ai.host_rule_feature import read_rule_ir_proof
+    import hashlib
     manifest, _ = _workspace(tmp_path)
     behavior = {"behavior_id": "observation", "trigger": "inspected event",
                 "intent": "respond to observation", "effects": "actual effect"}
@@ -356,6 +357,8 @@ def test_rule_ir_is_not_persisted_before_target_compile_acceptance(
         context["pending_rule_ir"].append((
             rule_path, "rule-proof", {
                 "schema": "mmm/host-observation-rules-v1",
+                "owner": "example.Bridge", "rules": [],
+                "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
                 "target_compilation_verified": False,
                 "runtime_verified": False,
             }))
@@ -375,7 +378,7 @@ def test_rule_ir_is_not_persisted_before_target_compile_acceptance(
             owner="example.Bridge", behaviors=[behavior])
     if compiler_ok:
         assert produce() == source
-        assert _read_checkpoint(rule_path, "rule-proof")["runtime_verified"] is False
+        assert read_rule_ir_proof(rule_path, "rule-proof")["runtime_verified"] is False
     else:
         with pytest.raises(ValueError, match="HOST_RULE_TEMPLATE_COMPILATION_FAILED"):
             produce()
@@ -413,3 +416,20 @@ def test_source_publication_rejects_external_symlinked_os_lock(
             pytest.fail("unsafe OS lock admitted a source write")
     assert manifest.read_text() == original
     assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
+
+
+def test_rule_ir_checkpoint_roundtrip_rejects_structural_corruption(tmp_path):
+    from minecraft_mod_ai.host_rule_feature import save_rule_ir_proof, read_rule_ir_proof
+    from minecraft_mod_ai.construction_direct_writer import _save_checkpoint
+    proof = {
+        "schema": "mmm/host-observation-rules-v1",
+        "owner": "example.Bridge", "rules": [{"gate": "observed"}],
+        "source_sha256": "a" * 64,
+        "target_compilation_verified": False, "runtime_verified": False,
+    }
+    location = tmp_path / ".mmm/construction_rule_ir/test.json"
+    save_rule_ir_proof(location, "test", proof)
+    assert read_rule_ir_proof(location, "test") == proof
+    _save_checkpoint(location, "test", {"rule_ir_json": '{"rules":[]}'})
+    with pytest.raises(ValueError, match="RULE_IR_CHECKPOINT_PROOF_INVALID"):
+        read_rule_ir_proof(location, "test")
