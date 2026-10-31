@@ -296,3 +296,28 @@ def test_argument_choices_are_bound_after_method_selection(value_count, argument
     method_arguments = router.pages[0]["inspected_calls"][0]["typed_arguments"]
     assert all("verified_values" not in row for row in method_arguments)
     assert all(row["verified_value_count"] == value_count for row in method_arguments)
+
+
+
+def test_native_catalog_never_uses_ambient_player_lookup_as_effect_receiver():
+    from minecraft_mod_ai.host_runtime_mutation_catalog import _receiver_target
+
+    class Evidence:
+        def _accessible(self, owner):
+            return True
+
+    world = "net.minecraft.server.level.ServerLevel"
+    actor = "net.minecraft.world.entity.LivingEntity"
+    player = "net.minecraft.server.level.ServerPlayer"
+    method = lambda name: {
+        "kind": "METHOD", "parameters": [], "static": False,
+        "name": name, "return_type": player,
+    }
+    assert _receiver_target(Evidence(), world, "random", method("getRandomPlayer")) is None
+    assert _receiver_target(Evidence(), actor, "last", method("getLastHurtByPlayer")) is None
+    # Legitimate component getters remain available for a causal player
+    # receiver; the gate is about changing who the actor is.
+    item = {**method("getMainHandItem"),
+            "return_type": "net.minecraft.world.item.ItemStack"}
+    assert _receiver_target(Evidence(), player, "mainhand", item)["destination_type"] == (
+        "net.minecraft.world.item.ItemStack")
