@@ -250,3 +250,55 @@ def test_explicit_event_interface_contract_takes_precedence_over_inferred_mining
         "event_interface": another["event_interface"],
     }, [after, another])
     assert selected is another
+
+
+def test_ongoing_combat_cannot_be_bound_to_post_kill_event():
+    ended = _event(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents",
+        "AFTER_KILLED_OTHER_ENTITY")
+    occurrence = _event(
+        "net.fabricmc.fabric.api.event.player.AttackEntityCallback", "EVENT")
+
+    class ChooseActualOccurrence:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            payload = json.loads(messages[-1]["content"])
+            choices = payload.get("verified_hook_index", payload.get("verified_listeners", []))
+            assert occurrence["event_id"] in {x["event_id"] for x in choices}
+            assert ended["event_id"] not in {x["event_id"] for x in choices}
+            return {"event_binding": occurrence["event_id"]}
+
+    result = select_behavior_callback(ChooseActualOccurrence(), {
+        "behavior_id": "fight",
+        "trigger": "Alien encounter in space",
+        "intent": "Fight aliens in space",
+        "effects": "Combat with aliens",
+        "runtime_state_writes": ["Combat damage", "Player health", "Weapon durability"],
+    }, [ended, occurrence])
+    assert result == occurrence
+
+
+def test_explicit_kill_event_remains_available_for_kill_trigger():
+    ended = _event(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents",
+        "AFTER_KILLED_OTHER_ENTITY")
+
+    class SelectOnly:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            return {"event_binding": ended["event_id"]}
+
+    assert select_behavior_callback(SelectOnly(), {
+        "behavior_id": "loot_on_kill",
+        "trigger": "After the player killed a creature",
+        "effects": "Grant the kill reward",
+    }, [ended]) is ended
+
+
+def test_unusable_terminal_event_fails_instead_of_faking_combat():
+    ended = _event(
+        "net.fabricmc.fabric.api.entity.event.v1.ServerEntityCombatEvents",
+        "AFTER_KILLED_OTHER_ENTITY")
+    with pytest.raises(HostEventBindingError, match="no_intrinsically_compatible_verified_occurrence"):
+        select_behavior_callback(None, {
+            "behavior_id": "fight",
+            "trigger": "Alien encounter in space",
+        }, [ended])
