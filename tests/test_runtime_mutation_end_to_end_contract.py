@@ -266,3 +266,63 @@ def test_unrelated_checked_callable_cannot_claim_native_effect():
             effect_receipt=True,
         )
     assert not any("_runtime_mutation_" in name for name, _, _ in router.calls)
+
+
+
+def test_native_mutation_candidates_reject_telemetry_even_if_name_matches():
+    from minecraft_mod_ai.runtime_mutation_author import (
+        _native_state_effect_method, _state_backed_native_candidates,
+    )
+    methods = [
+        ("t0", {"name": "recordDamage", "signature": "example.CombatTracker#recordDamage(float)"}),
+        ("t1", {"name": "broadcastDamageEvent", "signature": "example.World#broadcastDamageEvent(float)"}),
+        ("t2", {"name": "showVehicleHealth", "signature": "example.Entity#showVehicleHealth()"}),
+        ("m3", {"name": "setHealth", "signature": "example.Player#setHealth(float)"}),
+    ]
+    damage = _state_backed_native_candidates("Combat damage", methods)
+    assert {m["name"] for _, m in damage} == {"recordDamage", "broadcastDamageEvent"}
+    assert not any(_native_state_effect_method(m["name"]) for _, m in damage)
+    assert _native_state_effect_method("setHealth")
+    assert not _native_state_effect_method("showVehicleHealth")
+
+
+def test_native_player_health_cannot_target_arbitrary_world_player_getter():
+    from minecraft_mod_ai.runtime_mutation_author import _state_owner_receiver_admissible
+
+    frame = {"prefix": (
+        "private boolean apply(net.minecraft.server.level.ServerLevel level, "
+        "net.minecraft.world.entity.LivingEntity victim) {\n"
+    )}
+    unsafe = [
+        "level.getRandomPlayer()",
+        "victim.getLastHurtByPlayer()",
+        "level.getPlayers().get(0)",
+    ]
+    for receiver in unsafe:
+        candidate = {
+            "receiver": receiver,
+            "signature": "net.minecraft.server.level.ServerPlayer#setHealth(float)",
+        }
+        assert not _state_owner_receiver_admissible("Player health", candidate, frame)
+    assert not _state_owner_receiver_admissible("Player health", {
+        "receiver": "victim",
+        "signature": "net.minecraft.world.entity.LivingEntity#setHealth(float)",
+    }, frame)
+
+
+def test_player_native_health_mutator_must_bind_to_event_player():
+    from minecraft_mod_ai.runtime_mutation_author import _state_owner_receiver_admissible
+
+    frame = {"prefix": (
+        "private boolean apply(net.minecraft.server.level.ServerPlayer player, "
+        "net.minecraft.server.level.ServerLevel level) {\n"
+    )}
+    direct = {"receiver": "player",
+              "signature": "net.minecraft.server.level.ServerPlayer#setHealth(float)"}
+    assert _state_owner_receiver_admissible("Player health", direct, frame)
+    assert not _state_owner_receiver_admissible("Player health", {
+        **direct, "receiver": "level.getRandomPlayer()",
+    }, frame)
+    assert not _state_owner_receiver_admissible("Player health", {
+        **direct, "receiver": "level",
+    }, frame)
