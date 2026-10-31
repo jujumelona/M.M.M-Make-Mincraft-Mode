@@ -39,6 +39,22 @@ _TERMINAL_EVENTS = {
     ("net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents",
      "AFTER_DEATH"),
 }
+_AFTER_DAMAGE_EVENTS = {
+    ("net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents",
+     "AFTER_DAMAGE"),
+}
+_DAMAGE_OCCURRENCE = re.compile(
+    r"\b(?:after\s+(?:being\s+)?(?:hit|hurt|damaged)|"
+    r"when\s+(?:a\s+|the\s+)?(?:entity|player|mob|alien)\s+"
+    r"(?:takes?|receives?)\s+damage|"
+    r"damage\s+(?:is|was|has\s+been)\s+(?:dealt|received|applied)|"
+    r"on\s+damage|on\s+hit)\b"
+    r"|피해(?:를)?\s*(?:받(?:으면|았|은)|입(?:으면|었|은))"
+    r"|피격|공격(?:당한|받은)\s*후",
+    re.IGNORECASE,
+)
+
+
 _DEATH_TRIGGER = re.compile(
     r"\b(?:kill(?:s|ed|ing)?|slay(?:s|ing)?|slew|death|dead|"
     r"dies|died|defeat(?:s|ed|ing)?|fatal|lethal)\b"
@@ -50,6 +66,11 @@ _DEATH_TRIGGER = re.compile(
 def _occurrence_admissible(behavior, event):
     owner = str(event.get("event_owner") or "")
     field = str(event.get("event_field") or "").upper()
+    if (owner, field) in _AFTER_DAMAGE_EVENTS:
+        # An already-applied damage event cannot be the *cause* of a new
+        # combat encounter. It may observe a genuine on-damage requirement.
+        return bool(_DAMAGE_OCCURRENCE.search(
+            str(behavior.get("trigger") or "")))
     if (owner, field) in _TERMINAL_EVENTS:
         # Use the original occurrence, not the model's invented auxiliary
         # state writes. A combat feature does not imply a kill/death hook.
