@@ -269,7 +269,7 @@ def _obsolete_custom_sources(root, symbols, metadata, behavior_id, package,
     and fabric.mod.json entry. Removing an unverified or edited file is never
     permitted; such a conflict needs explicit manual reconciliation.
     """
-    folder = root / ".mmm/source-producers"
+    folder = _checked_source_target(root, ".mmm/source-producers")
     if not folder.is_dir():
         return []
     mixins = metadata.get("mixins", [])
@@ -476,7 +476,7 @@ def read_verified_custom_event_receipts(
     names = {row if isinstance(row, str) else row.get("config")
              for row in present if isinstance(row, (dict, str))}
     allowed = set(behavior_ids)
-    folder = root / ".mmm/source-producers"
+    folder = _checked_source_target(root, ".mmm/source-producers")
     if not folder.is_dir():
         return []
     checked = {}
