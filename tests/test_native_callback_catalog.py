@@ -309,10 +309,11 @@ def test_native_catalog_never_uses_ambient_player_lookup_as_effect_receiver():
     world = "net.minecraft.server.level.ServerLevel"
     actor = "net.minecraft.world.entity.LivingEntity"
     player = "net.minecraft.server.level.ServerPlayer"
-    method = lambda name: {
-        "kind": "METHOD", "parameters": [], "static": False,
-        "name": name, "return_type": player,
-    }
+    def method(name):
+        return {
+            "kind": "METHOD", "parameters": [], "static": False,
+            "name": name, "return_type": player,
+        }
     assert _receiver_target(Evidence(), world, "random", method("getRandomPlayer")) is None
     assert _receiver_target(Evidence(), actor, "last", method("getLastHurtByPlayer")) is None
     # Legitimate component getters remain available for a causal player
