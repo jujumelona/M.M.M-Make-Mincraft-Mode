@@ -201,3 +201,40 @@ def test_pick_entity_and_pick_block_callbacks_are_not_interchangeable():
          "trigger": "Player uses pick-block control to select a block"},
         [entity, block],
     ) is block
+
+
+def test_verified_mining_event_is_bound_by_host_without_model_event_choice():
+    owner = "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents"
+    completed = _event(owner, "AFTER")
+    before = _event(owner, "BEFORE")
+    pick = _event(
+        "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents", "BLOCK")
+    random_tick = _event("test.TickEvents", "END_LEVEL_TICK")
+
+    class RejectModelEventSelection:
+        def generate_structured_data(self, *args, **kwargs):
+            raise AssertionError("Mining occurrence was already verified by host")
+
+    selected = select_behavior_callback(RejectModelEventSelection(), {
+        "behavior_id": "gather",
+        "trigger": "Player enters a resource-rich area and begins mining/gathering",
+        "effects": "Add resources and money when blocks are mined",
+        "runtime_state_writes": ["player.inventory.currency"],
+    }, [random_tick, pick, before, completed])
+    assert selected is completed
+
+
+def test_block_break_occurrence_does_not_override_explicit_nonmining_behavior():
+    after = _event(
+        "net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents", "AFTER")
+    tick = _event("test.TickEvents", "END_LEVEL_TICK")
+
+    class TickSelector:
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            return {"event_binding": tick["event_id"]}
+
+    selected = select_behavior_callback(TickSelector(), {
+        "behavior_id": "time",
+        "trigger": "Each server tick, without mining",
+    }, [after, tick])
+    assert selected is tick
