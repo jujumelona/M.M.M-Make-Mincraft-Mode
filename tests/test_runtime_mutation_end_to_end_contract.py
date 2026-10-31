@@ -369,3 +369,122 @@ def test_runtime_mutation_author_rejects_damage_log_and_arbitrary_player():
             semantic_statements=[], effect_receipt=True,
             receipt_name="__mmmHostEffectApplied",
         )
+
+
+
+def _verified_item_durability_payload(*, include_max_damage=True):
+    methods = [
+        {"kind": "METHOD", "name": "setDamageValue", "static": False,
+         "return_type": "void", "parameters": ["int"]},
+        {"kind": "METHOD", "name": "getDamageValue", "static": False,
+         "return_type": "int", "parameters": []},
+    ]
+    if include_max_damage:
+        methods.append({"kind": "METHOD", "name": "getMaxDamage",
+                        "static": False, "return_type": "int", "parameters": []})
+    item_type = "net.minecraft.world.item.ItemStack"
+    return [{
+        "role": "user",
+        "content": json.dumps({
+            "verified_event_callback": {"parameters": [item_type]},
+            "declaration_metadata": {"parameters": [
+                {"name": "stack", "type": item_type}]},
+            "callback_input_api": [{
+                "verified_class": item_type, "members": methods,
+            }],
+        }),
+    }]
+
+
+def _durability_frame():
+    return {
+        "kind": "method",
+        "prefix": ("private boolean apply("
+                   "net.minecraft.world.item.ItemStack stack) {\n"),
+        "suffix": "\n}",
+        "host_behavior_contract": {
+            "behavior_id": "generic-wear",
+            "runtime_state_writes": ["Weapon durability"],
+            "state_reads": [], "state_writes": [],
+        },
+    }
+
+
+def test_verified_item_damage_trait_compiles_incremental_durability_effect():
+    router = Router([{"verified_call_id": "m0"}, {"expression": "2"}])
+    source = author_callback_body(
+        router, _verified_item_durability_payload(),
+        data_name="item_wear", frame=_durability_frame(), effect_receipt=True,
+    )
+    assert "stack.setDamageValue(" in source
+    assert "stack.getDamageValue() + Math.max(1L, (long) (2))" in source
+    assert "stack.getMaxDamage()" in source
+    assert router.calls[0][1]["inspected_calls"][0]["signature"] == (
+        "net.minecraft.world.item.ItemStack#setDamageValue(int)")
+
+
+def test_unverified_item_damage_trait_does_not_guess_durability_mutation():
+    router = Router([])
+    with pytest.raises(
+            ValueError, match="CALLBACK_RUNTIME_MUTATION_BACKING_API_UNRESOLVED"):
+        author_callback_body(
+            router, _verified_item_durability_payload(include_max_damage=False),
+            data_name="item_wear", frame=_durability_frame(), effect_receipt=True)
+    assert router.calls == []
+
+
+def test_verified_durability_java_is_executable_with_real_increment_not_reset(tmp_path):
+    import shutil
+    import subprocess
+
+    javac, java = shutil.which("javac"), shutil.which("java")
+    if not javac or not java:
+        pytest.skip("JDK compiler and runtime are required")
+    source = author_callback_body(
+        Router([{"verified_call_id": "m0"}, {"expression": "2"}]),
+        _verified_item_durability_payload(), data_name="wear_jvm",
+        frame=_durability_frame(), effect_receipt=True,
+    )
+    item = """
+package net.minecraft.world.item;
+public final class ItemStack {
+    int damage;
+    public ItemStack(int value) { damage = value; }
+    public int getDamageValue() { return damage; }
+    public int getMaxDamage() { return 20; }
+    public void setDamageValue(int value) { damage = value; }
+}
+"""
+    main = """
+package example;
+public class Bridge {
+""" + source + """
+    public static void main(String[] args) {
+        Bridge bridge = new Bridge();
+        var stack = new net.minecraft.world.item.ItemStack(5);
+        if (!bridge.apply(stack) || stack.getDamageValue() != 7)
+            throw new AssertionError("must increment from existing damage");
+        if (!bridge.apply(stack) || stack.getDamageValue() != 9)
+            throw new AssertionError("must accumulate damage");
+        System.out.println("ITEM_DAMAGE_DELTA_PASS");
+    }
+}
+"""
+    paths = []
+    for filename, contents in {
+        "example/Bridge.java": main,
+        "net/minecraft/world/item/ItemStack.java": item,
+    }.items():
+        file = tmp_path / filename
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(contents, encoding="utf-8")
+        paths.append(str(file))
+    compiled = subprocess.run(
+        [javac, "-proc:none", "-d", str(tmp_path), *paths],
+        capture_output=True, text=True, timeout=60, check=False)
+    assert compiled.returncode == 0, compiled.stderr
+    executed = subprocess.run(
+        [java, "-cp", str(tmp_path), "example.Bridge"],
+        capture_output=True, text=True, timeout=30, check=False)
+    assert executed.returncode == 0, executed.stderr
+    assert "ITEM_DAMAGE_DELTA_PASS" in executed.stdout
