@@ -381,3 +381,35 @@ def test_rule_ir_is_not_persisted_before_target_compile_acceptance(
             produce()
         assert not rule_path.exists()
     assert checked == [True]
+
+
+@pytest.mark.parametrize("symlink_target", ["lock_file", "lock_directory"])
+def test_source_publication_rejects_external_symlinked_os_lock(
+    tmp_path, symlink_target,
+):
+    manifest, original = _workspace(tmp_path)
+    location = tmp_path / ".mmm/source-producer.lock"
+    location.parent.mkdir(parents=True)
+    if symlink_target == "lock_file":
+        outside = tmp_path / "outside-lock-file"
+        outside.write_bytes(b"")
+        try:
+            location.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+    else:
+        outside = tmp_path / "outside-lock-directory"
+        outside.mkdir()
+        location.parent.rmdir()
+        try:
+            location.parent.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("directory symlinks unavailable")
+    with pytest.raises(ValueError, match="SOURCE_PRODUCER_LOCK_PATH_UNSAFE"):
+        with source_publication_transaction(
+            project_root=tmp_path, symbols=_SYMBOLS,
+            records=[{"kind": "custom", "args": dict(_ARGS)}],
+        ):
+            pytest.fail("unsafe OS lock admitted a source write")
+    assert manifest.read_text() == original
+    assert not list((tmp_path / ".mmm/source-producers").glob("*.json"))
