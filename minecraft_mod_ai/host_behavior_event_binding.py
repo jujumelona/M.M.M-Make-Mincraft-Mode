@@ -17,9 +17,9 @@ import re
 # turn a verified but wrong listener into proof of the requested trigger.
 _PICK_ITEM_OWNER = "net.fabricmc.fabric.api.event.player.PlayerPickItemEvents"
 _PICK_BLOCK_ACTION = re.compile(
-    r"\\b(?:pick[- ]block|pick[- ]item[- ]from[- ]block|clone[- ]block|"
-    r"middle[- ]click(?:ing|ed)?\\s+(?:on\\s+)?(?:a\\s+|the\\s+)?block)\\b"
-    r"|블록\\s*선택",
+    r"\b(?:pick[- ]block|pick[- ]item[- ]from[- ]block|clone[- ]block|"
+    r"middle[- ]click(?:ing|ed)?\s+(?:on\s+)?(?:a\s+|the\s+)?block)\b"
+    r"|블록\s*선택",
     re.IGNORECASE,
 )
 
