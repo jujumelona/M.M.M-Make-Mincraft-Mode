@@ -14,8 +14,7 @@ from test_construction_behavior_state import BindingRouter, plan, variable
     "Player health", "player health", "alien.health", "Alien entity health",
     "player hunger", "Weapon durability", "player armor durability",
     "Combat damage", "player.weapon_damage", "player position",
-    "player.inventory.currency", "current world", "game mode", "alien.alive",
-    "Combat particles and effects", "available planets",
+    "game mode", "alien.alive",
 ])
 def test_native_state_is_classified_as_live_runtime(name):
     assert _runtime_owned_state_reference(name)
@@ -34,6 +33,9 @@ def test_native_state_is_classified_as_live_runtime(name):
 @pytest.mark.parametrize("name", [
     "ship_performance_level", "crew_level", "credits", "custom_ship_power",
     "spacecraft_construction_progress", "weapon_level",
+    "player.inventory.currency", "world.resource_nodes.depleted",
+    "entity.custom_energy", "world.planets.colonized",
+    "current world", "Combat particles and effects", "available planets",
 ])
 def test_custom_state_is_not_reclassified_as_vanilla(name):
     assert not _runtime_owned_state_reference(name)
@@ -88,3 +90,34 @@ def test_saved_native_scalar_migration_rejects_unrelated_declaration():
     }}
     with pytest.raises(ValueError, match="BEHAVIOR_STATE_NATIVE_SCALAR_MIGRATION_UNSAFE"):
         reconcile_behavior_state(BindingRouter(), original)
+
+
+def test_saved_heuristic_world_owner_reopened_and_canonicalized():
+    # A saved run previously classified every player.inventory.* descendant
+    # as vanilla even if the leaf is a custom mod-owned field.
+    from test_construction_behavior_state import new_state_decisions
+
+    reference = "player.inventory.currency"
+    old = plan()
+    behavior = old.request_scope["behavior_requirements"][0]
+    behavior["state_reads"] = []
+    behavior["state_writes"] = []
+    behavior["runtime_state_reads"] = [reference]
+    behavior["runtime_state_writes"] = [reference]
+    old.request_scope["behavior_state_bindings"] = {reference: {
+        "original_name": reference,
+        "binding": "world_state",
+        "observation": reference,
+        "semantic_status": "host_native_runtime_owner",
+    }}
+    before = old.to_dict()
+    recovered = reconcile_behavior_state(
+        BindingRouter(new_state_decisions()), old)
+    assert old.to_dict() == before
+    fixed = recovered.request_scope["behavior_requirements"][0]
+    assert fixed.get("runtime_state_reads") == []
+    assert fixed.get("runtime_state_writes") == []
+    assert fixed["state_reads"] == fixed["state_writes"]
+    assert len(fixed["state_writes"]) == 1
+    assert recovered.request_scope["behavior_state_bindings"][reference]["binding"] == "new_scalar_state"
+    assert reconcile_behavior_state(BindingRouter(), recovered).to_dict() == recovered.to_dict()
