@@ -464,7 +464,7 @@ def read_verified_custom_event_receipts(
     are rejected before an event may satisfy registration proof.
     """
     root = Path(project_root).resolve()
-    manifest = root / "src/main/resources/fabric.mod.json"
+    manifest = _checked_source_target(root, "src/main/resources/fabric.mod.json")
     if not manifest.is_file():
         return []
     config = json.loads(manifest.read_text(encoding="utf-8"))
