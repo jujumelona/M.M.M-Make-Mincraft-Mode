@@ -89,34 +89,46 @@ class JournaledConstructionRouter:
                          "kwargs": kwargs})
         with _LOCK:
             index = self.position
-            self.position += 1
             if index < len(self.rows):
                 row = self.rows[index]
                 if row.get("input_sha256") != identity:
                     raise ValueError("CONSTRUCTION_INFERENCE_REPLAY_DRIFT: " + str(index))
-                return json.loads(row["response_json"])
+                result = json.loads(row["response_json"])
+                self.position += 1
+                return result
             if index != len(self.rows):
                 raise ValueError("CONSTRUCTION_INFERENCE_GAP")
-        # Do not hold the journal lock while running the model.
-        result = self.router.generate_structured_data(
-            role, messages, data_name=data_name, parameters=parameters, **kwargs)
-        serialized = _json(result)
-        with _LOCK:
-            if len(self.rows) != index:
-                raise ValueError("CONSTRUCTION_INFERENCE_CONCURRENT_CONFLICT")
-            self.rows.append({"input_sha256": identity, "response_json": serialized})
-            envelope = {"binding": self.binding, "rows": self.rows,
-                        "digest": _sha(self.rows)}
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
-            try:
-                tmp.write_text(_json(envelope), encoding="utf-8")
-                with model_execution_publication():
-                    tmp.replace(self.path)
-            finally:
-                if tmp.exists():
-                    tmp.unlink()
-        return result
+            # Reserve the in-flight model action, but undo the reservation if
+            # inference or atomic publication fails. A rejected response must
+            # not poison the same router's next resume attempt.
+            self.position += 1
+        try:
+            result = self.router.generate_structured_data(
+                role, messages, data_name=data_name, parameters=parameters, **kwargs)
+            serialized = _json(result)
+            with _LOCK:
+                if len(self.rows) != index:
+                    raise ValueError("CONSTRUCTION_INFERENCE_CONCURRENT_CONFLICT")
+                updated = [*self.rows, {"input_sha256": identity,
+                                        "response_json": serialized}]
+                envelope = {"binding": self.binding, "rows": updated,
+                            "digest": _sha(updated)}
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
+                try:
+                    tmp.write_text(_json(envelope), encoding="utf-8")
+                    with model_execution_publication():
+                        tmp.replace(self.path)
+                    self.rows = updated
+                finally:
+                    if tmp.exists():
+                        tmp.unlink()
+            return result
+        except BaseException:
+            with _LOCK:
+                if self.position == index + 1 and len(self.rows) == index:
+                    self.position = index
+            raise
 
     def generate_java_source(self, role, messages, *, data_name, source_frame, **kwargs):
         """Replay a previously validated declaration without consuming another LLM call.
@@ -153,17 +165,19 @@ class JournaledConstructionRouter:
         with _LOCK:
             if len(self.rows) != index:
                 raise ValueError("CONSTRUCTION_INFERENCE_CONCURRENT_CONFLICT")
-            self.rows.append({"input_sha256": identity, "response_json": _json(source)})
-            envelope = {"binding": self.binding, "rows": self.rows,
-                        "digest": _sha(self.rows)}
+            updated = [*self.rows, {"input_sha256": identity,
+                                    "response_json": _json(source)}]
+            envelope = {"binding": self.binding, "rows": updated,
+                        "digest": _sha(updated)}
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
             try:
                 tmp.write_text(_json(envelope), encoding="utf-8")
                 with model_execution_publication():
                     tmp.replace(self.path)
+                self.rows = updated
+                self.position += 1
             finally:
                 if tmp.exists():
                     tmp.unlink()
-            self.position += 1
         return source
